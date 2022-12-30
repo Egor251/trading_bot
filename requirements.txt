@@ -1,0 +1,10 @@
+yfinance
+pandas
+configparser
+finam-export
+googlefinance
+matplotlib
+mpl_finance
+aiomoex
+asyncio
+aiohttp
