@@ -46,9 +46,7 @@ class Info():
         url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={ticker}&interval={interval}&apikey={api_key}'
         print(url)
         r = requests.get(url)
-        output_data = r.json()
-        #print(output_data)
-        #print(list(output_data.keys()))  # {Meta Data :{...}, Временной период : {цена открытия: ..., верхняя цена:..., нижняя цена:..., цена закрытия:..., объём:...}}
+        output_data = r.json()  # {Meta Data :{...}, Временной период : {цена открытия: ..., верхняя цена:..., нижняя цена:..., цена закрытия:..., объём:...}}
         tmp_data = output_data[list(output_data.keys())[1]]  # Вышла бы слишком длинная и сложная строка
         # временные списки для формирования DataFrame
         date = []
@@ -79,9 +77,8 @@ class Info():
                        'volume': volume}
 
         data = pd.DataFrame(result_dict)
-        #TypeError: Expect data.index as DatetimeIndex
 
-        data.index = pd.DatetimeIndex(data['date']) # ValueError: Data for column "open" must be ALL float or int.
+        data.index = pd.DatetimeIndex(data['date'])
         print(data)
         return data
 

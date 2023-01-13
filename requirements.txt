@@ -8,3 +8,4 @@ mplfinance
 aiomoex
 asyncio
 aiohttp
+Ta-lib
