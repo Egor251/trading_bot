@@ -47,8 +47,8 @@ class Info():
         print(url)
         r = requests.get(url)
         output_data = r.json()
-        print(output_data)
-        print(list(output_data.keys()))  # {Meta Data :{...}, Временной период : {цена открытия: ..., верхняя цена:..., нижняя цена:..., цена закрытия:..., объём:...}}
+        #print(output_data)
+        #print(list(output_data.keys()))  # {Meta Data :{...}, Временной период : {цена открытия: ..., верхняя цена:..., нижняя цена:..., цена закрытия:..., объём:...}}
         tmp_data = output_data[list(output_data.keys())[1]]  # Вышла бы слишком длинная и сложная строка
         # временные списки для формирования DataFrame
         date = []
@@ -64,11 +64,11 @@ class Info():
             #print(tmp_data[key])
             date.append(date_time[0])
             time.append(date_time[1])
-            opened.append(tmp_data[key]['1. open'])
-            high.append(tmp_data[key]['2. high'])
-            low.append(tmp_data[key]['3. low'])
-            close.append(tmp_data[key]['4. close'])
-            volume.append(tmp_data[key]['5. volume'])
+            opened.append(float(tmp_data[key]['1. open']))
+            high.append(float(tmp_data[key]['2. high']))
+            low.append(float(tmp_data[key]['3. low']))
+            close.append(float(tmp_data[key]['4. close']))
+            volume.append(float(tmp_data[key]['5. volume']))
 
         result_dict = {'date': date,
                        'time': time,
@@ -79,7 +79,10 @@ class Info():
                        'volume': volume}
 
         data = pd.DataFrame(result_dict)
-        #print(data)
+        #TypeError: Expect data.index as DatetimeIndex
+
+        data.index = pd.DatetimeIndex(data['date']) # ValueError: Data for column "open" must be ALL float or int.
+        print(data)
         return data
 
     def yahoo(self, ticker, start='2021-01-01', end='2022-04-30', interval='1h'):
@@ -243,10 +246,10 @@ class Info():
 
 
 if __name__ == "__main__":
-    #Info().alphavantage('IBM', "5min")
+    Info().alphavantage('IBM', "5min")
     #with open('output.txt', 'w') as f:
     #    f.write(str(a))
     #Info().yahoo('TSLA', '2022-12-23', '2022-12-25', '5m').to_csv("test.csv")
     #Info().moex('SBER')
-    asyncio.run(Info().moex())
+    #asyncio.run(Info().moex())
 
