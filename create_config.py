@@ -6,6 +6,7 @@ except ImportError:
 
 
 def create_config(path):
+    #хуй
     """
     Create a config file
     """
