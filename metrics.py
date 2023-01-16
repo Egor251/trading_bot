@@ -3,7 +3,6 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.dates import MONDAY, DateFormatter, DayLocator, WeekdayLocator
-#TODO: fix install Ta-lib
 #import talib as ta
 
 import mplfinance

@@ -8,4 +8,5 @@ mplfinance
 aiomoex
 asyncio
 aiohttp
+# For next library you can build it from source (External_libs --> Ta-lib --> Ta-lib_source) or use "pip install External_libs\Ta-lib\Ta-lib[choose your version].whl"
 Ta-lib
