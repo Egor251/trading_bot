@@ -31,6 +31,7 @@ from support_tools import *
 
 # End of import
 
+
 class Info():
 
     path = "settings.ini"
@@ -79,7 +80,7 @@ class Info():
         data = pd.DataFrame(result_dict)
 
         data.index = pd.DatetimeIndex(data['date'])
-        print(data)
+        #print(data)
         return data
 
     def yahoo(self, ticker, start='2021-01-01', end='2022-04-30', interval='1h'):

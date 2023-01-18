@@ -3,7 +3,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.dates import MONDAY, DateFormatter, DayLocator, WeekdayLocator
-#import talib as ta
+import talib as ta
 
 import mplfinance
 #from mplfinance import candlestick_ohlc
@@ -15,8 +15,8 @@ import get_finance_data
 class Metric:
 
     @staticmethod
-    def display(dataframe, addition):
-        '''apd = mplfinance.make_addplot(addition, type='scatter')
+    def display(dataframe, *addition):
+        apd = mplfinance.make_addplot(addition[0])
         mplfinance.plot(
             dataframe,
             type='candle',
@@ -24,7 +24,8 @@ class Metric:
             ylabel='Price ($)',
             volume=True,
             ylabel_lower='Shares\nTraded', addplot=apd
-        )'''
+        )
+        '''
         mplfinance.plot(
             dataframe,
             type='candle',
@@ -32,7 +33,7 @@ class Metric:
             ylabel='Price ($)',
             volume=True,
             ylabel_lower='Shares\nTraded'
-        )
+        )'''
 
     def moving_average(self, data, n):
 
@@ -41,14 +42,17 @@ class Metric:
         return data
 
     @staticmethod
-    def macd (data):
-        #data["macd"], data["macd_signal"], data["macd_hist"] = ta.MACD(data['Close'])
-        print(data["macd"])
+    def macd(data):
+        data["macd"], data["macd_signal"], data["macd_hist"] = ta.MACD(data['close'])
+        print(f'macd: {data["macd"]}')
+        print(f'macd_hist: {data["macd_hist"]}')
+        print(f'macd_signal: {data["macd_signal"]}')
+        return data["macd"]
+
 
 if __name__ == "__main__":
-    a = [20, 1, 345, 28, 36, 30]
     test = get_finance_data.Info().alphavantage('IBM', "5min")
-    average = Metric().moving_average(a, 3)
-    Metric.macd(test)
-    #Metric.display(test)
+    #average = Metric().moving_average(a, 3)
+    average = Metric.macd(test)
+    Metric.display(test, average)
 
