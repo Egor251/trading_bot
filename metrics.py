@@ -1,4 +1,4 @@
-import numpy
+import numpy as np
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -35,6 +35,36 @@ class Metric:
             ylabel_lower='Shares\nTraded'
         )'''
 
+    @staticmethod
+    def calc_profit(run_mode, history, position=[]):
+        # history struct: date | time | ticker | quantity | price | action (BUY or SELL)
+        #buy = history[history['action'] == 'BUY']
+        #TODO: finish calc_profit
+        history.loc[history['action'] == 'BUY', 'action'] = -1
+        history.loc[history['action'] == 'SELL', 'action'] = 1
+        result = 0
+        #position = []
+        current_quantity = 0
+        tmp = history.iloc(0)[0]  # Первая строка из датасета
+        if len(position) == 0:
+            position = [tmp['date'], tmp['time'], tmp['ticker'], tmp['quantity'], tmp['price'], tmp['action']]
+        #basic_money = tmp['quantity']*tmp['price']
+        basic_pos = position[3]
+        #basic_price = tmp['price']
+        for i, row in history.iterrows():
+            current_quantity += row['quantity'] * row['action'] * (-1)
+            if np.sign(current_quantity) != position[-1]*-1:
+                position = [row['date'], row['time'], row['ticker'], current_quantity, row['price'], row['action']]
+                result += (position[4] - row['price'])*(basic_pos)*row['action']*np.sign(basic_pos)*(-1)
+            else:
+                #TODO: Fix this formula
+                result += (position[4] - row['price'])*(basic_pos - current_quantity)*row['action']*np.sign(basic_pos)*(-1)
+            print(f'Операция №{i}, текущая позиция: {current_quantity}, текущая прибыль: {result}')
+            position[3] = current_quantity
+            basic_pos = current_quantity
+
+        return result
+
     def moving_average(self, data, n):
 
         data = pd.Series(data).rolling(window=n).mean().iloc[n - 1:].values
@@ -51,8 +81,18 @@ class Metric:
 
 
 if __name__ == "__main__":
-    test = get_finance_data.Info().alphavantage('IBM', "5min")
+    test_trading_data = pd.DataFrame({'date': ['2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12'],
+                                      'time': ['10:05', '10:30', '12:00', '13:02'],
+                                      'ticker': ['SBER', 'SBER', 'SBER', 'SBER'],
+                                      'quantity': [100, 50, 100, 50],
+                                      'price': [120.0, 135.2, 150, 125],
+                                      'action': ['BUY', 'SELL', 'SELL', 'BUY']
+                                      })
+    print(test_trading_data)
+    Metric().calc_profit('test', test_trading_data)
+
+    #test = get_finance_data.Info().alphavantage('IBM', "5min")
     #average = Metric().moving_average(a, 3)
-    average = Metric.macd(test)
-    Metric.display(test, average)
+    #average = Metric.macd(test)
+    #Metric.display(test, average)
 
