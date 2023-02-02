@@ -105,7 +105,7 @@ class Quik():
         #stopsteps = 10  # Размер проскальзывания в шагах цены
         stopsteps = self.config['Transactions']['stopsteps']
         slippage = float(qpProvider.GetSecurityInfo(transaction['class_code'], transaction['sec_code'])['data'][
-                             'min_price_step']) * stopsteps  # Размер проскальзывания в деньгах
+                             'min_price_step']) * float(stopsteps)  # Размер проскальзывания в деньгах
 
         if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
             slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу

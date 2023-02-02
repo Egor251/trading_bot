@@ -36,15 +36,17 @@ class Metric:
         )'''
 
     @staticmethod
-    def calc_profit(run_mode, history, position=[], verbrose=1):
+    def calc_profit(run_mode, history, position=None, verbrose=1):
         # history struct: date | time | ticker | quantity | price | action (BUY or SELL)
-        #TODO: calc_profit: run_mode
+        # TODO: calc_profit: run_mode
+        if position is None:
+            position = []
         history.loc[history['action'] == 'BUY', 'action'] = -1
         history.loc[history['action'] == 'SELL', 'action'] = 1
         result = 0
         current_quantity = 0
         tmp = history.iloc(0)[0]  # Первая строка из датасета
-        if len(position) == 0:
+        if len(position) == 0:  # Если позицию не передали в качестве аргумента функции
             position = [tmp['date'], tmp['time'], tmp['ticker'], tmp['quantity'], tmp['price'], tmp['action']]  # Текущая открытая позиция
         basic_pos = 0
 
@@ -58,20 +60,14 @@ class Metric:
                     new_price = row['price'] * (row['quantity'] / (row['quantity'] + position[3])) + position[4] * (position[3] / (row['quantity'] + position[3]))  # Вычисляем новую базовую цену как сумму (цена * доля в новой позиции)
                     position = [row['date'], row['time'], row['ticker'], position[3] + current_quantity, new_price,
                                 row['action']]
-                else:
-                    result += (position[4] - row['price'])*(position[3] - current_quantity)*row['action']*np.sign(position[3])*(-1)
+                else:  # Если не усредняемся, то считаем как обычно
+                    result += round((position[4] - row['price'])*(position[3] - current_quantity)*row['action']*np.sign(position[3])*(-1), 2)
 
-            if verbrose == 1:
+            if verbrose == 1:  # Выводить ли информацию в консоль, по умолчанию да
                 print(f'Операция №{i}, текущая позиция: {current_quantity}, Текущая цена позиции {position[4]} текущая прибыль: {result}')
-            position[3] = current_quantity
+            position[3] = current_quantity  # Так как после операции количество бумаг изменилось перезаписываем в position
             basic_pos = 1
         return result
-
-    def moving_average(self, data, n):
-
-        data = pd.Series(data).rolling(window=n).mean().iloc[n - 1:].values
-        print(data)
-        return data
 
     @staticmethod
     def macd(data):
