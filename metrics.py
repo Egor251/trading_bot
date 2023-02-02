@@ -36,34 +36,35 @@ class Metric:
         )'''
 
     @staticmethod
-    def calc_profit(run_mode, history, position=[]):
+    def calc_profit(run_mode, history, position=[], verbrose=1):
         # history struct: date | time | ticker | quantity | price | action (BUY or SELL)
-        #buy = history[history['action'] == 'BUY']
-        #TODO: finish calc_profit
+        #TODO: calc_profit: run_mode
         history.loc[history['action'] == 'BUY', 'action'] = -1
         history.loc[history['action'] == 'SELL', 'action'] = 1
         result = 0
-        #position = []
         current_quantity = 0
         tmp = history.iloc(0)[0]  # Первая строка из датасета
         if len(position) == 0:
-            position = [tmp['date'], tmp['time'], tmp['ticker'], tmp['quantity'], tmp['price'], tmp['action']]
-        #basic_money = tmp['quantity']*tmp['price']
-        basic_pos = position[3]
-        #basic_price = tmp['price']
+            position = [tmp['date'], tmp['time'], tmp['ticker'], tmp['quantity'], tmp['price'], tmp['action']]  # Текущая открытая позиция
+        basic_pos = 0
 
-        for i, row in history.iterrows():
-            current_quantity += row['quantity'] * row['action'] * (-1)
-
-            if np.sign(current_quantity) != position[-1]*-1 and np.sign(current_quantity) != 0:
-                result += (position[4] - row['price']) * (basic_pos) * row['action'] * np.sign(basic_pos) * (-1)
-                position = [row['date'], row['time'], row['ticker'], current_quantity, row['price'], row['action']]
+        for i, row in history.iterrows():  # Проход по всем сделкам построчно
+            current_quantity += row['quantity'] * row['action'] * (-1)  # Текущее количество бумаг (сумматор)
+            if np.sign(current_quantity) != position[-1]*-1 and np.sign(current_quantity) != 0:  # Проверка на переход из long в short и наоборот
+                result += (position[4] - row['price']) * (position[3]) * row['action'] * np.sign(position[3]) * (-1)
+                position = [row['date'], row['time'], row['ticker'], current_quantity, row['price'], row['action']]  # Перезаписываем текущую позицию, ведь она изменилась
             else:
-                result += (position[4] - row['price'])*(basic_pos - current_quantity)*row['action']*np.sign(basic_pos)*(-1)
-            print(f'Операция №{i}, текущая позиция: {current_quantity}, Текущая цена позиции {position[4]} текущая прибыль: {result}')
-            position[3] = current_quantity
-            basic_pos = current_quantity
+                if position[-1] == row['action'] and basic_pos != 0:  # Если усредняемся, то считаем новую базовую цену позиции, basic_pos определяет была ли до этого открыта позиция
+                    new_price = row['price'] * (row['quantity'] / (row['quantity'] + position[3])) + position[4] * (position[3] / (row['quantity'] + position[3]))  # Вычисляем новую базовую цену как сумму (цена * доля в новой позиции)
+                    position = [row['date'], row['time'], row['ticker'], position[3] + current_quantity, new_price,
+                                row['action']]
+                else:
+                    result += (position[4] - row['price'])*(position[3] - current_quantity)*row['action']*np.sign(position[3])*(-1)
 
+            if verbrose == 1:
+                print(f'Операция №{i}, текущая позиция: {current_quantity}, Текущая цена позиции {position[4]} текущая прибыль: {result}')
+            position[3] = current_quantity
+            basic_pos = 1
         return result
 
     def moving_average(self, data, n):
@@ -82,12 +83,12 @@ class Metric:
 
 
 if __name__ == "__main__":
-    test_trading_data = pd.DataFrame({'date': ['2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12'],
-                                      'time': ['10:05', '10:30', '12:00', '13:02'],
-                                      'ticker': ['SBER', 'SBER', 'SBER', 'SBER'],
-                                      'quantity': [100, 50, 100, 50],
-                                      'price': [120.0, 135.2, 150, 125],
-                                      'action': ['BUY', 'SELL', 'SELL', 'BUY']
+    test_trading_data = pd.DataFrame({'date': ['2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12'],
+                                      'time': ['10:05', '10:06', '10:30', '12:00', '13:02'],
+                                      'ticker': ['SBER', 'SBER', 'SBER', 'SBER', 'SBER'],
+                                      'quantity': [100, 100, 50, 100, 50],
+                                      'price': [120.0, 100, 135.2, 150, 125],
+                                      'action': ['BUY', 'BUY', 'SELL', 'SELL', 'BUY']
                                       })
     print(test_trading_data)
     Metric().calc_profit('test', test_trading_data)
@@ -97,10 +98,3 @@ if __name__ == "__main__":
     #average = Metric.macd(test)
     #Metric.display(test, average)
 
-    test_trading_data = pd.DataFrame({'date': ['2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12'],
-                                      'time': ['10:05', '10:06', '10:30', '12:00', '13:02'],
-                                      'ticker': ['SBER', 'SBER', 'SBER', 'SBER', 'SBER'],
-                                      'quantity': [100, 100, 50, 100, 50],
-                                      'price': [120.0, 100, 135.2, 150, 125],
-                                      'action': ['BUY', 'BUY', 'SELL', 'SELL', 'BUY']
-                                      })
