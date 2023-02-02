@@ -51,15 +51,16 @@ class Metric:
         #basic_money = tmp['quantity']*tmp['price']
         basic_pos = position[3]
         #basic_price = tmp['price']
+
         for i, row in history.iterrows():
             current_quantity += row['quantity'] * row['action'] * (-1)
-            if np.sign(current_quantity) != position[-1]*-1:
+
+            if np.sign(current_quantity) != position[-1]*-1 and np.sign(current_quantity) != 0:
+                result += (position[4] - row['price']) * (basic_pos) * row['action'] * np.sign(basic_pos) * (-1)
                 position = [row['date'], row['time'], row['ticker'], current_quantity, row['price'], row['action']]
-                result += (position[4] - row['price'])*(basic_pos)*row['action']*np.sign(basic_pos)*(-1)
             else:
-                #TODO: Fix this formula
                 result += (position[4] - row['price'])*(basic_pos - current_quantity)*row['action']*np.sign(basic_pos)*(-1)
-            print(f'Операция №{i}, текущая позиция: {current_quantity}, текущая прибыль: {result}')
+            print(f'Операция №{i}, текущая позиция: {current_quantity}, Текущая цена позиции {position[4]} текущая прибыль: {result}')
             position[3] = current_quantity
             basic_pos = current_quantity
 
@@ -96,3 +97,10 @@ if __name__ == "__main__":
     #average = Metric.macd(test)
     #Metric.display(test, average)
 
+    test_trading_data = pd.DataFrame({'date': ['2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12', '2023-01-12'],
+                                      'time': ['10:05', '10:06', '10:30', '12:00', '13:02'],
+                                      'ticker': ['SBER', 'SBER', 'SBER', 'SBER', 'SBER'],
+                                      'quantity': [100, 100, 50, 100, 50],
+                                      'price': [120.0, 100, 135.2, 150, 125],
+                                      'action': ['BUY', 'BUY', 'SELL', 'SELL', 'BUY']
+                                      })
