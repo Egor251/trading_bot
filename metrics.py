@@ -7,8 +7,6 @@ from matplotlib.dates import MONDAY, DateFormatter, DayLocator, WeekdayLocator
 import talib as ta
 
 import mplfinance
-#from mplfinance import candlestick_ohlc
-from mplfinance.original_flavor import candlestick_ohlc
 
 import get_finance_data
 
