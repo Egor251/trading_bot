@@ -45,9 +45,15 @@ class Quik():
         """Пользовательский обработчик события"""
         print(data)  # Печатаем полученные данные
 
-
     def close_connection(self):
         self.qpProvider.CloseConnectionAndThread()
+
+    def ChangedConnection(data):
+        """Пользовательский обработчик событий:
+        - Соединение установлено
+        - Соединение разорвано
+        """
+        print(f'{datetime.now().strftime("%d.%m.%Y %H:%M:%S")} - {data}')  # Печатаем полученные данные
 
     def set_transaction(self, transaction):
 
@@ -226,6 +232,64 @@ class Quik():
             qpProvider.GetParamEx(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
         print('Последняя цена сделки:', lastPrice)
 
+    def stream(self, class_code, sec_code):
+        # TODO: stream: finish
+        #qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
+        # qpProvider = QuikPy(Host='<Ваш IP адрес>')  # Вызываем конструктор QuikPy с подключением к удаленному компьютеру с QUIK
+
+        # classCode = 'TQBR'  # Класс тикера
+        # secCode = 'GAZP'  # Тикер
+
+        #classCode = 'SPBFUT'  # Класс тикера
+        #secCode = 'SiH2'  # Для фьючерсов: <Код тикера><Месяц экспирации: 3-H, 6-M, 9-U, 12-Z><Последняя цифра года>
+
+        # Запрос текущего стакана. Чтобы получать, в QUIK открыть Таблицу Котировки, указать тикер
+        # print(f'Текущий стакан {classCode}.{secCode}:', qpProvider.GetQuoteLevel2(classCode, secCode)['data'])
+
+        # Стакан. Чтобы отмена подписки работала корректно, в QUIK должна быть ЗАКРЫТА таблица Котировки тикера
+        # qpProvider.OnQuote = PrintCallback  # Обработчик изменения стакана котировок
+        # print(f'Подписка на изменения стакана {classCode}.{secCode}:', qpProvider.SubscribeLevel2Quotes(classCode, secCode)['data'])
+        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+        # sleepSec = 3  # Кол-во секунд получения котировок
+        # print('Секунд котировок:', sleepSec)
+        # time.sleep(sleepSec)  # Ждем кол-во секунд получения котировок
+        # print(f'Отмена подписки на изменения стакана:', qpProvider.UnsubscribeLevel2Quotes(classCode, secCode)['data'])
+        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+        # qpProvider.OnQuote = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+
+        # Обезличенные сделки. Чтобы получать, в QUIK открыть Таблицу обезличенных сделок, указать тикер
+        # qpProvider.OnAllTrade = PrintCallback  # Обработчик получения обезличенной сделки
+        # sleepSec = 1  # Кол-во секунд получения обезличенных сделок
+        # print('Секунд обезличенных сделок:', sleepSec)
+        # time.sleep(sleepSec)  # Ждем кол-во секунд получения обезличенных сделок
+        # qpProvider.OnAllTrade = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+
+        # Просмотр изменений состояния соединения терминала QUIK с сервером брокера
+        self.qpProvider.OnConnected = self.ChangedConnection  # Нажимаем кнопку "Установить соединение" в QUIK
+        self.qpProvider.OnDisconnected = self.ChangedConnection  # Нажимаем кнопку "Разорвать соединение" в QUIK
+
+        # Подписка на новые свечки. При первой подписке получим все свечки с начала прошлой сессии
+        # TODO В QUIK 9.2.13.15 перестала работать повторная подписка на минутные бары. Остальные работают
+        #  Перед повторной подпиской нужно перезапустить скрипт QuikSharp.lua Подписка станет первой, все заработает
+        self.qpProvider.OnNewCandle = self.print_callback  # Обработчик получения новой свечки
+        for interval in (60,):  # (1, 60, 1440) = Минутки, часовки, дневки
+            print(f'Подписка на интервал {interval}:',
+                  qpProvider.SubscribeToCandles(class_code, sec_code, interval)['data'])
+            print(f'Статус подписки на интервал {interval}:',
+                  qpProvider.IsSubscribed(class_code, sec_code, interval)['data'])
+        input('Enter - отмена\n')
+        for interval in (60,):  # (1, 60, 1440) = Минутки, часовки, дневки
+            print(f'Отмена подписки на интервал {interval}',
+                  self.qpProvider.UnsubscribeFromCandles(class_code, sec_code, interval)['data'])
+            print(f'Статус подписки на интервал {interval}:',
+                  self.qpProvider.IsSubscribed(class_code, sec_code, interval)['data'])
+        self.qpProvider.OnNewCandle = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+
+        self.qpProvider.OnConnected = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+        self.qpProvider.OnDisconnected = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+
+        # Выход
+        #self.qpProvider.CloseConnectionAndThread()  # Перед выходом закрываем соединение и поток QuikPy из любого экземпляра
 
 
 path = "settings.ini"
@@ -233,7 +297,10 @@ if not os.path.exists(path):
     create_config(path)
 config = configparser.ConfigParser()
 config.read(path)
-admin_mail = config.get("Settings", "admin_mail")
+
+
+if __name__ == "__main__":
+    Quik().stream('TQBR', 'SBER')
 
 
 
