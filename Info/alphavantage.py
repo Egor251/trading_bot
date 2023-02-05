@@ -4,6 +4,7 @@ try:
     import configparser
 except ImportError:
     import ConfigParser as configparser
+import os
 
 
 class Alphavantage():
@@ -16,8 +17,12 @@ class Alphavantage():
 
     def get_tickers_list(self):
         url = f'https://www.alphavantage.co/query?function=LISTING_STATUS&apikey={self.api_key}'  # возвращает CSV
+        file = "../download/test.csv"
         r = requests.get(url)
-        print(r)
+        open(file, "wb").write(r.content)
+        data = pd.read_csv(file)
+        os.remove(file)
+        return data
 
     def get_candles(self, ticker, interval='1h'):
         # WORKS!
