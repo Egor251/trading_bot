@@ -1,3 +1,6 @@
+import itertools
+import json
+import runpy
 
 
 class Optimizer():
@@ -9,19 +12,16 @@ class Optimizer():
             for line in func:
                 #print(line)
                 if line.find('optimization_parameters') != -1:
-                    tmp = line.split('[')
-                    parse_parameter = tmp[1].replace(']', '').replace("'", '').replace('\n', '').split(',')
-                for parameter in parse_parameter:
-                    if line.find(parameter + ' ') != -1:
-                        output.append(line.split(' ')[-1].replace('\n', ''))
+                    tmp = line.split('=')
+                    tmp = tmp[-1].replace(' ', '')
+                    parse_parameter = eval(tmp)
+                    print(parse_parameter)
             print(len(output))
             print(output)
-            for param in output:
-                for i in optimize_range:
-                    for line in func:
-                        # print(line)
-                        if line.find(param + ' ') != -1:
-                            print(line)
+            param = itertools.permutations(optimize_range, int(len(parse_parameter)))
+            runpy.run_path(file, run_name='__main__')
+            '''for par in param:
+                print(par)'''
 
 
 

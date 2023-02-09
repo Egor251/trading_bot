@@ -272,7 +272,7 @@ class Quik():
         # TODO В QUIK 9.2.13.15 перестала работать повторная подписка на минутные бары. Остальные работают
         #  Перед повторной подпиской нужно перезапустить скрипт QuikSharp.lua Подписка станет первой, все заработает
         self.qpProvider.OnNewCandle = self.print_callback  # Обработчик получения новой свечки
-        for interval in (60,):  # (1, 60, 1440) = Минутки, часовки, дневки
+        for interval in (1,):  # (1, 60, 1440) = Минутки, часовки, дневки
             print(f'Подписка на интервал {interval}:',
                   qpProvider.SubscribeToCandles(class_code, sec_code, interval)['data'])
             print(f'Статус подписки на интервал {interval}:',
@@ -287,7 +287,7 @@ class Quik():
 
         self.qpProvider.OnConnected = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
         self.qpProvider.OnDisconnected = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
-
+        # TODO: stream: Должен выводить dataframe
         # Выход
         #self.qpProvider.CloseConnectionAndThread()  # Перед выходом закрываем соединение и поток QuikPy из любого экземпляра
 
