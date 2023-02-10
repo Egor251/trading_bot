@@ -5,26 +5,36 @@ import runpy
 
 class Optimizer():
 
-    def optimize(self, file, optimize_range=range(1, 10)):
+    def optimize(self, file, optimize_range=range(1)):
         with open(file) as func:
             parse_parameter = []
-            output = []
             for line in func:
-                #print(line)
-                if line.find('optimization_parameters') != -1:
-                    tmp = line.split('=')
-                    tmp = tmp[-1].replace(' ', '')
-                    parse_parameter = eval(tmp)
-                    print(parse_parameter)
-            print(len(output))
-            print(output)
-            param = itertools.permutations(optimize_range, int(len(parse_parameter)))
-            runpy.run_path(file, run_name='__main__')
-            '''for par in param:
-                print(par)'''
+                if line.find('optimization_parameters') != -1:  # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
+                    tmp = line.split('=')  # Да, это должна быть переменная, парсим по строкам и выделяем словарь по наличию =
+                    tmp = tmp[-1].replace(' ', '')  # На всякий случай пробелы уберём
+                    parse_parameter = eval(tmp)  # преобразуем строку со словарём в реальный словарь (стоит ли боспокоиться об инъекциях в этот параметр?)
+                    #print(parse_parameter)
+                    #print(list(parse_parameter.values()))
+                    ranges = list(parse_parameter.values())  # выделяем все range из словаря и загоняем в массив
 
+            for rang in ranges:  # Ищем самый большой range из стратегии
+                if len(rang) > len(optimize_range):
+                    optimize_range = rang
 
+            param = list(itertools.permutations(optimize_range, int(len(parse_parameter))))  # формируем комбинации из параметров для оптимизации
+            remove_list = []
 
+            for i in range(len(ranges)):  # Оптимизируем оптимизатор:) itertools не может генерировать комбинации из нескольких разных наборов значений. чтобы не тестировать то, что не нужно уберём лишние значения
+                for par in param:
+                    #print(i, ranges[i], par)
+                    if par[i] not in ranges[i]:
+                        remove_list.append(par)  # массив значений для удаления
+
+            for par in remove_list:  # удаляем ненужные значения
+                param.remove(par)
+            print(param)
+
+            #runpy.run_path(file, run_name='__main__')
 
 
 if __name__ == '__main__':
