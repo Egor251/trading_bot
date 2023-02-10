@@ -1,9 +1,20 @@
 import itertools
 import json
 import runpy
-
+import os
+import sys
+from subprocess import Popen, PIPE
 
 class Optimizer():
+
+    def run_module(self, file):
+
+        process = Popen(
+            # ["python", "-O", "hello.py"]
+            ["python", file],
+            stdout=PIPE, stderr=PIPE, universal_newlines=True
+        )
+        print(process.stdout.read())
 
     def optimize(self, file, optimize_range=range(1)):
         with open(file) as func:
@@ -34,7 +45,12 @@ class Optimizer():
                 param.remove(par)
             print(param)
 
-            #runpy.run_path(file, run_name='__main__')
+            sys.path.append('strategies')
+
+            # TODO: Optimizer: научиться передавать аргументы в функцию
+            # Cледующая строка тоже работает, но не ясно как передавать параметры в функцию
+            # runpy.run_path(file, run_name='__main__')
+            self.run_module(file)
 
 
 if __name__ == '__main__':

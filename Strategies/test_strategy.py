@@ -1,4 +1,4 @@
-class test():
+class Test():
     def test(self, *param):
         optimization_parameters = {'a': range(5), 'default': range(10)}
         a = param[0]
@@ -8,4 +8,4 @@ class test():
 
 
 if __name__ == '__main__':
-    pass
+    Test().test(1, 2)
