@@ -4,6 +4,8 @@ import runpy
 import os
 import sys
 from subprocess import Popen, PIPE
+import importlib.util
+from Strategies import test_strategy
 
 class Optimizer():
 
@@ -15,6 +17,19 @@ class Optimizer():
             stdout=PIPE, stderr=PIPE, universal_newlines=True
         )
         print(process.stdout.read())
+
+    def import_module(self, module_name, path):
+        module_spec = importlib.util.spec_from_file_location(
+            module_name, path)
+        test = module_spec.loader.load_module()
+        print(dir(module_spec))
+        msg = 'The {module_name} module has the following methods: {methods}'
+        print(
+            msg.format(module_name=module_name, methods=dir(module_spec))
+        )
+        #TODO: optimiser.import_module: Либо найти способ обнаруживать классы и запускать, либо принудительно во всех стратегиях называть классы одинаково
+        test.Test().test(1, 2)
+
 
     def optimize(self, file, optimize_range=range(1)):
         with open(file) as func:
@@ -54,5 +69,6 @@ class Optimizer():
 
 
 if __name__ == '__main__':
-    file = 'strategies/test_strategy.py'
-    Optimizer().optimize(file)
+    file = 'Strategies/test_strategy.py'
+    #Optimizer().optimize(file)
+    Optimizer().import_module('test_strategy', file)
