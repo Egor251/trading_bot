@@ -1,5 +1,5 @@
 import datetime
-
+import os
 
 class Time:
 
@@ -14,3 +14,25 @@ class Time:
         delta = last_day - start_day
         return int(str(delta).split(' ')[0])
 
+
+class Tools:
+
+    @staticmethod
+    def cut_py(data):  # Отрезает .py от файла
+        output = []
+        for item in data:
+            output.append(item[:-3])
+        return output
+
+    @staticmethod
+    def make_dict(keys, values):
+        output = {}
+        for index, item in enumerate(keys):
+            output[item] = values[index]
+        return output
+
+    @staticmethod
+    def parse_dir(dir):  # Находит все файлы в папке
+        data = os.listdir(dir)
+        data.remove('__pycache__')
+        return data

@@ -18,7 +18,8 @@ class Optimizer():
         )
         print(process.stdout.read())
 
-    def import_module(self, module_name, path):
+    def import_module(self, path):
+        module_name = path.split('/')[1][:-3]
         module_spec = importlib.util.spec_from_file_location(
             module_name, path)
         test = module_spec.loader.load_module()
@@ -28,7 +29,8 @@ class Optimizer():
             msg.format(module_name=module_name, methods=dir(module_spec))
         )
         #TODO: optimiser.import_module: Либо найти способ обнаруживать классы и запускать, либо принудительно во всех стратегиях называть классы одинаково
-        test.Test().test(1, 2)
+        action = test.Test().test(1, 2)
+        print(f'Действие: {action}')
 
 
     def optimize(self, file, optimize_range=range(1)):
@@ -71,4 +73,4 @@ class Optimizer():
 if __name__ == '__main__':
     file = 'Strategies/test_strategy.py'
     #Optimizer().optimize(file)
-    Optimizer().import_module('test_strategy', file)
+    Optimizer().import_module(file)
