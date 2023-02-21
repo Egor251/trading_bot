@@ -34,5 +34,19 @@ class Tools:
     @staticmethod
     def parse_dir(dir):  # Находит все файлы в папке
         data = os.listdir(dir)
-        data.remove('__pycache__')
+        try:
+            data.remove('__pycache__')
+        except ValueError:
+            pass
         return data
+
+    @staticmethod
+    def parse_file(file, attribute):
+        tmp = ''
+        with open(file) as func:
+            for line in func:
+                if line.find(attribute) != -1:  # attribute это имя переменной, которую ищем в файле
+                    tmp = line.split('=')[-1]  # Да, это должна быть переменная, парсим по строкам и выделяем значение по наличию =
+                    break
+            return tmp
+

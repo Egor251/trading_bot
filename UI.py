@@ -1,45 +1,56 @@
 from support_tools import Tools
+from prettytable import PrettyTable
+
 
 class UI():
 
-    actions = ['use', 'run', 'set', 'help', 'exit', 'show', 'optimize']
+    actions = ['use', 'run', 'set', 'help', 'exit', 'show', 'optimize']  # Перечень доступных команд (первых слов в команде)
 
-    module_types = {'strategy': 'Strategies', 'driver': 'Drivers', 'info': 'Info'}
+    module_types = {'strategy': 'Strategies', 'driver': 'Drivers', 'info': 'Info', 'options': 'options'}  # Перечень вторых слов
 
     current_state = ''
 
+    current_print = 'Command'  # выводим в консоль перед каждой командой текущий модуль с которым мы работаем. Если модуль не выбран - выводим Command
 
     def reader(self):
         while True:
-            command = str(input("command: ")).split(' ')
-            mod = command[0]
-            if mod == 'exit':
+            command = str(input(f"{self.current_print}: ")).split(' ')  # Входные данные, разбиваем их по пробелам и формируем массив
+            mod = command[0]  # Первое слово это основная команда
+            if mod == 'exit':  # Выход из программы
                 print('finishing program')
                 break
-            if mod not in self.actions:
+            if mod not in self.actions:  # проверка на существование введённой команды
                 print('Invalid command')
             else:
                 # Минутка космических решений
-                eval('self.'+mod+'(command[1:])')
+                eval('self.'+mod+'(command[1:])')  # вызываем функцию текущего класса с соответствующим названием и передаём остаток команды в качестве аргумента
 
     def run(self, command):
         pass
 
-    def use(self, command):
+    def use(self, command):  # фунцкия меняет текущий модуль с которым работаем
+        if command == 'options':
+            print('Unknown module type')
+            return 0
         try:
-            type = self.module_types[command[0]]
+            type = self.module_types[command[0]]  # типы модуля могут быть только strategy, driver и info
         except KeyError:
             print('Unknown module type')
             return 0
-        file = Tools.parse_dir(type)
-        output = Tools.cut_py(file)
-        if command[1] not in output:
-            print('Unknown module')
-            return 0
-        file_dict = Tools.make_dict(output, file)
-
-        self.current_state = f'{type}/{file_dict[command[1]]}'
-        print(self.current_state)
+        file = Tools.parse_dir(type)  # находим все модули в папке модулей соответствующего типа
+        output = Tools.cut_py(file)  # для красоты отрезаем .py
+        if len(command) < 2:  # проверка на то, что указан только тип модуля, сам модуль не указан
+            print('You missed last argument')
+            print(f'Running "show {command[0]}" instead')
+            self.show([command[0]])  # Если так и есть, то запускаем show и выводим список доступных модулей
+        else:
+            if command[1] not in output:
+                print('Unknown module')  # Проверка на правильность ввода названия модуля
+                return 0
+            file_dict = Tools.make_dict(output, file)  # Создаём словарь {имя_модуля: имя_модуля.py} (так просто удобней)
+            self.current_state = f'{type}/{file_dict[command[1]]}'  # присваиваем будущей команде первую её часть - запускаемый модуль
+            self.current_print = self.current_state[:-3]  # Меняем надпись, выводящуюся перед input на текущий модуль
+            #print(self.current_state)
 
     def set(self, command):
         pass
@@ -48,10 +59,49 @@ class UI():
         pass
 
     def show(self, command):
-        data = self.module_types[command[0]]
-        output = Tools.parse_dir(data)
-        #TODO сделать красиво
-        print(output)
+        table = []
+
+        # Отдельный паттерн поведения при получении ключевого слова options
+        if command[0] == 'options':
+            if self.current_print == 'Command':  # Проверяем, выбран ли какой-либо модуль
+                print('Unable to show options, no module was selected')
+                return 0
+            else:
+                print(f'Changable parameters for {self.current_print}')
+                column_name = ['Parameter', 'Value']
+                default = Tools.parse_file(self.current_state, 'default')  # Парсим дефолтные значения из модуля
+
+                optimization_parameters = Tools.parse_file(self.current_state,
+                                                           'optimization_parameters')  # Парсим параметры, которые можно менять в модуле
+                if len(optimization_parameters) == 0:  # Проверка, а есть ли параметры, которые можно менять
+                    print('There no options to set')
+                    return
+                else:
+                    optimization_parameters = eval(
+                        optimization_parameters)  # Вместо парсинка строки просто преобразуем строку в словарь
+                    keys = optimization_parameters.keys()  # Берём только ключи из словаря
+                if len(default) == 0:  # Проверяем указаны ли дефолтные значения
+                    default = []
+                    for i in optimization_parameters:
+                        default.append('None')  # Если дефолтных значений нет, а параметры, которые можно указать, есть, то в табличке выведем None у дефолтных значений
+                else:
+                    default = eval(default)  # Вместо парсинка строки просто преобразуем строку в массив
+                    for index, item in enumerate(keys):
+                        table.append([item, default[index]])  # добавляем данные в будущую табличку
+
+        # вывод списка доступных модулей
+        else:
+            column_name = ['module name', 'algorithm', 'description']  # Заголовки таблички
+            data = self.module_types[command[0]]  # Получаем тип модуля
+            output = Tools.parse_dir(data)  # Парсим папку с модулями выбранного типа
+            for file in output:
+                path = data+'/'+file  # фоормируем путь к файлу
+                algorithm = Tools.parse_file(path, 'algorithm')  # Парсим переменную algorithm - короткое указание типа модуля
+                description = Tools.parse_file(path, 'description')  # Парсим переменную description - полное описание модуля модуля
+                table.append([file[:-3], algorithm, description])  # заводим данные в табличку
+        tab = PrettyTable(column_name)  # Шапка таблички
+        tab.add_rows(table)  # Строки таблички
+        print(tab)  # Виводим табличку
 
     def optimize(self, command):
         pass
@@ -59,5 +109,3 @@ class UI():
 
 if __name__ == '__main__':
     UI().reader()
-
-

@@ -1,6 +1,12 @@
 class Test():
+    algorithm = 'Test'  # Short description of strategies type
+    description = 'Its a test strategy, it shows how strategy should looks like'  # Full description of strategy
+    optimization_parameters = {'a': range(5), 'def': range(10)}  # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
+    default = [3, 4] # default strategy parameters
+
     def test(self, *param):
-        optimization_parameters = {'a': range(5), 'default': range(10)}
+        if len(param) < len(self.optimization_parameters):
+            param = self.default
         a = param[0]
         default = param[1]
         print(a, default)
@@ -8,4 +14,4 @@ class Test():
 
 
 if __name__ == '__main__':
-    Test().test(1, 2)
+    Test().test()

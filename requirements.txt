@@ -9,6 +9,7 @@ aiomoex
 asyncio
 aiohttp
 tradingview-ta
+prettytable
 
-# For next library you can build it from source (External_libs --> Ta-lib --> Ta-lib_source) or use "pip install External_libs\Ta-lib\Ta-lib[choose your version].whl"
+# For next library you can build it from source (Ta-lib install --> Ta-lib_source) or use "pip install 'Ta-lib install\Ta-lib[choose your version].whl'"
 Ta-lib
