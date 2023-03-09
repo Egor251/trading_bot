@@ -1,5 +1,7 @@
 import datetime
 import os
+import importlib.util
+
 
 class Time:
 
@@ -41,7 +43,7 @@ class Tools:
         return data
 
     @staticmethod
-    def parse_file(file, attribute):
+    def parse_file(file, attribute):  # Находит интересующую переменную в файле
         tmp = ''
         with open(file) as func:
             for line in func:
@@ -50,3 +52,18 @@ class Tools:
                     break
             return tmp
 
+
+class Functionality:
+
+    @staticmethod
+    def run_module(path, attr):
+        module_name = path.split('/')[1][:-3]
+        module_spec = importlib.util.spec_from_file_location(
+            module_name, path)
+        module = module_spec.loader.load_module()
+        #TODO: optimiser.import_module:найти способ обнаруживать классы и запускать
+        #class_name = Tools().parse_file(path, 'class_name')
+        #def_name = Tools().parse_file(path, 'def_name')
+        action = module.Strategy().run(attr)
+        print(f'Действие: {action}')
+        return action

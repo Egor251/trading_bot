@@ -5,34 +5,11 @@ import os
 import sys
 from subprocess import Popen, PIPE
 import importlib.util
-from support_tools import Tools
+from support_tools import Tools, Functionality
 from Strategies import test_strategy
 
+
 class Optimizer():
-
-    def run_module(self, file):
-
-        process = Popen(
-            # ["python", "-O", "hello.py"]
-            ["python", file],
-            stdout=PIPE, stderr=PIPE, universal_newlines=True
-        )
-        print(process.stdout.read())
-
-    def import_module(self, path):
-        module_name = path.split('/')[1][:-3]
-        module_spec = importlib.util.spec_from_file_location(
-            module_name, path)
-        test = module_spec.loader.load_module()
-        print(dir(module_spec))
-        msg = 'The {module_name} module has the following methods: {methods}'
-        print(
-            msg.format(module_name=module_name, methods=dir(module_spec))
-        )
-        #TODO: optimiser.import_module: Либо найти способ обнаруживать классы и запускать, либо принудительно во всех стратегиях называть классы одинаково
-        action = test.Test().test(1, 2)
-        print(f'Действие: {action}')
-
 
     def optimize(self, file, optimize_range=range(1)):
         # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
@@ -71,10 +48,15 @@ class Optimizer():
             # TODO: Optimizer: научиться передавать аргументы в функцию
             # Cледующая строка тоже работает, но не ясно как передавать параметры в функцию
             # runpy.run_path(file, run_name='__main__')
-            self.run_module(file)
+
+            # Начинаем прогон значений через стратегию
+            for par in param:
+                a = Functionality.run_module(file, par)
+                print(a)
 
 
 if __name__ == '__main__':
     file = 'Strategies/test_strategy.py'
-    #Optimizer().optimize(file)
-    Optimizer().import_module(file)
+    Optimizer().optimize(file)
+    #l = [1, 2]
+    #Functionality().run_module(file, l)

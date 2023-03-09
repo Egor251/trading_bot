@@ -77,12 +77,11 @@ class UI():
                     print('There no options to set')
                     return
                 else:
-                    optimization_parameters = eval(
-                        optimization_parameters)  # Вместо парсинка строки просто преобразуем строку в словарь
+                    optimization_parameters = eval(optimization_parameters)  # Вместо парсинга строки просто преобразуем строку в словарь
                     keys = optimization_parameters.keys()  # Берём только ключи из словаря
                 if len(default) == 0:  # Проверяем указаны ли дефолтные значения
                     default = []
-                    for i in optimization_parameters:
+                    for _ in optimization_parameters:
                         default.append('None')  # Если дефолтных значений нет, а параметры, которые можно указать, есть, то в табличке выведем None у дефолтных значений
                 else:
                     default = eval(default)  # Вместо парсинка строки просто преобразуем строку в массив
@@ -101,7 +100,7 @@ class UI():
                 table.append([file[:-3], algorithm, description])  # заводим данные в табличку
         tab = PrettyTable(column_name)  # Шапка таблички
         tab.add_rows(table)  # Строки таблички
-        print(tab)  # Виводим табличку
+        print(tab)  # Выводим табличку
 
     def optimize(self, command):
         pass

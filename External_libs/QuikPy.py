@@ -1,6 +1,8 @@
 import socket  # Обращаться к LUA скриптам QuikSharp будем через соединения
 import threading  # Результат работы функций обратного вызова будем получать в отдельном потоке
 import json  # Передавать и принимать данные в QUIK будем через JSON
+import numpy
+import pandas as pd
 
 
 class Singleton(type):
