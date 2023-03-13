@@ -128,12 +128,12 @@ class Quik():
             'EXPIRY_DATE': 'GTC'}  # Срок действия до отмены'''
         return print(f'Новая стоп заявка отправлена на рынок: {self.qpProvider.SendTransaction(transaction)["data"]}')
 
-    def SaveCandlesToFile(self, classCode='TQBR', secCodes=('SBER',), timeFrame='D', compression=1,
+    def SaveCandlesToFile(self, class_сode='TQBR', secCodes=('SBER',), timeFrame='D', compression=1,
                           skipFirstDate=False, skipLastDate=False, fourPriceDoji=False):
         #TODO: Quik.SaveCandlesToFile: допилить
         """Получение баров, объединение с имеющимися барами в файле (если есть), сохранение баров в файл
 
-        :param classCode: Код рынка
+        :param class_сode: Код рынка
         :param secCodes: Коды тикеров в виде кортежа
         :param timeFrame: Временной интервал 'M'-Минуты, 'D'-дни, 'W'-недели, 'MN'-месяцы
         :param compression: Кол-во минут для минутного графика. Для остальных = 1
@@ -151,55 +151,55 @@ class Quik():
 
         for secCode in secCodes:  # Пробегаемся по всем тикерам
             #fileName = f'..\\..\\Data\\{class_code}.{sec_code}_{timeFrame}{compression}.txt'
-            fileName = f'{classCode}.{secCode}_{timeFrame}{compression}.txt'
-            isFileExists = os.path.isfile(fileName)  # Существует ли файл
-            if not isFileExists:  # Если файл не существует
-                print(f'Файл {fileName} не найден и будет создан')
+            file_name = f'{class_сode}.{secCode}_{timeFrame}{compression}.txt'
+            is_file_exists = os.path.isfile(file_name)  # Существует ли файл
+            if not is_file_exists:  # Если файл не существует
+                print(f'Файл {file_name} не найден и будет создан')
             else:  # Файл существует
-                print(f'Получение файла {fileName}')
-                fileBars = pd.read_csv(fileName, sep='\t', index_col='datetime')  # Считываем файл в DataFrame
-                fileBars.index = pd.to_datetime(fileBars.index,
+                print(f'Получение файла {file_name}')
+                file_bars = pd.read_csv(file_name, sep='\t', index_col='datetime')  # Считываем файл в DataFrame
+                file_bars.index = pd.to_datetime(file_bars.index,
                                                 format='%d.%m.%Y %H:%M')  # Переводим индекс в формат datetime
-                print(f'- Первая запись файла: {fileBars.index[0]}')
-                print(f'- Последняя запись файла: {fileBars.index[-1]}')
-                print(f'- Кол-во записей в файле: {len(fileBars)}')
+                print(f'- Первая запись файла: {file_bars.index[0]}')
+                print(f'- Последняя запись файла: {file_bars.index[-1]}')
+                print(f'- Кол-во записей в файле: {len(file_bars)}')
 
-            newBars = self.qpProvider.GetCandlesFromDataSource(classCode, secCode, interval, 0)[
+            new_bars = self.qpProvider.GetCandlesFromDataSource(class_сode, secCode, interval, 0)[
                 "data"]  # Получаем все свечки
-            pdBars = pd.DataFrame.from_dict(pd.json_normalize(newBars),
+            pd_bars = pd.DataFrame.from_dict(pd.json_normalize(new_bars),
                                             orient='columns')  # Внутренние колонки даты/времени разворачиваем в отдельные колонки
-            pdBars.rename(columns={'datetime.year': 'year', 'datetime.month': 'month', 'datetime.day': 'day',
+            pd_bars.rename(columns={'datetime.year': 'year', 'datetime.month': 'month', 'datetime.day': 'day',
                                    'datetime.hour': 'hour', 'datetime.min': 'minute', 'datetime.sec': 'second'},
                           inplace=True)  # Чтобы получить дату/время переименовываем колонки
-            pdBars.index = pd.to_datetime(
-                pdBars[['year', 'month', 'day', 'hour', 'minute', 'second']])  # Собираем дату/время из колонок
-            pdBars = pdBars[['open', 'high', 'low', 'close', 'volume']]  # Отбираем нужные колонки
-            pdBars.index.name = 'datetime'  # Ставим название индекса даты/времени
-            pdBars.volume = pd.to_numeric(pdBars.volume, downcast='integer')  # Объемы могут быть только целыми
+            pd_bars.index = pd.to_datetime(
+                pd_bars[['year', 'month', 'day', 'hour', 'minute', 'second']])  # Собираем дату/время из колонок
+            pd_bars = pd_bars[['open', 'high', 'low', 'close', 'volume']]  # Отбираем нужные колонки
+            pd_bars.index.name = 'datetime'  # Ставим название индекса даты/времени
+            pd_bars.volume = pd.to_numeric(pd_bars.volume, downcast='integer')  # Объемы могут быть только целыми
             if skipFirstDate:  # Если убираем бары на первую дату
-                lenWithFirstDate = len(pdBars)  # Кол-во баров до удаления на первую дату
-                firstDate = pdBars.index[0].date()  # Первая дата
-                pdBars.drop(pdBars[(pdBars.index.date == firstDate)].index, inplace=True)  # Удаляем их
-                print(f'- Удалено баров на первую дату {firstDate}: {lenWithFirstDate - len(pdBars)}')
+                len_with_first_date = len(pd_bars)  # Кол-во баров до удаления на первую дату
+                first_date = pd_bars.index[0].date()  # Первая дата
+                pd_bars.drop(pd_bars[(pd_bars.index.date == first_date)].index, inplace=True)  # Удаляем их
+                print(f'- Удалено баров на первую дату {first_date}: {len_with_first_date - len(pd_bars)}')
             if skipLastDate:  # Если убираем бары на последнюю дату
-                lenWithLastDate = len(pdBars)  # Кол-во баров до удаления на последнюю дату
-                lastDate = pdBars.index[-1].date()  # Последняя дата
-                pdBars.drop(pdBars[(pdBars.index.date == lastDate)].index, inplace=True)  # Удаляем их
-                print(f'- Удалено баров на последнюю дату {lastDate}: {lenWithLastDate - len(pdBars)}')
+                len_with_last_date = len(pd_bars)  # Кол-во баров до удаления на последнюю дату
+                last_date = pd_bars.index[-1].date()  # Последняя дата
+                pd_bars.drop(pd_bars[(pd_bars.index.date == last_date)].index, inplace=True)  # Удаляем их
+                print(f'- Удалено баров на последнюю дату {last_date}: {len_with_last_date - len(pd_bars)}')
             if not fourPriceDoji:  # Если удаляем дожи 4-х цен
-                lenWithDoji = len(pdBars)  # Кол-во баров до удаления дожи
-                pdBars.drop(pdBars[(pdBars.high == pdBars.low)].index,
+                len_with_doji = len(pd_bars)  # Кол-во баров до удаления дожи
+                pd_bars.drop(pd_bars[(pd_bars.high == pd_bars.low)].index,
                             inplace=True)  # Удаляем их по условия High == Low
-                print('- Удалено дожи 4-х цен:', lenWithDoji - len(pdBars))
-            print('- Первая запись в QUIK:', pdBars.index[0])
-            print('- Последняя запись в QUIK:', pdBars.index[-1])
-            print('- Кол-во записей в QUIK:', len(pdBars))
+                print('- Удалено дожи 4-х цен:', len_with_doji - len(pd_bars))
+            print('- Первая запись в QUIK:', pd_bars.index[0])
+            print('- Последняя запись в QUIK:', pd_bars.index[-1])
+            print('- Кол-во записей в QUIK:', len(pd_bars))
 
-            if isFileExists:  # Если файл существует
-                pdBars = pd.concat([fileBars, pdBars]).drop_duplicates(
+            if is_file_exists:  # Если файл существует
+                pd_bars = pd.concat([file_bars, pd_bars]).drop_duplicates(
                     keep='last').sort_index()  # Объединяем файл с данными из QUIK, убираем дубликаты, сортируем заново
-            pdBars.to_csv(fileName, sep='\t', date_format='%d.%m.%Y %H:%M')
-            print(f'- В файл {fileName} сохранено записей: {len(pdBars)}')
+            pd_bars.to_csv(file_name, sep='\t', date_format='%d.%m.%Y %H:%M')
+            print(f'- В файл {file_name} сохранено записей: {len(pd_bars)}')
 
     def get_ticker(self, firm_id, class_code, sec_code):
         #firm_id = 'MC0063100000'  # Фирма
@@ -234,24 +234,24 @@ class Quik():
         #qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
         # qpProvider = QuikPy(Host='<Ваш IP адрес>')  # Вызываем конструктор QuikPy с подключением к удаленному компьютеру с QUIK
 
-        # classCode = 'TQBR'  # Класс тикера
+        # class_сode = 'TQBR'  # Класс тикера
         # secCode = 'GAZP'  # Тикер
 
-        #classCode = 'SPBFUT'  # Класс тикера
+        #class_сode = 'SPBFUT'  # Класс тикера
         #secCode = 'SiH2'  # Для фьючерсов: <Код тикера><Месяц экспирации: 3-H, 6-M, 9-U, 12-Z><Последняя цифра года>
 
         # Запрос текущего стакана. Чтобы получать, в QUIK открыть Таблицу Котировки, указать тикер
-        # print(f'Текущий стакан {classCode}.{secCode}:', qpProvider.GetQuoteLevel2(classCode, secCode)['data'])
+        # print(f'Текущий стакан {class_сode}.{secCode}:', qpProvider.GetQuoteLevel2(class_сode, secCode)['data'])
 
         # Стакан. Чтобы отмена подписки работала корректно, в QUIK должна быть ЗАКРЫТА таблица Котировки тикера
         # qpProvider.OnQuote = PrintCallback  # Обработчик изменения стакана котировок
-        # print(f'Подписка на изменения стакана {classCode}.{secCode}:', qpProvider.SubscribeLevel2Quotes(classCode, secCode)['data'])
-        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+        # print(f'Подписка на изменения стакана {class_сode}.{secCode}:', qpProvider.SubscribeLevel2Quotes(class_сode, secCode)['data'])
+        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(class_сode, secCode)['data'])
         # sleepSec = 3  # Кол-во секунд получения котировок
         # print('Секунд котировок:', sleepSec)
         # time.sleep(sleepSec)  # Ждем кол-во секунд получения котировок
-        # print(f'Отмена подписки на изменения стакана:', qpProvider.UnsubscribeLevel2Quotes(classCode, secCode)['data'])
-        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+        # print(f'Отмена подписки на изменения стакана:', qpProvider.UnsubscribeLevel2Quotes(class_сode, secCode)['data'])
+        # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(class_сode, secCode)['data'])
         # qpProvider.OnQuote = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
 
         # Обезличенные сделки. Чтобы получать, в QUIK открыть Таблицу обезличенных сделок, указать тикер
@@ -290,85 +290,129 @@ class Quik():
 
     def get_all_accounts(self):
 
-        # TODO: Quik: get_all_accounts: разобраться, подготовить вывод как dataframe
+        # TODO: Quik: get_all_accounts: добавить фьючерсы
         """Получение всех торговых счетов"""
-        futuresFirmId = 'SPBFUT'  # Фирма для фьючерсов. Измените, если требуется, на фирму, которую для фьючерсов поставил ваш брокер
+        futures_firm_id = 'SPBFUT'  # Фирма для фьючерсов. Измените, если требуется, на фирму, которую для фьючерсов поставил ваш брокер
 
-        classCodes = self.qpProvider.GetClassesList()['data']  # Список классов
-        classCodesList = classCodes[:-1].split(',')  # Удаляем последнюю запятую, разбиваем значения по запятой
-        tradeAccounts = self.qpProvider.GetTradeAccounts()['data']  # Все торговые счета
-        moneyLimits = self.qpProvider.GetMoneyLimits()['data']  # Все денежные лимиты (остатки на счетах)
-        depoLimits = self.qpProvider.GetAllDepoLimits()['data']  # Все лимиты по бумагам (позиции по инструментам)
+        class_codes = self.qpProvider.GetClassesList()['data']  # Список классов
+        class_codes_list = class_codes[:-1].split(',')  # Удаляем последнюю запятую, разбиваем значения по запятой
+        trade_accounts = self.qpProvider.GetTradeAccounts()['data']  # Все торговые счета
+        money_limits = self.qpProvider.GetMoneyLimits()['data']  # Все денежные лимиты (остатки на счетах)
+        depo_limits = self.qpProvider.GetAllDepoLimits()['data']  # Все лимиты по бумагам (позиции по инструментам)
         orders = self.qpProvider.GetAllOrders()['data']  # Все заявки
-        stopOrders = self.qpProvider.GetAllStopOrders()['data']  # Все стоп заявки
+        stop_orders = self.qpProvider.GetAllStopOrders()['data']  # Все стоп заявки
+
+        translation_order = {'Покупка': 'Buy', 'Продажа': 'Sell'}
+
+        positions = {'Type': [], 'Class': [], 'Ticker': [], 'Quantity': [], 'Entry_price': [], 'Current_price': []}  # будущий dataframe
+
+        order = {'Type': [], 'Class': [], 'Number': [], 'Ticker': [], 'Quantity': [], 'Price': []}
 
         # Коды клиента / Фирмы / Счета
-        for tradeAccount in tradeAccounts:  # Пробегаемся по всем счетам
-            firmId = tradeAccount['firmid']  # Фирма
-            tradeAccountId = tradeAccount['trdaccid']  # Счет
-            distinctClientCode = list(set([moneyLimit['client_code'] for moneyLimit in moneyLimits if
-                                           moneyLimit['firmid'] == firmId]))  # Уникальные коды клиента по фирме
+        for trade_account in trade_accounts:  # Пробегаемся по всем счетам
+            firm_id = trade_account['firmid']  # Фирма
+            trade_account_id = trade_account['trdaccid']  # Счет
+            distinct_client_code = list(set([money_limit['client_code'] for money_limit in money_limits if money_limit['firmid'] == firm_id]))  # Уникальные коды клиента по фирме
             print(
-                f'Код клиента {distinctClientCode[0] if distinctClientCode else "не задан"}, Фирма {firmId}, Счет {tradeAccountId} ({tradeAccount["description"]})')
-            trade_account_class_codes = tradeAccount['class_codes'][1:-1].split(
+                f'Код клиента {distinct_client_code[0] if distinct_client_code else "не задан"}, Фирма {firm_id}, Счет {trade_account_id} ({trade_account["description"]})')
+            trade_account_class_codes = trade_account['class_codes'][1:-1].split(
                 '|')  # Классы торгового счета. Удаляем последнюю вертикальную черту, разбиваем значения по вертикальной черте
             intersection_class_codes = list(set(trade_account_class_codes).intersection(
-                classCodesList))  # Классы, которые есть и в списке и в торговом счете
+                class_codes_list))  # Классы, которые есть и в списке и в торговом счете
             # Классы
-            for classCode in intersection_class_codes:  # Пробегаемся по всем общим классам
-                class_info = self.qpProvider.GetClassInfo(classCode)['data']  # Информация о классе
-                print(f'- Класс {classCode} ({class_info["name"]}), Тикеров {class_info["nsecs"]}')
+            '''for class_code in intersection_class_codes:  # Пробегаемся по всем общим классам
+                class_info = self.qpProvider.GetClassInfo(class_code)['data']  # Информация о классе
+                print(f'- Класс {class_code} ({class_info["name"]}), Тикеров {class_info["nsecs"]}')
                 # Инструменты. Если выводить на экран, то занимают много места. Поэтому, закомментировали
-                # classSecurities = qpProvider.GetClassSecurities(classCode)['data'][:-1].split(',')  # Список инструментов класса. Удаляем последнюю запятую, разбиваем значения по запятой
-                # print(f'  - Тикеры ({classSecurities})')
-            if firmId == futuresFirmId:  # Для фьючерсов свои расчеты
+                # classSecurities = qpProvider.GetClassSecurities(class_сode)['data'][:-1].split(',')  # Список инструментов класса. Удаляем последнюю запятую, разбиваем значения по запятой
+                # print(f'  - Тикеры ({classSecurities})')'''
+            if firm_id == futures_firm_id:  # Для фьючерсов свои расчеты
                 # Лимиты
                 print(
-                    f'- Фьючерсный лимит {self.qpProvider.GetFuturesLimit(firmId, tradeAccountId, 0, "SUR")["data"]["cbplimit"]} SUR')
+                    f'- Фьючерсный лимит {self.qpProvider.GetFuturesLimit(firm_id, trade_account_id, 0, "SUR")["data"]["cbplimit"]} SUR')
                 # Позиции
-                futuresHoldings = self.qpProvider.GetFuturesHoldings()['data']  # Все фьючерсные позиции
-                activeFuturesHoldings = [futuresHolding for futuresHolding in futuresHoldings if
-                                         futuresHolding['totalnet'] != 0]  # Активные фьючерсные позиции
-                for activeFuturesHolding in activeFuturesHoldings:
+                futures_holdings = self.qpProvider.GetFuturesHoldings()['data']  # Все фьючерсные позиции
+                active_futures_holdings = [futures_holding for futures_holding in futures_holdings if futures_holding['totalnet'] != 0]  # Активные фьючерсные позиции
+                for activeFuturesHolding in active_futures_holdings:
+
                     print(
                         f'  - Фьючерсная позиция {activeFuturesHolding["sec_code"]} {activeFuturesHolding["totalnet"]} @ {activeFuturesHolding["cbplused"]}')
             else:  # Для остальных фирм
                 # Лимиты
-                firmMoneyLimits = [moneyLimit for moneyLimit in moneyLimits if
-                                   moneyLimit['firmid'] == firmId]  # Денежные лимиты по фирме
-                for firmMoneyLimit in firmMoneyLimits:  # Пробегаемся по всем денежным лимитам
-                    limitKind = firmMoneyLimit['limit_kind']  # День лимита
-                    print(
-                        f'- Денежный лимит {firmMoneyLimit["tag"]} на T{limitKind}: {firmMoneyLimit["currentbal"]} {firmMoneyLimit["currcode"]}')
-                    # Позиции
-                    firmKindDepoLimits = [depoLimit for depoLimit in depoLimits if
-                                          depoLimit['firmid'] == firmId and depoLimit['limit_kind'] == limitKind and
-                                          depoLimit['currentbal'] != 0]  # Берем только открытые позиции по фирме и дню
-                    for firmKindDepoLimit in firmKindDepoLimits:  # Пробегаемся по всем позициям
-                        secCode = firmKindDepoLimit["sec_code"]  # Код тикера
-                        classCode = self.qpProvider.GetSecurityClass(classCodes, secCode)['data']
-                        entryPrice = float(firmKindDepoLimit["wa_position_price"])
-                        lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data'][
-                                              'param_value'])  # Последняя цена сделки
-                        if classCode == 'TQOB':  # Для рынка облигаций
-                            lastPrice *= 10  # Умножаем на 10
-                        print(
-                            f'  - Позиция {classCode}.{secCode} {firmKindDepoLimit["currentbal"]} @ {entryPrice:.2f}/{lastPrice:.2f}')
-            # Заявки
-            firmOrders = [order for order in orders if
-                          order['firmid'] == firmId and order['flags'] & 0b1 == 0b1]  # Активные заявки по фирме
-            for firmOrder in firmOrders:  # Пробегаемся по всем заявка
-                isBuy = firmOrder['flags'] & 0b100 != 0b100  # Заявка на покупку
-                print(
-                    f'- Заявка номер {firmOrder["order_num"]} {"Покупка" if isBuy else "Продажа"} {firmOrder["class_code"]}.{firmOrder["sec_code"]} {firmOrder["qty"]} @ {firmOrder["price"]}')
-            # Стоп заявки
-            firmStopOrders = [stopOrder for stopOrder in stopOrders if stopOrder['firmid'] == firmId and stopOrder[
-                'flags'] & 0b1 == 0b1]  # Активные стоп заявки по фирме
-            for firmStopOrder in firmStopOrders:  # Пробегаемся по всем стоп заявкам
-                isBuy = firmStopOrder['flags'] & 0b100 != 0b100  # Заявка на покупку
-                print(
-                    f'- Стоп заявка номер {firmStopOrder["order_num"]} {"Покупка" if isBuy else "Продажа"} {firmStopOrder["class_code"]}.{firmStopOrder["sec_code"]} {firmStopOrder["qty"]} @ {firmStopOrder["price"]}')
+                firm_money_limits = [money_limit for money_limit in money_limits if money_limit['firmid'] == firm_id]  # Денежные лимиты по фирме
+                for firmMoneyLimit in firm_money_limits:  # Пробегаемся по всем денежным лимитам
+                    limit_kind = firmMoneyLimit['limit_kind']  # День лимита
+                    #print(f'- Денежный лимит {firmMoneyLimit["tag"]} на T{limit_kind}: {firmMoneyLimit["currentbal"]} {firmMoneyLimit["currcode"]}')
 
+                    if limit_kind == 365 and firmMoneyLimit["currcode"] not in positions['Ticker']:  # Добавляем в dataframe
+                        positions['Type'].append('Money')
+                        positions['Class'].append(firmMoneyLimit["tag"])
+                        positions['Ticker'].append(firmMoneyLimit["currcode"])
+                        positions['Quantity'].append(firmMoneyLimit["currentbal"])
+                        positions['Entry_price'].append('0')
+                        positions['Current_price'].append('0')
+
+                    # Позиции
+                    firm_kind_depo_limits = [depo_limit for depo_limit in depo_limits if depo_limit['firmid'] == firm_id and depo_limit['limit_kind'] == limit_kind and depo_limit['currentbal'] != 0]  # Берем только открытые позиции по фирме и дню
+                    for firm_kind_depo_limit in firm_kind_depo_limits:  # Пробегаемся по всем позициям
+
+                        if limit_kind == 365:
+                            sec_code = firm_kind_depo_limit["sec_code"]  # Код тикера
+                            class_code = self.qpProvider.GetSecurityClass(class_codes, sec_code)['data']
+                            entry_price = float(firm_kind_depo_limit["wa_position_price"])
+                            last_price = float(self.qpProvider.GetParamEx(class_code, sec_code, 'LAST')['data'][
+                                                  'param_value'])  # Последняя цена сделки
+                            type_name = 'Stock'
+                            if class_code == 'TQOB' or class_code == 'TQCB':  # Для рынка облигаций
+                                last_price *= 10  # Умножаем на 10
+                                type_name = 'Bond'
+                            if sec_code not in positions['Ticker']:  # Добавляем в dataframe
+                                positions['Type'].append( type_name)
+                                positions['Class'].append(class_code)
+                                positions['Ticker'].append(sec_code)
+                                positions['Quantity'].append(firm_kind_depo_limit["currentbal"])
+                                positions['Entry_price'].append(entry_price)
+                                positions['Current_price'].append(last_price)
+                                #print(f'  - Позиция {class_code}.{sec_code} {firm_kind_depo_limit["currentbal"]} @ {entry_price:.2f}/{last_price:.2f}')
+
+            # Заявки
+            firm_orders = [order for order in orders if order['firmid'] == firm_id and order['flags'] & 0b1 == 0b1]  # Активные заявки по фирме
+            for firmOrder in firm_orders:  # Пробегаемся по всем заявкам
+                is_buy = firmOrder['flags'] & 0b100 != 0b100  # Заявка на покупку
+                act = "Покупка" if is_buy else "Продажа"
+                print(f'- Заявка номер {firmOrder["order_num"]} {"Покупка" if is_buy else "Продажа"} {firmOrder["class_code"]}.{firmOrder["sec_code"]} {firmOrder["qty"]} @ {firmOrder["price"]}')
+
+                if firmOrder["sec_code"] not in order['Ticker']:  # Добавляем в dataframe
+                    order['Type'].append('Limit')
+                    order['Class'].append(translation_order[act])
+                    order['Number'].append(firmOrder["order_num"])
+                    order['Ticker'].append(firmOrder["sec_code"])
+                    order['Quantity'].append(firmOrder["qty"])
+                    order['Price'].append(firmOrder["price"])
+
+
+            # Стоп заявки
+            firm_stop_orders = [stopOrder for stopOrder in stop_orders if stopOrder['firmid'] == firm_id and stopOrder[
+                'flags'] & 0b1 == 0b1]  # Активные стоп заявки по фирме
+            for firm_stop_order in firm_stop_orders:  # Пробегаемся по всем стоп заявкам
+                is_buy = firm_stop_order['flags'] & 0b100 != 0b100  # Заявка на покупку
+                act = "Покупка" if is_buy else "Продажа"
+                print(f'- Стоп заявка номер {firm_stop_order["order_num"]} {"Покупка" if is_buy else "Продажа"} {firm_stop_order["class_code"]}.{firm_stop_order["sec_code"]} {firm_stop_order["qty"]} @ {firm_stop_order["price"]}')
+
+                if firm_stop_order["sec_code"] not in order['Ticker']:  # Добавляем в dataframe
+                    order['Type'].append('Stop')
+                    order['Class'].append(translation_order[act])
+                    order['Number'].append(firm_stop_order["order_num"])
+                    order['Ticker'].append(firm_stop_order["sec_code"])
+                    order['Quantity'].append(firm_stop_order["qty"])
+                    order['Price'].append(firm_stop_order["price"])
+
+        pos = pd.DataFrame(positions)
+        ord = pd.DataFrame(order)
+        print(pos)
+        print(ord)
+        self.close_connection()
+        return pos, ord
 
 path = "../settings.ini"
 if not os.path.exists(path):

@@ -21,24 +21,24 @@ if __name__ == '__main__':  # Точка входа при запуске это
     qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
     # qpProvider = QuikPy(Host='<Ваш IP адрес>')  # Вызываем конструктор QuikPy с подключением к удаленному компьютеру с QUIK
 
-    # classCode = 'TQBR'  # Класс тикера
+    # class_сode = 'TQBR'  # Класс тикера
     # secCode = 'GAZP'  # Тикер
 
     classCode = 'SPBFUT'  # Класс тикера
     secCode = 'SiH2'  # Для фьючерсов: <Код тикера><Месяц экспирации: 3-H, 6-M, 9-U, 12-Z><Последняя цифра года>
 
     # Запрос текущего стакана. Чтобы получать, в QUIK открыть Таблицу Котировки, указать тикер
-    # print(f'Текущий стакан {classCode}.{secCode}:', qpProvider.GetQuoteLevel2(classCode, secCode)['data'])
+    # print(f'Текущий стакан {class_сode}.{secCode}:', qpProvider.GetQuoteLevel2(class_сode, secCode)['data'])
 
     # Стакан. Чтобы отмена подписки работала корректно, в QUIK должна быть ЗАКРЫТА таблица Котировки тикера
     # qpProvider.OnQuote = PrintCallback  # Обработчик изменения стакана котировок
-    # print(f'Подписка на изменения стакана {classCode}.{secCode}:', qpProvider.SubscribeLevel2Quotes(classCode, secCode)['data'])
-    # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+    # print(f'Подписка на изменения стакана {class_сode}.{secCode}:', qpProvider.SubscribeLevel2Quotes(class_сode, secCode)['data'])
+    # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(class_сode, secCode)['data'])
     # sleepSec = 3  # Кол-во секунд получения котировок
     # print('Секунд котировок:', sleepSec)
     # time.sleep(sleepSec)  # Ждем кол-во секунд получения котировок
-    # print(f'Отмена подписки на изменения стакана:', qpProvider.UnsubscribeLevel2Quotes(classCode, secCode)['data'])
-    # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(classCode, secCode)['data'])
+    # print(f'Отмена подписки на изменения стакана:', qpProvider.UnsubscribeLevel2Quotes(class_сode, secCode)['data'])
+    # print('Статус подписки:', qpProvider.IsSubscribedLevel2Quotes(class_сode, secCode)['data'])
     # qpProvider.OnQuote = qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
 
     # Обезличенные сделки. Чтобы получать, в QUIK открыть Таблицу обезличенных сделок, указать тикер
