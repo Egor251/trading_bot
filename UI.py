@@ -1,5 +1,6 @@
-from support_tools import Tools
+from support_tools import Tools, Functionality
 from prettytable import PrettyTable
+
 
 
 class UI():
@@ -56,7 +57,13 @@ class UI():
         pass
 
     def help(self, command):
-        pass
+        help_table = []
+        help_table.append(['use', 'select type of module and what module you want to work with (use strategy your_strategy, use driver Quik, use info yahoo etc.'])
+        help_table.append(['show', 'shows allowed modules or parameters. keywords: strategy, driver, info, options'])
+        help_table.append(['help', 'shows this help menu'])
+        tab = PrettyTable(['key', 'explanation'])  # Шапка таблички
+        tab.add_rows(help_table)
+        print(tab)
 
     def show(self, command):
         table = []
@@ -71,8 +78,10 @@ class UI():
                 column_name = ['Parameter', 'Value']
                 default = Tools.parse_file(self.current_state, 'default')  # Парсим дефолтные значения из модуля
 
-                optimization_parameters = Tools.parse_file(self.current_state,
-                                                           'optimization_parameters')  # Парсим параметры, которые можно менять в модуле
+                optimization_parameters = Tools.parse_file(self.current_state, 'optimization_parameters')  # Парсим параметры, которые можно менять в модуле
+                # TODO: отказаться от parse_file
+                #optimization_parameters = Functionality.run_module(self.current_state, 'get_attr', 'optimization_parameters')  # Пока не работает
+
                 if len(optimization_parameters) == 0:  # Проверка, а есть ли параметры, которые можно менять
                     print('There no options to set')
                     return
@@ -94,10 +103,12 @@ class UI():
             data = self.module_types[command[0]]  # Получаем тип модуля
             output = Tools.parse_dir(data)  # Парсим папку с модулями выбранного типа
             for file in output:
-                path = data+'/'+file  # фоормируем путь к файлу
-                algorithm = Tools.parse_file(path, 'algorithm')  # Парсим переменную algorithm - короткое указание типа модуля
+                path = data+'/'+file  # формируем путь к файлу
+                '''algorithm = Tools.parse_file(path, 'algorithm')  # Парсим переменную algorithm - короткое указание типа модуля
                 description = Tools.parse_file(path, 'description')  # Парсим переменную description - полное описание модуля модуля
-                table.append([file[:-3], algorithm, description])  # заводим данные в табличку
+                table.append([file[:-3], algorithm, description])  # заводим данные в табличку'''
+                #print(Functionality().run_module(path, '', 'show'))
+                table.append([file[:-3], *Functionality().run_module(path, '', 'show')])
         tab = PrettyTable(column_name)  # Шапка таблички
         tab.add_rows(table)  # Строки таблички
         print(tab)  # Выводим табличку

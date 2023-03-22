@@ -1,4 +1,5 @@
 import os
+import time
 from create_config import create_config
 try:
     import configparser
@@ -7,9 +8,13 @@ except ImportError:
 
 import os.path
 
+from structy import Driver
+
 import pandas as pd
 
 from datetime import datetime
+
+from structy import Driver
 
 from External_libs.QuikPy import QuikPy  # Работа с QUIK из Python через LUA скрипты QuikSharp
 
@@ -30,7 +35,7 @@ from External_libs.QuikPy import QuikPy  # Работа с QUIK из Python че
 #print(f'Отклик QUIK на команду Ping: {qpProvider.Ping()["data"]}')  # Проверка работы скрипта QuikSharp. Должен вернуть Pong
 
 
-class Quik():
+class Quik(Driver):
 
     qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
 
@@ -229,6 +234,18 @@ class Quik():
             self.qpProvider.GetParamEx(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
         print('Последняя цена сделки:', lastPrice)
 
+    def DOM_stream(self, class_code, sec_code):
+        class_code = 1
+        self.qpProvider.OnQuote = self.print_callback  # Обработчик изменения стакана котировок
+        print(f'Подписка на изменения стакана {class_code}.{sec_code}:', self.qpProvider.SubscribeLevel2Quotes(class_code, sec_code)['data'])
+        print('Статус подписки:', self.qpProvider.IsSubscribedLevel2Quotes(class_code, sec_code)['data'])
+        sleepSec = 3  # Кол-во секунд получения котировок
+        print('Секунд котировок:', sleepSec)
+        time.sleep(sleepSec)  # Ждем кол-во секунд получения котировок
+        print(f'Отмена подписки на изменения стакана:', self.qpProvider.UnsubscribeLevel2Quotes(class_code, sec_code)['data'])
+        print('Статус подписки:', self.qpProvider.IsSubscribedLevel2Quotes(class_code, sec_code)['data'])
+        self.qpProvider.OnQuote = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+
     def stream(self, class_code, sec_code):
         # TODO: stream: finish
         #qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
@@ -268,7 +285,10 @@ class Quik():
         # Подписка на новые свечки. При первой подписке получим все свечки с начала прошлой сессии
         # TODO В QUIK 9.2.13.15 перестала работать повторная подписка на минутные бары. Остальные работают
         #  Перед повторной подпиской нужно перезапустить скрипт QuikSharp.lua Подписка станет первой, все заработает
-        self.qpProvider.OnNewCandle = self.print_callback  # Обработчик получения новой свечки
+
+        # Печатает свечи
+        #self.qpProvider.OnNewCandle = self.print_callback  # Обработчик получения новой свечки
+
         for interval in (1,):  # (1, 60, 1440) = Минутки, часовки, дневки
             print(f'Подписка на интервал {interval}:',
                   self.qpProvider.SubscribeToCandles(class_code, sec_code, interval)['data'])
@@ -397,7 +417,7 @@ class Quik():
             for firm_stop_order in firm_stop_orders:  # Пробегаемся по всем стоп заявкам
                 is_buy = firm_stop_order['flags'] & 0b100 != 0b100  # Заявка на покупку
                 act = "Покупка" if is_buy else "Продажа"
-                print(f'- Стоп заявка номер {firm_stop_order["order_num"]} {"Покупка" if is_buy else "Продажа"} {firm_stop_order["class_code"]}.{firm_stop_order["sec_code"]} {firm_stop_order["qty"]} @ {firm_stop_order["price"]}')
+                #print(f'- Стоп заявка номер {firm_stop_order["order_num"]} {"Покупка" if is_buy else "Продажа"} {firm_stop_order["class_code"]}.{firm_stop_order["sec_code"]} {firm_stop_order["qty"]} @ {firm_stop_order["price"]}')
 
                 if firm_stop_order["sec_code"] not in order['Ticker']:  # Добавляем в dataframe
                     order['Type'].append('Stop')
@@ -408,11 +428,12 @@ class Quik():
                     order['Price'].append(firm_stop_order["price"])
 
         pos = pd.DataFrame(positions)
-        ord = pd.DataFrame(order)
+        orderss = pd.DataFrame(order)
         print(pos)
-        print(ord)
+        print(orderss)
         self.close_connection()
-        return pos, ord
+        return pos, orderss
+
 
 path = "../settings.ini"
 if not os.path.exists(path):
@@ -423,7 +444,9 @@ config.read(path)
 
 if __name__ == "__main__":
     #Quik().stream('TQBR', 'SBER')
-    Quik().get_all_accounts()
+    #Quik().get_all_accounts()
+    #Quik().DOM_stream('TQBR', 'MTLR')
+    Quik().stream('TQBR', 'NLMK')
 
 
 

@@ -1,6 +1,9 @@
-class Strategy():  # main class must be named "Strategy"
+from structy import Strat
 
-    # All necessary variables. Must be anywhere in any strategy
+
+class Strategy(Strat):  # main class must be named "Strategy"
+
+    # All necessary variables
     algorithm = 'Test'  # Short description of strategies type
     description = 'Its a test strategy, it shows how strategy should looks like'  # Full description of strategy
     optimization_parameters = {'a': range(5), 'def': range(10)}  # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
@@ -18,4 +21,6 @@ class Strategy():  # main class must be named "Strategy"
 
 
 if __name__ == '__main__':
-    Strategy().run([1, 5])
+    #Strategy().run([1, 5])
+    #print(Strategy().get_attr('optimization_parameters'))
+    pass

@@ -10,6 +10,7 @@ asyncio
 aiohttp
 tradingview-ta
 prettytable
+metatrader5
 
 # For next library you can build it from source (Ta-lib install --> Ta-lib_source) or use "pip install 'Ta-lib install\Ta-lib[choose your version].whl'"
 Ta-lib

@@ -12,7 +12,7 @@ def create_config(path):
     config = configparser.ConfigParser()
     #config.add_section("Transactions")
 
-    config['Account details'] = {'Account': ''}
+    config['Account details'] = {'Account': '', 'Metatrader_account': '', 'Metatrader_password': ''}
 
     config['API keys'] = {'alphavantage': '347R98J0MSQOTQ6Z'}
     # alphavantage : 347R98J0MSQOTQ6Z

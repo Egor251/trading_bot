@@ -56,14 +56,17 @@ class Tools:
 class Functionality:
 
     @staticmethod
-    def run_module(path, attr):
+    def run_module(path, func, attr=''):
         module_name = path.split('/')[1][:-3]
         module_spec = importlib.util.spec_from_file_location(
             module_name, path)
         module = module_spec.loader.load_module()
         #TODO: optimiser.import_module:найти способ обнаруживать классы и запускать
-        #class_name = Tools().parse_file(path, 'class_name')
-        #def_name = Tools().parse_file(path, 'def_name')
-        action = module.Strategy().run(attr)
-        print(f'Действие: {action}')
+        #action = module.Strategy().run(attr)
+        command = f'module.Strategy().{func}({attr})'
+        action = eval(command)
+        #print(f'Действие: {action}')  # Раскоментировать для дебага
         return action
+
+if __name__ == '__main__':
+    Functionality.run_module('Strategies/test_strategy.py', 'get_attr', '"optimization_parameters"')
