@@ -1,6 +1,4 @@
 from support_tools import Tools, Functionality
-from prettytable import PrettyTable
-
 
 
 class UI():
@@ -8,6 +6,12 @@ class UI():
     actions = ['use', 'run', 'set', 'help', 'exit', 'show', 'optimize']  # Перечень доступных команд (первых слов в команде)
 
     module_types = {'strategy': 'Strategies', 'driver': 'Drivers', 'info': 'Info', 'options': 'options'}  # Перечень вторых слов
+
+    column_names = {'strategy': ['module name', 'algorithm', 'description'],
+                    'driver': ['module name', 'description'],
+                    'info': ['module name', 'description'],
+                    'help': ['key', 'explanation'],
+                    'options': ['Parameter', 'Value']}
 
     current_state = ''
 
@@ -61,9 +65,8 @@ class UI():
         help_table.append(['use', 'select type of module and what module you want to work with (use strategy your_strategy, use driver Quik, use info yahoo etc.'])
         help_table.append(['show', 'shows allowed modules or parameters. keywords: strategy, driver, info, options'])
         help_table.append(['help', 'shows this help menu'])
-        tab = PrettyTable(['key', 'explanation'])  # Шапка таблички
-        tab.add_rows(help_table)
-        print(tab)
+
+        Tools().make_table(self.column_names['help'], help_table)  # Табличка
 
     def show(self, command):
         table = []
@@ -75,7 +78,6 @@ class UI():
                 return 0
             else:
                 print(f'Changable parameters for {self.current_print}')
-                column_name = ['Parameter', 'Value']
                 default = Tools.parse_file(self.current_state, 'default')  # Парсим дефолтные значения из модуля
 
                 optimization_parameters = Tools.parse_file(self.current_state, 'optimization_parameters')  # Парсим параметры, которые можно менять в модуле
@@ -99,7 +101,6 @@ class UI():
 
         # вывод списка доступных модулей
         else:
-            column_name = ['module name', 'algorithm', 'description']  # Заголовки таблички
             data = self.module_types[command[0]]  # Получаем тип модуля
             output = Tools.parse_dir(data)  # Парсим папку с модулями выбранного типа
             for file in output:
@@ -108,10 +109,9 @@ class UI():
                 description = Tools.parse_file(path, 'description')  # Парсим переменную description - полное описание модуля модуля
                 table.append([file[:-3], algorithm, description])  # заводим данные в табличку'''
                 #print(Functionality().run_module(path, '', 'show'))
-                table.append([file[:-3], *Functionality().run_module(path, '', 'show')])
-        tab = PrettyTable(column_name)  # Шапка таблички
-        tab.add_rows(table)  # Строки таблички
-        print(tab)  # Выводим табличку
+                table.append([file[:-3], *Functionality().run_module(path,  'show', '')])
+
+        Tools.make_table(self.column_names[command[0]], table)  # Табличка
 
     def optimize(self, command):
         pass

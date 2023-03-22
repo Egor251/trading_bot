@@ -1,6 +1,7 @@
 import datetime
 import os
 import importlib.util
+from prettytable import PrettyTable
 
 
 class Time:
@@ -51,6 +52,12 @@ class Tools:
                     tmp = line.split('=')[-1]  # Да, это должна быть переменная, парсим по строкам и выделяем значение по наличию =
                     break
             return tmp
+
+    @staticmethod
+    def make_table(column_name, data):
+        tab = PrettyTable(column_name)  # Шапка таблички
+        tab.add_rows(data)
+        print(tab)
 
 
 class Functionality:
