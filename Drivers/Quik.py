@@ -42,13 +42,22 @@ class Quik(Driver):
     path = "../settings.ini"
     config = configparser.ConfigParser()
 
-    def print_callback(self, data):
+    @staticmethod
+    def date_from_data(data):
+        #string = f"{data['day']}.{data['month']}.{data['year']} {data['hour']}:{data['min']}"
+        date = f"{data['day']}.{data['month']}.{data['year']}"
+        time = f"{data['hour']}:{data['min']}"
+        return date, time
+
+    @staticmethod
+    def print_callback(data):
         """Пользовательский обработчик события"""
         print(data)  # Печатаем полученные данные
 
     def close_connection(self):
         self.qpProvider.CloseConnectionAndThread()
 
+    @staticmethod
     def ChangedConnection(data):
         """Пользовательский обработчик событий:
         - Соединение установлено
@@ -234,20 +243,38 @@ class Quik(Driver):
             self.qpProvider.GetParamEx(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
         print('Последняя цена сделки:', lastPrice)
 
-    def DOM_stream(self, class_code, sec_code):
-        class_code = 1
-        self.qpProvider.OnQuote = self.print_callback  # Обработчик изменения стакана котировок
-        print(f'Подписка на изменения стакана {class_code}.{sec_code}:', self.qpProvider.SubscribeLevel2Quotes(class_code, sec_code)['data'])
-        print('Статус подписки:', self.qpProvider.IsSubscribedLevel2Quotes(class_code, sec_code)['data'])
-        sleepSec = 3  # Кол-во секунд получения котировок
-        print('Секунд котировок:', sleepSec)
-        time.sleep(sleepSec)  # Ждем кол-во секунд получения котировок
-        print(f'Отмена подписки на изменения стакана:', self.qpProvider.UnsubscribeLevel2Quotes(class_code, sec_code)['data'])
-        print('Статус подписки:', self.qpProvider.IsSubscribedLevel2Quotes(class_code, sec_code)['data'])
-        self.qpProvider.OnQuote = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+    def get_DOM(self, class_code, sec_code):
+
+        dom = self.qpProvider.GetQuoteLevel2(class_code, sec_code)['data']
+        print(dom)
+
+    def get_candles(self, class_code, ticker, interval=1, quantity=1):
+        output_dict = {'date': [], 'time': [], 'open': [], 'close': [], 'low': [], 'high': [], 'volume': [] }
+        new_bars = self.qpProvider.GetCandlesFromDataSource(class_code, ticker, interval, quantity)["data"]  # Получаем все свечки
+        # print(new_bars)
+        for item in new_bars:
+            date, time = self.date_from_data(item['datetime'])
+            output_dict['date'].append(date)
+            output_dict['time'].append(time)
+            output_dict['open'].append(item['open'])
+            output_dict['close'].append(item['close'])
+            output_dict['low'].append(item['low'])
+            output_dict['high'].append(item['high'])
+            output_dict['volume'].append(item['volume'])
+        candles = pd.DataFrame(output_dict)
+        #print(candles)
+        return candles
+
+
+        #self.close_connection()
+
+    def test_stream(self, class_code, ticker, interval=1):
+        while True:
+            self.get_candles(class_code, ticker, interval)
+            time.sleep(interval*60)
 
     def stream(self, class_code, sec_code):
-        # TODO: stream: finish
+        # TODO: stream: Удалить к чёрту
         #qpProvider = QuikPy()  # Вызываем конструктор QuikPy с подключением к локальному компьютеру с QUIK
         # qpProvider = QuikPy(Host='<Ваш IP адрес>')  # Вызываем конструктор QuikPy с подключением к удаленному компьютеру с QUIK
 
@@ -283,7 +310,8 @@ class Quik(Driver):
         self.qpProvider.OnDisconnected = self.ChangedConnection  # Нажимаем кнопку "Разорвать соединение" в QUIK
 
         # Подписка на новые свечки. При первой подписке получим все свечки с начала прошлой сессии
-        # TODO В QUIK 9.2.13.15 перестала работать повторная подписка на минутные бары. Остальные работают
+
+        #  В QUIK 9.2.13.15 перестала работать повторная подписка на минутные бары. Остальные работают
         #  Перед повторной подпиской нужно перезапустить скрипт QuikSharp.lua Подписка станет первой, все заработает
 
         # Печатает свечи
@@ -304,7 +332,6 @@ class Quik(Driver):
 
         self.qpProvider.OnConnected = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
         self.qpProvider.OnDisconnected = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
-        # TODO: stream: Должен выводить dataframe
         # Выход
         #self.qpProvider.CloseConnectionAndThread()  # Перед выходом закрываем соединение и поток QuikPy из любого экземпляра
 
@@ -387,7 +414,7 @@ class Quik(Driver):
                                 last_price *= 10  # Умножаем на 10
                                 type_name = 'Bond'
                             if sec_code not in positions['Ticker']:  # Добавляем в dataframe
-                                positions['Type'].append( type_name)
+                                positions['Type'].append(type_name)
                                 positions['Class'].append(class_code)
                                 positions['Ticker'].append(sec_code)
                                 positions['Quantity'].append(firm_kind_depo_limit["currentbal"])
@@ -446,7 +473,9 @@ if __name__ == "__main__":
     #Quik().stream('TQBR', 'SBER')
     #Quik().get_all_accounts()
     #Quik().DOM_stream('TQBR', 'MTLR')
-    Quik().stream('TQBR', 'NLMK')
+    #Quik().stream('TQBR', 'NLMK')
+    Quik().get_candles('TQBR', 'SBER', 1, 1)
+    #Quik().get_DOM('TQBR', 'SBER')
 
 
 
