@@ -68,7 +68,6 @@ class Functionality:
         module_spec = importlib.util.spec_from_file_location(
             module_name, path)
         module = module_spec.loader.load_module()
-        #TODO: optimiser.import_module:найти способ обнаруживать классы и запускать
         #action = module.Strategy().run(attr)
         command = f'module.Strategy().{func}({attr})'
         action = eval(command)

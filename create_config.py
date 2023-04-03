@@ -12,9 +12,11 @@ def create_config(path):
     config = configparser.ConfigParser()
     #config.add_section("Transactions")
 
-    config['Account details'] = {'Account': '', 'Metatrader_account': '', 'Metatrader_password': ''}
+    config['Account details'] = {'Metatrader_account': '', 'Metatrader_password': '', 'QUIK_account': '', 'QUIK_client_code': '', 'Quik_futures_account': ''}
 
     config['API keys'] = {'alphavantage': '347R98J0MSQOTQ6Z'}
+
+    config['default settings'] = {'driver': 'Quik', 'info': 'driver'}
     # alphavantage : 347R98J0MSQOTQ6Z
 
     config['Transactions'] = {'stopsteps': '10'}

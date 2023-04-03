@@ -1,6 +1,15 @@
+from database import DB
 
 class Module:
     path = ''
+    my_name = ''
+    my_type = ''
+
+    def __init__(self):
+        self.my_name = self.__class__.__name__
+
+    def set_default(self):
+        DB().replace(self.my_type, self.my_name)
 
     def get_attr(self, attr):
         output = ''
@@ -23,7 +32,7 @@ class Module:
 
 
 class Strat(Module):
-
+    my_type = 'strategy'
     algorithm = ''
     description = ''
     optimization_parameters = ''
@@ -35,7 +44,9 @@ class Strat(Module):
 
 class Driver(Module):
 
+    my_type = 'driver'
     description = ''
+
 
     def get_portfolio(self):
         pass
@@ -43,6 +54,7 @@ class Driver(Module):
 
 class Info(Module):
 
+    my_type = 'info'
     description = ''
 
     def list(self):

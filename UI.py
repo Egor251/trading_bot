@@ -1,7 +1,7 @@
 from support_tools import Tools, Functionality
 
 
-class UI():
+class UI:
 
     actions = ['use', 'run', 'set', 'help', 'exit', 'show', 'optimize']  # Перечень доступных команд (первых слов в команде)
 
@@ -58,7 +58,7 @@ class UI():
             #print(self.current_state)
 
     def set(self, command):
-        pass
+        print(self.current_state)
 
     def help(self, command):
         help_table = []

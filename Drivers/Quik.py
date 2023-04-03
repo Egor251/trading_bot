@@ -120,29 +120,32 @@ class Quik(Driver):
 
         #stopsteps = 10  # Размер проскальзывания в шагах цены
         stopsteps = self.config['Transactions']['stopsteps']
-        slippage = float(self.qpProvider.GetSecurityInfo(transaction['class_code'], transaction['sec_code'])['data'][
+        slippage = float(self.qpProvider.GetSecurityInfo(transaction['class_code'], transaction['ticker'])['data'][
                              'min_price_step']) * float(stopsteps)  # Размер проскальзывания в деньгах
 
         if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
             slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
 
         actions = {'NEW_STOP_ORDER': 'Новая стоп заявка', 'NEW_ORDER': 'Новая заявка', 'KILL_ORDER': 'Удалить заявку'}  # Список доступных действий (помещается в ключ ACTION)
+        # TODO: QUIK: transaction: сделать transid рандомным
+        trans_id = 1
+        buy_sell = {'buy': 'B', 'sell': 'S'}
 
-        '''transaction = {  # Все значения должны передаваться в виде строк
-            'TRANS_ID': str(TransId),  # Номер транзакции задается клиентом
-            'CLIENT_CODE': '',  # Код клиента. Для фьючерсов его нет
-            'ACCOUNT': 'SPBFUT00PST',  # Счет
-            'ACTION': 'NEW_STOP_ORDER',  # Тип заявки: Новая стоп заявка
-            'CLASSCODE': class_code,  # Код площадки
-            'SECCODE': sec_code,  # Код тикера
-            'OPERATION': 'B',  # B = покупка, S = продажа
-            'PRICE': str(price),  # Цена исполнения
-            'QUANTITY': str(quantity),  # Кол-во в лотах
-            'STOPPRICE': str(price + slippage),  # Стоп цена исполнения
-            'EXPIRY_DATE': 'GTC'}  # Срок действия до отмены'''
-        return print(f'Новая стоп заявка отправлена на рынок: {self.qpProvider.SendTransaction(transaction)["data"]}')
+        transaction = {  # Все значения должны передаваться в виде строк
+            'TRANS_ID': str(trans_id),  # Номер транзакции задается клиентом
+            'CLIENT_CODE': self.config['Account details']['quik_client_code'],  # Код клиента. Для фьючерсов его нет
+            'ACCOUNT': self.config['Account details']['quik_account'],  # Счет
+            'ACTION': transaction['action'],  # Тип заявки: Новая стоп заявка
+            'CLASSCODE': transaction['class_code'],  # Код площадки
+            'SECCODE': transaction['ticker'],  # Код тикера
+            'OPERATION': buy_sell[transaction['buy_or_sell']],  # B = покупка, S = продажа
+            'PRICE': str(transaction['price']),  # Цена исполнения
+            'QUANTITY': str(transaction['quantity']),  # Кол-во в лотах
+            'STOPPRICE': str(int(transaction['price']) + slippage),  # Стоп цена исполнения
+            'EXPIRY_DATE': 'GTC'}  # Срок действия до отмены
+        return print(f'Новая заявка отправлена на рынок: {self.qpProvider.SendTransaction(transaction)["data"]}')
 
-    def SaveCandlesToFile(self, class_сode='TQBR', secCodes=('SBER',), timeFrame='D', compression=1,
+    def SaveCandlesToFile(self, class_code='TQBR', secCodes=('SBER',), timeFrame='D', compression=1,
                           skipFirstDate=False, skipLastDate=False, fourPriceDoji=False):
         #TODO: Quik.SaveCandlesToFile: допилить
         """Получение баров, объединение с имеющимися барами в файле (если есть), сохранение баров в файл
@@ -165,7 +168,7 @@ class Quik(Driver):
 
         for secCode in secCodes:  # Пробегаемся по всем тикерам
             #fileName = f'..\\..\\Data\\{class_code}.{sec_code}_{timeFrame}{compression}.txt'
-            file_name = f'{class_сode}.{secCode}_{timeFrame}{compression}.txt'
+            file_name = f'{class_code}.{secCode}_{timeFrame}{compression}.txt'
             is_file_exists = os.path.isfile(file_name)  # Существует ли файл
             if not is_file_exists:  # Если файл не существует
                 print(f'Файл {file_name} не найден и будет создан')
@@ -178,7 +181,7 @@ class Quik(Driver):
                 print(f'- Последняя запись файла: {file_bars.index[-1]}')
                 print(f'- Кол-во записей в файле: {len(file_bars)}')
 
-            new_bars = self.qpProvider.GetCandlesFromDataSource(class_сode, secCode, interval, 0)[
+            new_bars = self.qpProvider.GetCandlesFromDataSource(class_code, secCode, interval, 0)[
                 "data"]  # Получаем все свечки
             pd_bars = pd.DataFrame.from_dict(pd.json_normalize(new_bars),
                                             orient='columns')  # Внутренние колонки даты/времени разворачиваем в отдельные колонки
@@ -474,10 +477,15 @@ if __name__ == "__main__":
     #Quik().get_all_accounts()
     #Quik().DOM_stream('TQBR', 'MTLR')
     #Quik().stream('TQBR', 'NLMK')
-    Quik().get_candles('TQBR', 'SBER', 1, 1)
+    #Quik().get_candles('TQBR', 'SBER', 1, 1)
     #Quik().get_DOM('TQBR', 'SBER')
-
-
+    #trans = {'action': 'NEW_STOP_ORDER', 'buy_or_sell': 'buy', 'price': '100', 'quantity': '1', 'class_code': 'TQBR', 'ticker': 'AKRN'}
+    #Quik().set_transaction(trans)
+    #trans = {'action': 'NEW_STOP_ORDER', 'buy_or_sell': 'buy', 'price': '100', 'quantity': '1', 'class_code': 'TQBR', 'ticker': 'GAZP'}
+    #Quik().set_transaction(trans)
+    q = Quik()
+    #print(q.__class__.__name__)
+    print(Quik().my_name)
 
 #Quik.SaveCandlesToFile()
 
