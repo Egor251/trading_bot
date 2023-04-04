@@ -1,7 +1,15 @@
+import time
 from support_tools import Tools, Functionality
+from database import DB
 
 
 class UI:
+
+    def __init__(self):
+        print('System check')
+        time.sleep(1)
+        if DB().test_connection():  # на самом деле это нафиг не нужно, и БД всегда будет подключена. Это костыль чтобы БД точно создалась в корневой папке если её ещё нет
+            print('Database connected')  # ну и выглядит круто, наверное...
 
     actions = ['use', 'run', 'set', 'help', 'exit', 'show', 'optimize']  # Перечень доступных команд (первых слов в команде)
 
@@ -82,7 +90,7 @@ class UI:
 
                 optimization_parameters = Tools.parse_file(self.current_state, 'optimization_parameters')  # Парсим параметры, которые можно менять в модуле
                 # TODO: отказаться от parse_file
-                #optimization_parameters = Functionality.run_module(self.current_state, 'get_attr', 'optimization_parameters')  # Пока не работает
+                #optimization_parameters = Functionality().run_module(self.current_state, 'get_attr', 'optimization_parameters')  # Пока не работает
 
                 if len(optimization_parameters) == 0:  # Проверка, а есть ли параметры, которые можно менять
                     print('There no options to set')

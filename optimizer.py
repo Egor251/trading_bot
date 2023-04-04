@@ -51,7 +51,7 @@ class Optimizer():
 
             # Начинаем прогон значений через стратегию
             for par in param:
-                a = Functionality.run_module(file, 'run', par)
+                a = Functionality().run_module(file, 'run', par)
                 print(a)
 
 

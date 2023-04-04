@@ -11,7 +11,7 @@ class Strategy(Strat):  # main class must be named "Strategy"
     #class_name = 'Test'
     #def_name = 'test'
 
-    def run(self, candles, param):  # main func must be named "run"
+    def run(self, param):  # main func must be named "run"
         if len(param) < len(self.optimization_parameters):
             param = self.default
         a = param[0]
@@ -19,8 +19,13 @@ class Strategy(Strat):  # main class must be named "Strategy"
         #print(a, default)
         return a * default
 
+    def test(self):
+        #print(eval(f"{self.driver}().test()"))
+        pass
+
 
 if __name__ == '__main__':
     #Strategy().run([1, 5])
     #print(Strategy().get_attr('optimization_parameters'))
+    Strategy().test()
     pass

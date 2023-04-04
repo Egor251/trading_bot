@@ -1,4 +1,5 @@
 import sqlite3
+import os
 try:
     import configparser
 except ImportError:
@@ -7,17 +8,32 @@ import os
 
 
 class DB:
-    conn = sqlite3.connect("trading_db.db")  # или :memory: чтобы сохранить в RAM
-    cursor = conn.cursor()
+    db_path = ''
+    #conn = sqlite3.connect(db_path)  # или :memory: чтобы сохранить в RAM
+    #cursor = conn.cursor()
+
+    conn = None
+    cursor = None
+
     path = "settings.ini"
 
     config = configparser.ConfigParser()
     config.read(path)
 
     def __init__(self):
+
+        # Проблема была в том, что при обращении к этому классу из файла не в корневой папке создавалась новая БД. Решение ниже
+        if os.path.exists('trading_db.db'):  # Проверяем, есть ли в нашей папке файл с БД
+            self.db_path = 'trading_db.db'  # Если есть, то указываем путь
+        elif os.path.exists('../trading_db.db'):  # Если не в нашей, значит уровнем выше
+            self.db_path = '../trading_db.db'  # Если есть, то указываем путь
+
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+
         check = 0
-        if os.stat('trading_db.db').st_size:
-            check = self.select('SELECT EXISTS(SELECT * FROM main_db)')
+        if os.stat(self.db_path).st_size:  # файл может создаваться с ошибками и быть просто пыстым файлом
+            check = self.select('SELECT EXISTS(SELECT * FROM main_db)')  # Проверяем есть ли хоть что-то в таблице
         if not check:
             print('Creating DB file')
             self.create_db()
@@ -25,13 +41,13 @@ class DB:
 
     def refresh_db(self):
 
-            self.select("select 'drop table ' || name || ';' from sqlite_master where type = 'table';")
-            for category in list(self.config):
-                if category != 'DEFAULT':
-                    for item in list([self.config[str(category)]]):
-                        for i in list(item):
-                            data = self.config[str(category)][str(i)]
-                            self.insert(i, data, item.name)
+        self.select("select 'drop table ' || name || ';' from sqlite_master where type = 'table';")  # Конструкция роняет все таблицы даже не зная из названий
+        for category in list(self.config):  # таблица заполняется из конфиг файла. БД нужна чтобы пользователь мог во время работы программы менять дефолтные значения из конфига на свои не переписывая конфиг
+            if category != 'DEFAULT':
+                for item in list([self.config[str(category)]]):
+                    for i in list(item):
+                        data = self.config[str(category)][str(i)]
+                        self.insert(i, data, item.name)
 
     def replace(self, param, data):
         sql = f'''SELECT * FROM main_db WHERE parameter = {"'" + param + "'"};'''
@@ -70,6 +86,8 @@ class DB:
             pass
         self.conn.commit()
 
+    def test_connection(self):
+        return self.select('SELECT EXISTS(SELECT * FROM main_db)')
 
 if __name__ == '__main__':
     #DB().refresh_db()

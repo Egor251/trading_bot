@@ -464,6 +464,9 @@ class Quik(Driver):
         self.close_connection()
         return pos, orderss
 
+    def test(self):
+        print("test is on")
+
 
 path = "../settings.ini"
 if not os.path.exists(path):

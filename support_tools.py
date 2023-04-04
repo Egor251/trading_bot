@@ -62,17 +62,24 @@ class Tools:
 
 class Functionality:
 
-    @staticmethod
-    def run_module(path, func, attr=''):
-        module_name = path.split('/')[1][:-3]
+    def run_module(self, path, func, attr=''):
+        '''module_name = path.split('/')[1][:-3]
         module_spec = importlib.util.spec_from_file_location(
             module_name, path)
-        module = module_spec.loader.load_module()
+        module = module_spec.loader.load_module()'''
+        module = self.import_module(path)
         #action = module.Strategy().run(attr)
         command = f'module.Strategy().{func}({attr})'
         action = eval(command)
         #print(f'Действие: {action}')  # Раскоментировать для дебага
         return action
 
+    def import_module(self, path):
+        module_name = path.split('/')[1][:-3]
+        module_spec = importlib.util.spec_from_file_location(
+            module_name, path)
+        module = module_spec.loader.load_module()
+        return module
+
 if __name__ == '__main__':
-    Functionality.run_module('Strategies/test_strategy.py', 'get_attr', '"optimization_parameters"')
+    Functionality().run_module('Strategies/test_strategy.py', 'get_attr', '"optimization_parameters"')
