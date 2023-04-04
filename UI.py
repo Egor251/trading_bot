@@ -7,7 +7,7 @@ class UI:
 
     def __init__(self):
         print('System check')
-        time.sleep(1)
+        time.sleep(2)
         if DB().test_connection():  # на самом деле это нафиг не нужно, и БД всегда будет подключена. Это костыль чтобы БД точно создалась в корневой папке если её ещё нет
             print('Database connected')  # ну и выглядит круто, наверное...
 
@@ -31,6 +31,7 @@ class UI:
             mod = command[0]  # Первое слово это основная команда
             if mod == 'exit':  # Выход из программы
                 print('finishing program')
+                time.sleep(2)
                 break
             if mod not in self.actions:  # проверка на существование введённой команды
                 print('Invalid command')
@@ -73,6 +74,7 @@ class UI:
         help_table.append(['use', 'select type of module and what module you want to work with (use strategy your_strategy, use driver Quik, use info yahoo etc.'])
         help_table.append(['show', 'shows allowed modules or parameters. keywords: strategy, driver, info, options'])
         help_table.append(['help', 'shows this help menu'])
+        help_table.append(['exit', 'Finish the program'])
 
         Tools().make_table(self.column_names['help'], help_table)  # Табличка
 

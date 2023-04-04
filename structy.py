@@ -40,8 +40,8 @@ class Strat(Module):
     optimization_parameters = ''
     default = ''
 
-    driver = DB().select("SELECT state FROM main_db WHERE parameter = 'driver';")[0][0]
-    driver = Functionality().import_module(f'Drivers/{driver}.py')
+    base_driver = DB().select("SELECT state FROM main_db WHERE parameter = 'driver';")[0][0]
+    #driver = Functionality().import_module(f'Drivers/{driver}.py')
     #eval(f'from Drivers import {driver}')
 
     def optimize(self):
