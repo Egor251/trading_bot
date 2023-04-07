@@ -57,6 +57,10 @@ class Tools:
     def make_table(column_name, data):
         tab = PrettyTable(column_name)  # Шапка таблички
         tab.add_rows(data)
+        tab.align = 'l'
+        tab.align[column_name[0]] = 'c'
+        tab.padding_width = 5
+
         print(tab)
 
 
