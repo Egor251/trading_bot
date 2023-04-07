@@ -2,18 +2,18 @@ from database import DB
 from support_tools import Functionality
 
 
-class Module:
+class Module:  # супер базовый класс
     path = ''
     my_name = ''
     my_type = ''
 
     def __init__(self):
-        self.my_name = self.__class__.__name__
+        self.my_name = self.__class__.__name__  # Переменная my_name перезаписывается именем класса который наследуется от этого
 
-    def set_default(self):
+    def set_default(self):  # Закидываем в БД текущий модуль как дефолтный. Так как эта функция наследуется, тот класс, из которого функция вызвана, и попадёт в БД
         DB().replace(self.my_type, self.my_name)
 
-    def get_attr(self, attr):
+    def get_attr(self, attr):  # Не работает
         output = ''
         print('Я сделяль')
         if hasattr(self, str(attr)):
@@ -21,7 +21,7 @@ class Module:
             output = eval(command)
         return output
 
-    def show(self):
+    def show(self):  # так как для стратегий, драйверов или информационных модулей в help выводится разное количество данных опишем всю логику здесь
 
         first_attr = ''
         second_attr = ''
@@ -33,7 +33,7 @@ class Module:
         return show_list
 
 
-class Strat(Module):
+class Strat(Module):  # Класс стратегия
     my_type = 'strategy'
     algorithm = ''
     description = ''
@@ -47,8 +47,11 @@ class Strat(Module):
     def optimize(self):
         pass
 
+    def set_default(self):  # Так и должно быть. У стратегии нет функции set_default
+        pass
 
-class Driver(Module):
+
+class Driver(Module):  # Класс драйвера
 
     my_type = 'driver'
     description = ''
@@ -58,7 +61,7 @@ class Driver(Module):
         pass
 
 
-class Info(Module):
+class Info(Module):  # класс для информационного модуля
 
     my_type = 'info'
     description = ''

@@ -49,7 +49,7 @@ class DB:
                         data = self.config[str(category)][str(i)]
                         self.insert(i, data, item.name)
 
-    def replace(self, param, data):
+    def replace(self, param, data):  # Заменяем текущее значение в БД на пользовательское
         sql = f'''SELECT * FROM main_db WHERE parameter = {"'" + param + "'"};'''
         current_state = self.select(sql)
         print(current_state[0])
@@ -86,7 +86,7 @@ class DB:
             pass
         self.conn.commit()
 
-    def test_connection(self):
+    def test_connection(self):  # Проверка соединения. Хотя применяется эта функция для инициализации init класса
         return self.select('SELECT EXISTS(SELECT * FROM main_db)')
 
 if __name__ == '__main__':
