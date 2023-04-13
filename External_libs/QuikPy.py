@@ -4,6 +4,9 @@ import json  # Передавать и принимать данные в QUIK �
 import numpy
 import pandas as pd
 
+# Author: Igor Chechet
+# github: https://github.com/cia76/QuikPy
+
 
 class Singleton(type):
     """Метакласс для создания Singleton классов"""

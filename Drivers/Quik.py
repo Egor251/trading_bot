@@ -252,7 +252,7 @@ class Quik(Driver):
         print(dom)
 
     def get_candles(self, class_code, ticker, interval=1, quantity=1):
-        output_dict = {'date': [], 'time': [], 'open': [], 'close': [], 'low': [], 'high': [], 'volume': [] }
+        output_dict = {'date': [], 'time': [], 'open': [], 'close': [], 'low': [], 'high': [], 'volume': []}
         new_bars = self.qpProvider.GetCandlesFromDataSource(class_code, ticker, interval, quantity)["data"]  # Получаем все свечки
         # print(new_bars)
         for item in new_bars:
@@ -338,7 +338,7 @@ class Quik(Driver):
         # Выход
         #self.qpProvider.CloseConnectionAndThread()  # Перед выходом закрываем соединение и поток QuikPy из любого экземпляра
 
-    def get_all_accounts(self):
+    def get_portfolio(self):
 
         # TODO: Quik: get_all_accounts: добавить фьючерсы
         """Получение всех торговых счетов"""
@@ -465,7 +465,10 @@ class Quik(Driver):
         return pos, orderss
 
     def test(self):
-        print("test is on")
+        t = time.localtime()
+        current_time = time.strftime("%H:%M:%S", t)
+        print(current_time)
+        return 1
 
 
 path = "../settings.ini"

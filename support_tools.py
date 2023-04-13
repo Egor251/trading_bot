@@ -21,6 +21,23 @@ class Time:
 class Tools:
 
     @staticmethod
+    def get_working_dir():
+        file_path = os.path.basename(__file__)
+        abs_path = os.path.abspath(__file__).replace(file_path, '')
+        return abs_path
+
+    @staticmethod
+    def look_for_db():
+        # Проблема была в том, что при обращении к этому классу из файла не в корневой папке создавалась новая БД. Решение ниже
+        if os.path.exists('trading_db.db'):  # Проверяем, есть ли в нашей папке файл с БД
+            db_path = 'trading_db.db'  # Если есть, то указываем путь
+        elif os.path.exists('../trading_db.db'):  # Если не в нашей, значит уровнем выше
+            db_path = '../trading_db.db'  # Если есть, то указываем путь
+        else:
+            db_path = 'trading_db.db'
+        return db_path
+
+    @staticmethod
     def cut_py(data):  # Отрезает .py от файла
         output = []
         for item in data:
@@ -79,7 +96,7 @@ class Functionality:
         return action
 
     def import_module(self, path):
-        module_name = path.split('/')[1][:-3]
+        module_name = path.split('/')[-1][:-3]
         module_spec = importlib.util.spec_from_file_location(
             module_name, path)
         module = module_spec.loader.load_module()
@@ -87,3 +104,4 @@ class Functionality:
 
 if __name__ == '__main__':
     Functionality().run_module('Strategies/test_strategy.py', 'get_attr', '"optimization_parameters"')
+    pass

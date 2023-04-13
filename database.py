@@ -6,6 +6,8 @@ except ImportError:
     import ConfigParser as configparser
 import os
 
+from support_tools import Tools
+
 
 class DB:
     db_path = ''
@@ -22,11 +24,13 @@ class DB:
 
     def __init__(self):
 
-        # Проблема была в том, что при обращении к этому классу из файла не в корневой папке создавалась новая БД. Решение ниже
+        '''# Проблема была в том, что при обращении к этому классу из файла не в корневой папке создавалась новая БД. Решение ниже
         if os.path.exists('trading_db.db'):  # Проверяем, есть ли в нашей папке файл с БД
             self.db_path = 'trading_db.db'  # Если есть, то указываем путь
         elif os.path.exists('../trading_db.db'):  # Если не в нашей, значит уровнем выше
-            self.db_path = '../trading_db.db'  # Если есть, то указываем путь
+            self.db_path = '../trading_db.db'  # Если есть, то указываем путь'''
+
+        self.db_path = Tools.look_for_db()
 
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
@@ -48,11 +52,12 @@ class DB:
                     for i in list(item):
                         data = self.config[str(category)][str(i)]
                         self.insert(i, data, item.name)
+        self.insert('abs_path', Tools.get_working_dir(), '')
 
     def replace(self, param, data):  # Заменяем текущее значение в БД на пользовательское
         sql = f'''SELECT * FROM main_db WHERE parameter = {"'" + param + "'"};'''
         current_state = self.select(sql)
-        print(current_state[0])
+        #print(current_state[0])
         category = current_state[0][0]
         if current_state[0][2] != data:
             sql = f'''DELETE FROM main_db WHERE parameter = {"'" + param + "'"};'''
@@ -89,9 +94,15 @@ class DB:
     def test_connection(self):  # Проверка соединения. Хотя применяется эта функция для инициализации init класса
         return self.select('SELECT EXISTS(SELECT * FROM main_db)')
 
+    def get_abs_path(self):
+        path = self.select("SELECT state FROM main_db WHERE parameter = 'abs_path';")
+        return path[0][0]
+
 if __name__ == '__main__':
     #DB().refresh_db()
     #test = list(DB().config[str(list(DB().config)[1])])
     #print(test)
     #print((DB().select('Select * from main_db')))
     DB().replace('driver', 'Quik')
+    print(DB().get_abs_path())
+    pass

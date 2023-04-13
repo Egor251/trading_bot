@@ -57,10 +57,6 @@ class Driver(Module):  # Класс драйвера
     description = ''
 
 
-    def get_portfolio(self):
-        pass
-
-
 class Info(Module):  # класс для информационного модуля
 
     my_type = 'info'
@@ -72,5 +68,5 @@ class Info(Module):  # класс для информационного моду
 
 if __name__ == '__main__':
     #Strategy().optimize()
-    print(Strat().driver)
+    print(Strat().base_driver)
     pass
