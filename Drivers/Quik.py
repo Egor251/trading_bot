@@ -249,7 +249,8 @@ class Quik(Driver):
     def get_DOM(self, class_code, sec_code):
 
         dom = self.qpProvider.GetQuoteLevel2(class_code, sec_code)['data']
-        print(dom)
+        dom = pd.Series(dom)
+        return dom
 
     def get_candles(self, class_code, ticker, interval=1, quantity=1):
         output_dict = {'date': [], 'time': [], 'open': [], 'close': [], 'low': [], 'high': [], 'volume': []}

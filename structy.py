@@ -39,16 +39,34 @@ class Strat(Module):  # Класс стратегия
     description = ''
     optimization_parameters = ''
     default = ''
+    abs_path = DB().get_abs_path()
 
     base_driver = DB().select("SELECT state FROM main_db WHERE parameter = 'driver';")[0][0]
     #driver = Functionality().import_module(f'Drivers/{driver}.py')
     #eval(f'from Drivers import {driver}')
+
+    def __init__(self):
+        super().__init__()
+        self.driver = Functionality().import_module(f'{self.abs_path}/Drivers/{self.base_driver}.py')
 
     def optimize(self):
         pass
 
     def set_default(self):  # Так и должно быть. У стратегии нет функции set_default
         pass
+
+    async def get_candles(self, class_code, ticker, interval=1):
+        candles = eval(f"self.driver.{self.base_driver}().get_candles('{class_code}', '{ticker}', {interval})")
+        return candles
+
+    async def get_portfolio(self):
+        portfolio = eval(f"self.driver.{self.base_driver}().get_portfolio()")
+        return portfolio
+
+    async def get_DOM(self, class_code, ticker):
+        command = f"self.driver.{self.base_driver}().get_DOM('{class_code}', '{ticker}')"
+        dom = eval(command)
+        return dom
 
 
 class Driver(Module):  # Класс драйвера
