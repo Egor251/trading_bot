@@ -19,7 +19,7 @@ class Strategy(Strat):  # main class must be named "Strategy"
 
 
     async def run(self, class_code, ticker, param):  # main func must be named "run"
-        if len(param) < len(self.optimization_parameters):
+        if len(param) < len(self.optimization_parameters):  #
             param = self.default
         a = param[0]
         default = param[1]

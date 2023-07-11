@@ -99,7 +99,6 @@ class Quik(Driver):
             print('OnDepoLimitDelete')
             print(data['data'])  # Печатаем полученные данные
 
-
         self.config.read(path)
 
         #config = configparser.ConfigParser()
@@ -355,9 +354,11 @@ class Quik(Driver):
 
         translation_order = {'Покупка': 'Buy', 'Продажа': 'Sell'}
 
-        positions = {'Type': [], 'Class': [], 'Ticker': [], 'Quantity': [], 'Entry_price': [], 'Current_price': []}  # будущий dataframe
+        positions = {'Type': [], 'Class': [], 'Ticker': [], 'Quantity': [],
+                     'Entry_price': [], 'Current_price': []}  # будущий dataframe с позициями
 
-        order = {'Type': [], 'Class': [], 'Number': [], 'Ticker': [], 'Quantity': [], 'Price': []}
+        order = {'Type': [], 'Class': [], 'Number': [],
+                 'Ticker': [], 'Quantity': [], 'Price': []}  # Будущий dataframe с заявками
 
         # Коды клиента / Фирмы / Счета
         for trade_account in trade_accounts:  # Пробегаемся по всем счетам
@@ -440,7 +441,6 @@ class Quik(Driver):
                     order['Ticker'].append(firmOrder["sec_code"])
                     order['Quantity'].append(firmOrder["qty"])
                     order['Price'].append(firmOrder["price"])
-
 
             # Стоп заявки
             firm_stop_orders = [stopOrder for stopOrder in stop_orders if stopOrder['firmid'] == firm_id and stopOrder[
