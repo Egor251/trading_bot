@@ -23,6 +23,7 @@ class Module:  # супер базовый класс
 
     def show(self):  # так как для стратегий, драйверов или информационных модулей в help выводится разное количество данных опишем всю логику здесь
 
+        # Этот кусок для красивого отображения в меню. Ничего умного он не делает и на общую логику не влияет
         first_attr = ''
         second_attr = ''
         if hasattr(self, 'algorithm'):
@@ -47,6 +48,7 @@ class Strat(Module):  # Класс стратегия
 
     def __init__(self):
         super().__init__()
+        # Присваиваем переменной driver модуль с текущим драйвером из переменной base_driver
         self.driver = Functionality().import_module(f'{self.abs_path}/Drivers/{self.base_driver}.py')
 
     def optimize(self):
@@ -68,11 +70,19 @@ class Strat(Module):  # Класс стратегия
         dom = eval(command)
         return dom
 
+    async def candles_stream(self, class_code, ticker, interval=1):
+        stream = eval(f"self.driver.{self.base_driver}().candles_stream('{class_code}', '{ticker}, {interval}')")
+        return stream
+
+
 
 class Driver(Module):  # Класс драйвера
 
     my_type = 'driver'
     description = ''
+
+    def list(self):
+        pass
 
 
 class Info(Module):  # класс для информационного модуля

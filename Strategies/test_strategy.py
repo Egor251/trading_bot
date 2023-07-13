@@ -16,34 +16,39 @@ class Strategy(Strat):  # main class must be named "Strategy"
     default = [100, 120]  # default strategy parameters
     driver = None
 
-
-
-    async def run(self, class_code, ticker, param):  # main func must be named "run"
+    def run(self, class_code, ticker, param):  # main func must be named "run"
         if len(param) < len(self.optimization_parameters):  #
             param = self.default
-        a = param[0]
+        a = param[0]  # put your strategy parameters here, but also you can do it in main func
         default = param[1]
-        #portfolio = self.get_portfolio()
-        #dom = self.get_DOM(class_code, ticker)
-        dom = asyncio.create_task(self.get_DOM(class_code, ticker))
-        #dom = self.get_DOM(class_code, ticker)
-        #candles = self.get_candles(class_code, ticker)
-        res = await asyncio.gather(dom)
 
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(Strategy().main('TQBR', 'SBER', a, default))
 
-        print(res)
-        return a * default
+    async def main(self, class_code, ticker, a, default):
+        # portfolio = self.get_portfolio()
+        # dom = self.get_DOM(class_code, ticker)
+        # dom = asyncio.create_task(self.get_DOM(class_code, ticker))
+        # dom = self.get_DOM(class_code, ticker)
+
+        while True:
+            candles = asyncio.create_task(self.candles_stream(class_code, ticker))
+            res = await asyncio.gather(candles)
+            if res:
+                print(res)
+            return a * default
 
     def test(self):
         command = f"self.driver.{self.base_driver}().test()"
         print(eval(command))
         pass
 
-
 if __name__ == '__main__':
-    #Strategy().run([1, 5])
+    Strategy().run('TQBR', 'SBER', [1, 5])
+
     #print(Strategy().get_attr('optimization_parameters'))
     #Strategy().test()
     #asyncio.run(Strategy().run('TQBR', 'SBER', ''))
-    asyncio.run(Strategy().run('TQBR', 'SBER', ''))
+    #asyncio.run(Strategy().run('TQBR', 'SBER', ''))
     pass
+ 

@@ -1,7 +1,7 @@
 import pandas as pd
 
 from structy import Driver
-
+import asyncio
 import time
 import random
 
@@ -49,7 +49,7 @@ class TestDriver(Driver):
         output_dict = {'date': [], 'time': [], 'open': [], 'close': [], 'low': [],
                        'high': [], 'volume': []}
 
-        new_bars = [{'datetime': {'day': 1, 'month': 1, 'hour': 1, 'min': 1, 'sec': 1},
+        new_bars = [{'datetime': {'year': 2000, 'day': 1, 'month': 1, 'hour': 1, 'min': 1, 'sec': 1},
                      'open': 100,
                      'close': 120,
                      'low': 90,
@@ -70,7 +70,14 @@ class TestDriver(Driver):
         # print(candles)
         return candles
 
-    def test_stream(self, class_code, ticker, interval=1):
+    def candles_stream(self, class_code, ticker, interval=1):
         while True:
-            self.get_candles(class_code, ticker, interval)
+            stream = self.get_candles(class_code, ticker, interval)
             time.sleep(interval*60)
+            return stream
+
+    def test(self):
+        t = time.localtime()
+        current_time = time.strftime("%H:%M:%S", t)
+        print(current_time)
+        return 1
