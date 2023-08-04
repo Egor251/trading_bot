@@ -74,6 +74,15 @@ class Strat(Module):  # Класс стратегия
         stream = eval(f"self.driver.{self.base_driver}().candles_stream('{class_code}', '{ticker}, {interval}')")
         return stream
 
+    def set_transaction(self, transaction, optimise=0):
+        if optimise:
+            trans = 1
+            DB().insert()
+            pass  # TODO structy: доделать перенос транзакции в оптимизатор
+        else:
+            command = f"self.driver.{self.base_driver}().set_transaction({transaction})"
+            trans = eval(command)
+        return trans
 
 
 class Driver(Module):  # Класс драйвера

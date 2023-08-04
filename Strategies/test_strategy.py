@@ -11,12 +11,14 @@ class Strategy(Strat):  # main class must be named "Strategy"
     # All necessary variables
     #abs_path = DB().get_abs_path()  Перенёс в structy
     algorithm = 'Test'  # Short description of strategies type
-    description = 'Its a test strategy, it shows how strategy should looks like'  # Full description of strategy
+    description = 'This is a test strategy, it shows how strategy should looks like'  # Full description of strategy
     optimization_parameters = {'a': range(5), 'def': range(10)}  # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
     default = [100, 120]  # default strategy parameters
     driver = None
+    optimise = 0
 
-    def run(self, class_code, ticker, param):  # main func must be named "run"
+    def run(self, class_code, ticker, param, optimise=0):  # main func must be named "run"
+        self.optimise = optimise
         if len(param) < len(self.optimization_parameters):  #
             param = self.default
         a = param[0]  # put your strategy parameters here, but also you can do it in main func
@@ -36,12 +38,14 @@ class Strategy(Strat):  # main class must be named "Strategy"
             res = await asyncio.gather(candles)
             if res:
                 print(res)
-            return a * default
+                self.set_transaction('', self.optimise)
+            #return a * default
 
     def test(self):
         command = f"self.driver.{self.base_driver}().test()"
         print(eval(command))
         pass
+
 
 if __name__ == '__main__':
     Strategy().run('TQBR', 'SBER', [1, 5])

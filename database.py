@@ -65,7 +65,6 @@ class DB:
             self.insert(param, data, category)
 
 
-
     def create_db(self):
 
         # Создание таблицы
@@ -73,6 +72,9 @@ class DB:
                           (category text, parameter text, state text, UNIQUE(parameter, state))
                        """)
 
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS optimiser
+                                  (ticker text, type text, action text, price text, quantity text)
+                               """)
 
         self.conn.commit()
 
