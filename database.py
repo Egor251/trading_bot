@@ -1,5 +1,6 @@
 import sqlite3
 import os
+
 try:
     import configparser
 except ImportError:
@@ -11,8 +12,8 @@ from support_tools import Tools
 
 class DB:
     db_path = ''
-    #conn = sqlite3.connect(db_path)  # или :memory: чтобы сохранить в RAM
-    #cursor = conn.cursor()
+    # conn = sqlite3.connect(db_path)  # или :memory: чтобы сохранить в RAM
+    # cursor = conn.cursor()
 
     conn = None
     cursor = None
@@ -44,9 +45,13 @@ class DB:
             self.refresh_db()
 
     def refresh_db(self):
-
-        self.select("select 'drop table ' || name || ';' from sqlite_master where type = 'table';")  # Конструкция роняет все таблицы даже не зная из названий
-        for category in list(self.config):  # таблица заполняется из конфиг файла. БД нужна чтобы пользователь мог во время работы программы менять дефолтные значения из конфига на свои не переписывая конфиг
+        """
+        Обновление БД
+        """
+        self.select(
+            "select 'drop table ' || name || ';' from sqlite_master where type = 'table';")  # Конструкция роняет все таблицы даже не зная из названий
+        for category in list(
+                self.config):  # таблица заполняется из конфиг файла. БД нужна чтобы пользователь мог во время работы программы менять дефолтные значения из конфига на свои не переписывая конфиг
             if category != 'DEFAULT':
                 for item in list([self.config[str(category)]]):
                     for i in list(item):
@@ -57,13 +62,12 @@ class DB:
     def replace(self, param, data):  # Заменяем текущее значение в БД на пользовательское
         sql = f'''SELECT * FROM main_db WHERE parameter = {"'" + param + "'"};'''
         current_state = self.select(sql)
-        #print(current_state[0])
+        # print(current_state[0])
         category = current_state[0][0]
         if current_state[0][2] != data:
             sql = f'''DELETE FROM main_db WHERE parameter = {"'" + param + "'"};'''
             self.select(sql)
             self.insert(param, data, category)
-
 
     def create_db(self):
 
@@ -100,11 +104,12 @@ class DB:
         path = self.select("SELECT state FROM main_db WHERE parameter = 'abs_path';")
         return path[0][0]
 
+
 if __name__ == '__main__':
-    #DB().refresh_db()
-    #test = list(DB().config[str(list(DB().config)[1])])
-    #print(test)
-    #print((DB().select('Select * from main_db')))
+    # DB().refresh_db()
+    # test = list(DB().config[str(list(DB().config)[1])])
+    # print(test)
+    # print((DB().select('Select * from main_db')))
     DB().replace('driver', 'Quik')
     print(DB().get_abs_path())
     pass

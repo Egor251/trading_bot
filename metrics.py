@@ -12,7 +12,9 @@ import get_finance_data
 
 
 class Metric:
+    """
 
+    """
     @staticmethod
     def display(dataframe, *addition):
         apd = mplfinance.make_addplot(addition[0])

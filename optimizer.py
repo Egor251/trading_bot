@@ -10,8 +10,17 @@ from Strategies import test_strategy
 
 
 class Optimizer():
+    """
+    Класс оптимизатор
+    """
 
-    def optimize(self, file, optimize_range=range(1)):
+    def optimize(self, file: str, optimize_range=range(1)):
+        """
+        Оптимизатор
+        :param file: путь к файлу со стратегией
+        :param optimize_range: диапазон значений для оптимизации
+        :return:
+        """
         # В файле со стратегией должна быть переменная optimization_parameters содержащий словарь типа {переменная: range(x, y)} где range это диапазон значений для оптимизации
         parse_parameter = []
 
