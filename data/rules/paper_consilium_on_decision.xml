@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rules>
+  <rule id="paper_consilium_on_decision" enabled="true" priority="HIGH">
+    <name>Paper execute consilium decision</name>
+    <description>ensemble.decision BUY/SELL → order_execution (RuleEngine path)</description>
+    <condition>
+      <plugin>ensemble_service
+        <check>is_trade_decision</check>
+      </plugin>
+    </condition>
+    <actions>
+      <action type="execute_plugin">
+        <param name="plugin">order_execution</param>
+        <param name="action">place_order</param>
+      </action>
+    </actions>
+  </rule>
+</rules>

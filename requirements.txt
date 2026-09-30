@@ -1,16 +1,35 @@
-yfinance
+# microkernel — см. host/main.py (path ../Code_base/microkernel_core)
+pyyaml>=6.0
+prettytable
 pandas
-configparser
-finam-export
-googlefinance
+pydantic>=2.0
+jinja2>=3.1
+loguru>=0.7          # Code_base/utils/prod_logging
+aiofiles>=23.0       # prod_logging file sinks
+cursor-sdk>=1.0.0    # AI Analyst Cursor provider (Code_base/ai_analyst)
+
+# Market adapters — install as needed
+ccxt>=4.0            # universal exchange adapter (ccxt_market_service)
+alpaca-py>=0.40      # Alpaca market data (alpaca_market_service)
+
+# Math engine (Code_base/cb_math)
+sympy>=1.12
+
+# Operator UI — FastAPI BFF for Tauri desktop / Next.js web
+fastapi>=0.110
+uvicorn>=0.27
+# optional:
+# pyzmq>=25.0
+# Pillow still used by matplotlib / imaging where needed
+Pillow>=10.0
+
+# Analytics / history providers
+yfinance
 matplotlib
 mplfinance
 aiomoex
-asyncio
 aiohttp
-tradingview-ta
-prettytable
-metatrader5
+requests
 
-# For next library you can build it from source (Ta-lib install --> Ta-lib_source) or use "pip install 'Ta-lib install\Ta-lib[choose your version].whl'"
-Ta-lib
+# Development / quality gates
+pytest>=8.0

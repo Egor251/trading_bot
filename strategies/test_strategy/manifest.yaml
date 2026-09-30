@@ -1,0 +1,8 @@
+id: test_strategy
+name: Test Strategy
+version: "1.0.0"
+description: Reference strategy — subscribes to market.candle, emits strategy.signal
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:TestStrategyPlugin

@@ -1,0 +1,8 @@
+id: volume_impulse_example
+name: Volume Impulse Example
+version: "1.0.0"
+description: Public example — volume spike + return direction on market.candle
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:VolumeImpulseExamplePlugin

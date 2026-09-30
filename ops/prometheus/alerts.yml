@@ -1,0 +1,79 @@
+groups:
+  - name: trading-engine
+    rules:
+      - alert: TradingStaleFeed
+        expr: time() - trading_feed_last_seen_seconds > 30
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Market feed is stale
+          runbook: docs/runbooks/stale-feed.md
+
+      - alert: TradingBrokerDisconnected
+        expr: trading_broker_connected == 0
+        for: 15s
+        labels: {severity: critical}
+        annotations:
+          summary: Broker connection is down
+          runbook: docs/runbooks/broker-disconnect.md
+
+      - alert: TradingReconciliationBreak
+        expr: trading_reconciliation_ok == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: Broker and engine state differ
+          runbook: docs/runbooks/reconciliation-break.md
+
+      - alert: TradingStopCoverageIncomplete
+        expr: trading_stop_coverage_ratio < 1
+        for: 15s
+        labels: {severity: critical}
+        annotations:
+          summary: Open positions lack stop protection
+          runbook: docs/runbooks/emergency-halt-flatten.md
+
+      - alert: TradingRejectedOrders
+        expr: increase(trading_orders_total{status="rejected"}[5m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: Broker rejected one or more orders
+          runbook: docs/runbooks/broker-disconnect.md
+
+      - alert: TradingDuplicateOrders
+        expr: increase(trading_duplicate_orders_total[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: Duplicate order was detected
+          runbook: docs/runbooks/emergency-halt-flatten.md
+
+      - alert: TradingFeeMismatch
+        expr: trading_fee_mismatch_amount > 0.01
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Actual fee differs from fee model
+          runbook: docs/runbooks/fee-mismatch.md
+
+      - alert: TradingSlippageMismatch
+        expr: trading_slippage_mismatch_bps > 5
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Actual slippage differs from model
+          runbook: docs/runbooks/fee-mismatch.md
+
+      - alert: TradingDrawdownLimit
+        expr: trading_drawdown_ratio >= 0.08
+        for: 15s
+        labels: {severity: critical}
+        annotations:
+          summary: Trading drawdown limit reached
+          runbook: docs/runbooks/emergency-halt-flatten.md
+
+      - alert: TradingCommandAuditMissing
+        expr: increase(trading_operator_commands_total{audited="false"}[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: Operator command lacks an audit record
+          runbook: docs/runbooks/emergency-halt-flatten.md

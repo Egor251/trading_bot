@@ -1,0 +1,8 @@
+id: order_execution
+name: Order Execution
+version: "1.0.0"
+description: TRIGGERED — исполнение заявок (paper/live) по Rule Engine
+kind: actuator
+run_mode: triggered
+dependencies: []
+entrypoint: plugin:OrderExecutionPlugin

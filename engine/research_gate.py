@@ -1,0 +1,619 @@
+"""Research clearance + quantitative live-readiness gate for Consilium votes."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, fields
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+
+DEFAULT_CLEARANCE_PATH = Path("data/phantom/research_clearance.json")
+
+GRADE_RESEARCH = "research_only"
+GRADE_OBSERVE = "observe_ok"
+GRADE_LIVE = "live_ok"
+
+
+def normalize_research_ticker(ticker: str | None) -> str:
+    """Canonical clearance key: ETH/USDT → ETHUSDT (uppercase, no separators)."""
+    t = str(ticker or "").strip().upper()
+    for ch in ("/", "\\", "-", ":", " "):
+        t = t.replace(ch, "")
+    return t
+
+
+def _key(strategy_id: str, ticker: str) -> str:
+    return f"{str(strategy_id).strip()}::{normalize_research_ticker(ticker)}"
+
+
+def _f(x: Any, default: float | None = None) -> float | None:
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+
+def _i(x: Any, default: int = 0) -> int:
+    try:
+        if x is None:
+            return default
+        return int(x)
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass(slots=True)
+class LiveReadinessPolicy:
+    """Thresholds for observe_ok / live_ok grades (YAML: trading.live_readiness)."""
+
+    require_robust_sign: bool = True
+    require_ci_excludes_zero: bool = True
+    min_holdout_trades: int = 8
+    min_oos_trades: int = 20
+    min_profit_factor: float = 1.15
+    min_mean_oos_pnl: float = 0.0
+    min_tickers_robust: int = 2
+    require_params_applied: bool = True
+    max_age_days: int = 30
+    canary_quantity_scale: float = 0.25
+    # observe_ok can pass with a single robust ticker; live needs min_tickers_robust
+    observe_min_tickers_robust: int = 1
+    observe_require_ci_excludes_zero: bool = False
+    observe_min_holdout_trades: int = 1
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> LiveReadinessPolicy:
+        if not isinstance(raw, Mapping):
+            return cls()
+        known = {f.name for f in fields(cls)}
+        kwargs: dict[str, Any] = {}
+        for k, v in raw.items():
+            if k not in known or v is None:
+                continue
+            kwargs[k] = v
+        return cls(**kwargs)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def policy_from_config(raw_cfg: Mapping[str, Any] | None) -> LiveReadinessPolicy:
+    trading = dict((raw_cfg or {}).get("trading") or {})
+    return LiveReadinessPolicy.from_mapping(trading.get("live_readiness"))
+
+
+def load_clearance(path: str | Path | None = None) -> dict[str, Any]:
+    p = Path(path or DEFAULT_CLEARANCE_PATH)
+    if not p.is_file():
+        return {"entries": {}, "updated_at": None}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"entries": {}, "updated_at": None}
+    if not isinstance(raw, dict):
+        return {"entries": {}, "updated_at": None}
+    entries = raw.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    return {"entries": entries, "updated_at": raw.get("updated_at")}
+
+
+def save_clearance(store: Mapping[str, Any], path: str | Path | None = None) -> str:
+    p = Path(path or DEFAULT_CLEARANCE_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "entries": dict(store.get("entries") or {}),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    p.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return str(p)
+
+
+def record_digest_clearance(
+    digest: Mapping[str, Any] | None,
+    *,
+    path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Persist a WF digest when holdout was used (eligibility for live votes)."""
+    if not isinstance(digest, Mapping) or not digest.get("ok"):
+        return None
+    holdout_bars = int(digest.get("holdout_bars") or 0)
+    if holdout_bars <= 0:
+        return None
+    sid = str(digest.get("strategy_id") or "").strip()
+    ticker = normalize_research_ticker(digest.get("ticker"))
+    if not sid or not ticker:
+        return None
+    store = load_clearance(path)
+    entries = dict(store.get("entries") or {})
+    entries[_key(sid, ticker)] = {
+        "strategy_id": sid,
+        "ticker": ticker,
+        "holdout_bars": holdout_bars,
+        "holdout_pnl": digest.get("holdout_pnl"),
+        "holdout_trades": _i(digest.get("holdout_trades")),
+        "robust_sign_match": digest.get("robust_sign_match"),
+        "mean_oos_pnl": digest.get("mean_oos_pnl"),
+        "ci_crosses_zero": digest.get("ci_crosses_zero"),
+        "ci_low": digest.get("ci_low"),
+        "ci_high": digest.get("ci_high"),
+        "profit_factor": digest.get("profit_factor"),
+        "total_oos_trades": _i(digest.get("total_oos_trades")),
+        "timeframe": digest.get("timeframe"),
+        "bar_interval_sec": digest.get("bar_interval_sec"),
+        "provider_resolved": digest.get("provider_resolved"),
+        "variant_mode": digest.get("variant_mode"),
+        "variants_count": digest.get("variants_count"),
+        "chosen": dict(digest.get("chosen") or {}),
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "report_path": digest.get("report_path"),
+    }
+    store = {"entries": entries}
+    save_clearance(store, path)
+    return entries[_key(sid, ticker)]
+
+
+def clearance_hits_for_strategy(
+    strategy_id: str,
+    *,
+    ticker: str | None = None,
+    tickers: Sequence[str] | None = None,
+    path: str | Path | None = None,
+    entries: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    sid = str(strategy_id or "").strip()
+    store_entries = dict(
+        entries if entries is not None else load_clearance(path).get("entries") or {}
+    )
+    want_set: set[str] = set()
+    if tickers:
+        want_set = {
+            normalize_research_ticker(t) for t in tickers if str(t or "").strip()
+        }
+    want = normalize_research_ticker(ticker)
+    if want:
+        want_set.add(want)
+    hits: list[dict[str, Any]] = []
+    for _k, v in store_entries.items():
+        if not isinstance(v, dict):
+            continue
+        if str(v.get("strategy_id") or "").strip() != sid:
+            continue
+        t = normalize_research_ticker(v.get("ticker"))
+        if want_set and t not in want_set:
+            continue
+        row = dict(v)
+        row["ticker"] = t or str(v.get("ticker") or "")
+        hits.append(row)
+    return hits
+
+
+def _parse_recorded_at(row: Mapping[str, Any]) -> datetime | None:
+    raw = row.get("recorded_at")
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+    except ValueError:
+        return None
+
+
+def params_match_chosen(
+    chosen: Mapping[str, Any] | None,
+    plugin_params: Mapping[str, Any] | None,
+    *,
+    rtol: float = 1e-6,
+) -> tuple[bool, list[str]]:
+    """Return (ok, mismatch_keys) comparing clearance chosen vs plugin config."""
+    if not chosen:
+        return True, []
+    plug = dict(plugin_params or {})
+    mismatches: list[str] = []
+    for key, want in chosen.items():
+        if key not in plug:
+            mismatches.append(str(key))
+            continue
+        got = plug.get(key)
+        try:
+            wf = float(want)
+            gf = float(got)
+            if abs(wf - gf) > max(rtol, abs(wf) * rtol):
+                mismatches.append(str(key))
+        except (TypeError, ValueError):
+            if str(want) != str(got):
+                mismatches.append(str(key))
+    return (not mismatches), mismatches
+
+
+def plugin_params_from_config(
+    raw_cfg: Mapping[str, Any] | None,
+    strategy_id: str,
+) -> dict[str, Any]:
+    """Best-effort plugin block under ``plugins.<sid>`` (YAML) or trading.*."""
+    sid = str(strategy_id or "").strip()
+    if not sid or not isinstance(raw_cfg, Mapping):
+        return {}
+    # Canonical persist path used by phantom_apply_chosen / SET_STRATEGY_PARAMS.
+    top_plugins = raw_cfg.get("plugins")
+    if isinstance(top_plugins, Mapping) and isinstance(top_plugins.get(sid), Mapping):
+        return dict(top_plugins[sid])  # type: ignore[index]
+    if sid in raw_cfg and isinstance(raw_cfg.get(sid), Mapping):
+        return dict(raw_cfg[sid])  # type: ignore[arg-type]
+    trading = dict(raw_cfg.get("trading") or {})
+    plugins = trading.get("plugins")
+    if isinstance(plugins, Mapping) and isinstance(plugins.get(sid), Mapping):
+        return dict(plugins[sid])  # type: ignore[index]
+    for key in ("strategies", "strategy_plugins"):
+        block = trading.get(key)
+        if isinstance(block, Mapping) and isinstance(block.get(sid), Mapping):
+            return dict(block[sid])  # type: ignore[index]
+    return {}
+
+
+def evaluate_live_readiness(
+    strategy_id: str,
+    *,
+    ticker: str | None = None,
+    tickers: Sequence[str] | None = None,
+    path: str | Path | None = None,
+    policy: LiveReadinessPolicy | None = None,
+    plugin_params: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Score a strategy for observe vs live Consilium promotion."""
+    pol = policy or LiveReadinessPolicy()
+    sid = str(strategy_id or "").strip()
+    instant = now or datetime.now(UTC)
+    hits = clearance_hits_for_strategy(
+        sid, ticker=ticker, tickers=tickers, path=path
+    )
+    checks: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+
+    def _check(
+        name: str,
+        ok: bool,
+        *,
+        detail: Any = None,
+        live: bool = True,
+        observe: bool = True,
+    ) -> None:
+        checks.append(
+            {"name": name, "ok": ok, "detail": detail, "live": live, "observe": observe}
+        )
+        if not ok:
+            blockers.append(
+                {
+                    "strategy_id": sid,
+                    "reason": name,
+                    "detail": detail,
+                    "live": live,
+                    "observe": observe,
+                }
+            )
+
+    if not hits:
+        _check(
+            "no_holdout_clearance",
+            False,
+            detail="Run phantom_walk_forward with holdout_bars>0 first.",
+        )
+        return {
+            "ok": True,
+            "strategy_id": sid,
+            "grade": GRADE_RESEARCH,
+            "score": 0.0,
+            "live_ok": False,
+            "observe_ok": False,
+            "checks": checks,
+            "blockers": blockers,
+            "entries": [],
+            "policy": pol.to_dict(),
+        }
+
+    robust_hits = [h for h in hits if h.get("robust_sign_match")]
+    if pol.require_robust_sign:
+        _check(
+            "robust_sign_match",
+            bool(robust_hits),
+            detail={"robust_tickers": [h.get("ticker") for h in robust_hits]},
+        )
+    else:
+        robust_hits = list(hits)
+        _check("robust_sign_match", True, detail="skipped")
+
+    metric_pool = robust_hits or hits
+    best = max(
+        metric_pool,
+        key=lambda h: (_f(h.get("mean_oos_pnl"), -1e18) or -1e18),
+    )
+
+    holdout_trades = max(_i(h.get("holdout_trades")) for h in metric_pool)
+    oos_trades = max(_i(h.get("total_oos_trades")) for h in metric_pool)
+    pfs = [_f(h.get("profit_factor")) for h in metric_pool]
+    pf = max((p for p in pfs if p is not None), default=None)
+    means = [_f(h.get("mean_oos_pnl")) for h in metric_pool]
+    mean_oos = max((m for m in means if m is not None), default=None)
+    any_ci_cross = any(bool(h.get("ci_crosses_zero")) for h in metric_pool)
+    ci_ok = not any_ci_cross
+
+    age_ok = True
+    for h in metric_pool:
+        ts = _parse_recorded_at(h)
+        if ts is None:
+            continue
+        if instant - ts > timedelta(days=max(0, int(pol.max_age_days))):
+            age_ok = False
+            break
+    _check(
+        "clearance_fresh",
+        age_ok,
+        detail={"max_age_days": pol.max_age_days},
+    )
+
+    _check(
+        "ci_excludes_zero",
+        (ci_ok if pol.require_ci_excludes_zero else True),
+        detail={
+            "ci_crosses_zero": any_ci_cross,
+            "required": pol.require_ci_excludes_zero,
+        },
+        observe=bool(pol.observe_require_ci_excludes_zero),
+    )
+
+    _check(
+        "holdout_trades",
+        holdout_trades >= int(pol.min_holdout_trades),
+        detail={"holdout_trades": holdout_trades, "min": pol.min_holdout_trades},
+        observe=False,
+    )
+    _check(
+        "holdout_trades_observe",
+        holdout_trades >= int(pol.observe_min_holdout_trades),
+        detail={
+            "holdout_trades": holdout_trades,
+            "min": pol.observe_min_holdout_trades,
+        },
+        live=False,
+    )
+    _check(
+        "oos_trades",
+        oos_trades >= int(pol.min_oos_trades),
+        detail={"total_oos_trades": oos_trades, "min": pol.min_oos_trades},
+        observe=False,
+    )
+    pf_ok = pf is not None and pf >= float(pol.min_profit_factor)
+    _check(
+        "profit_factor",
+        pf_ok if pf is not None else False,
+        detail={"profit_factor": pf, "min": pol.min_profit_factor},
+        observe=False,
+    )
+    mean_ok = mean_oos is not None and mean_oos > float(pol.min_mean_oos_pnl)
+    _check(
+        "mean_oos_pnl",
+        mean_ok if mean_oos is not None else False,
+        detail={"mean_oos_pnl": mean_oos, "min": pol.min_mean_oos_pnl},
+    )
+
+    robust_tickers = {
+        str(h.get("ticker") or "").strip().upper()
+        for h in robust_hits
+        if str(h.get("ticker") or "").strip()
+    }
+    _check(
+        "tickers_robust",
+        len(robust_tickers) >= int(pol.min_tickers_robust),
+        detail={
+            "count": len(robust_tickers),
+            "min": pol.min_tickers_robust,
+            "tickers": sorted(robust_tickers),
+        },
+        observe=False,
+    )
+    _check(
+        "tickers_robust_observe",
+        len(robust_tickers) >= int(pol.observe_min_tickers_robust),
+        detail={
+            "count": len(robust_tickers),
+            "min": pol.observe_min_tickers_robust,
+            "tickers": sorted(robust_tickers),
+        },
+        live=False,
+    )
+
+    chosen = dict(best.get("chosen") or {})
+    if pol.require_params_applied and plugin_params is not None:
+        params_ok, mismatches = params_match_chosen(chosen, plugin_params)
+        _check(
+            "params_applied",
+            params_ok or not chosen,
+            detail={
+                "chosen": chosen,
+                "mismatches": mismatches,
+                "hint": "phantom_apply_chosen" if mismatches else None,
+            },
+        )
+    else:
+        _check(
+            "params_applied",
+            True,
+            detail="skipped" if plugin_params is None else "policy_off",
+        )
+
+    live_blockers = [b for b in blockers if b.get("live", True)]
+    observe_blockers = [b for b in blockers if b.get("observe", True)]
+    live_ok = not live_blockers
+    observe_ok = not observe_blockers
+    if live_ok:
+        grade = GRADE_LIVE
+    elif observe_ok:
+        grade = GRADE_OBSERVE
+    else:
+        grade = GRADE_RESEARCH
+
+    live_checks = [c for c in checks if c.get("live", True)]
+    score = (
+        sum(1.0 for c in live_checks if c.get("ok")) / len(live_checks)
+        if live_checks
+        else 0.0
+    )
+
+    return {
+        "ok": True,
+        "strategy_id": sid,
+        "grade": grade,
+        "score": round(score, 4),
+        "live_ok": live_ok,
+        "observe_ok": observe_ok,
+        "checks": checks,
+        "blockers": live_blockers if not live_ok else [],
+        "observe_blockers": observe_blockers if not observe_ok else [],
+        "entries": hits,
+        "best_entry": best,
+        "robust_tickers": sorted(robust_tickers),
+        "policy": pol.to_dict(),
+        "metrics": {
+            "holdout_trades": holdout_trades,
+            "total_oos_trades": oos_trades,
+            "profit_factor": pf,
+            "mean_oos_pnl": mean_oos,
+            "ci_crosses_zero": any_ci_cross,
+            "chosen": chosen,
+        },
+    }
+
+
+def live_promotion_blockers(
+    strategy_ids: list[str],
+    *,
+    ticker: str | None = None,
+    tickers: Sequence[str] | None = None,
+    path: str | Path | None = None,
+    require_robust_sign: bool = True,
+    policy: LiveReadinessPolicy | None = None,
+    plugin_params_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    raw_cfg: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return blockers for strategies that are not live_ok under the readiness policy."""
+    base = policy or LiveReadinessPolicy()
+    if not require_robust_sign:
+        data = base.to_dict()
+        data["require_robust_sign"] = False
+        base = LiveReadinessPolicy.from_mapping(data)
+    out: list[dict[str, Any]] = []
+    for sid in strategy_ids:
+        sid_s = str(sid or "").strip()
+        if not sid_s:
+            continue
+        params = None
+        if plugin_params_by_id and sid_s in plugin_params_by_id:
+            params = plugin_params_by_id[sid_s]
+        elif raw_cfg is not None:
+            params = plugin_params_from_config(raw_cfg, sid_s)
+        result = evaluate_live_readiness(
+            sid_s,
+            ticker=ticker,
+            tickers=tickers,
+            path=path,
+            policy=base,
+            plugin_params=params,
+        )
+        if result.get("live_ok"):
+            continue
+        blockers = list(result.get("blockers") or [])
+        if not blockers:
+            blockers = [
+                {
+                    "strategy_id": sid_s,
+                    "reason": "not_live_ok",
+                    "grade": result.get("grade"),
+                }
+            ]
+        for b in blockers:
+            b.setdefault("grade", result.get("grade"))
+            b.setdefault("score", result.get("score"))
+            out.append(b)
+    return out
+
+
+def evaluate_many(
+    strategy_ids: Sequence[str],
+    *,
+    path: str | Path | None = None,
+    policy: LiveReadinessPolicy | None = None,
+    raw_cfg: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    rows = []
+    for sid in strategy_ids:
+        sid_s = str(sid or "").strip()
+        if not sid_s:
+            continue
+        rows.append(
+            evaluate_live_readiness(
+                sid_s,
+                path=path,
+                policy=policy,
+                plugin_params=plugin_params_from_config(raw_cfg, sid_s)
+                if raw_cfg is not None
+                else None,
+            )
+        )
+    rows.sort(
+        key=lambda r: (
+            bool(r.get("live_ok")),
+            bool(r.get("observe_ok")),
+            float(r.get("score") or 0),
+        ),
+        reverse=True,
+    )
+    return {
+        "ok": True,
+        "count": len(rows),
+        "live_ok": [r["strategy_id"] for r in rows if r.get("live_ok")],
+        "observe_ok": [
+            r["strategy_id"]
+            for r in rows
+            if r.get("observe_ok") and not r.get("live_ok")
+        ],
+        "research_only": [r["strategy_id"] for r in rows if not r.get("observe_ok")],
+        "rows": rows,
+    }
+
+
+def apply_canary_quantity(
+    raw_cfg: dict[str, Any],
+    strategy_ids: Sequence[str],
+    *,
+    scale: float,
+) -> dict[str, Any]:
+    """Scale plugin quantity for newly promoted live strategies; return applied map."""
+    applied: dict[str, Any] = {}
+    scale_f = float(scale)
+    if scale_f <= 0 or scale_f >= 1.0:
+        return applied
+    for sid in strategy_ids:
+        sid_s = str(sid or "").strip()
+        if not sid_s or sid_s not in raw_cfg:
+            continue
+        block = raw_cfg.get(sid_s)
+        if not isinstance(block, dict):
+            continue
+        try:
+            qty = float(block.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        new_qty = qty * scale_f
+        block["quantity"] = new_qty
+        raw_cfg[sid_s] = block
+        applied[sid_s] = {"quantity_before": qty, "quantity_after": new_qty, "scale": scale_f}
+    return applied

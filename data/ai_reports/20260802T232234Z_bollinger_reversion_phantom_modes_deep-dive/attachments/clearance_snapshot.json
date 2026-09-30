@@ -1,0 +1,13 @@
+{
+  "strategy_id": "bollinger_reversion",
+  "ticker": "BTCUSDT",
+  "holdout_pnl": 54.09326242568386,
+  "mean_oos_pnl": 8.21852756523999,
+  "robust_sign_match": true,
+  "ci_crosses_zero": true,
+  "chosen": {
+    "window": 14,
+    "num_std": 1.5
+  },
+  "report_path": "data/phantom/walk_forward/wf_bollinger_reversion_BTCUSDT_2026-08-02T231952.031271_0000.json"
+}

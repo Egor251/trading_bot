@@ -1,0 +1,34 @@
+{
+  "name": "trading-bot-operator-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack -H 127.0.0.1 -p 3000",
+    "dev:web": "cross-env NEXT_PUBLIC_PLATFORM=web next dev --turbopack -H 127.0.0.1 -p 3000",
+    "build": "npm run build:web",
+    "build:web": "cross-env NEXT_PUBLIC_PLATFORM=web next build",
+    "build:desktop": "cross-env NEXT_PUBLIC_PLATFORM=desktop NEXT_PUBLIC_API_URL=http://127.0.0.1:8787 NEXT_PUBLIC_WS_URL=ws://127.0.0.1:8787/ws next build",
+    "start": "next start -H 127.0.0.1 -p 3000",
+    "lint": "eslint",
+    "serve:desktop": "npx --yes serve@14 out -l 1420 --no-clipboard"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-notification": "^2.4.0",
+    "lightweight-charts": "^5.0.3",
+    "next": "16.2.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "cross-env": "^7.0.3",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

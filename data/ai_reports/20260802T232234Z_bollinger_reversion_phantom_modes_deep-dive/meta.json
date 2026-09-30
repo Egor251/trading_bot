@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "id": "20260802T232234Z_bollinger_reversion_phantom_modes_deep-dive",
+  "title": "bollinger_reversion phantom modes deep-dive",
+  "kind": "walk_forward",
+  "summary": "BTCUSDT 1d seed=42: grid negative, dense optimize positive, holdout robust_sign_match with chosen window=14 num_std=1.5. CI still crosses zero; not automatic live.",
+  "tags": [
+    "bollinger",
+    "holdout",
+    "btc",
+    "optimize",
+    "grid"
+  ],
+  "strategy_ids": [
+    "bollinger_reversion"
+  ],
+  "tickers": [
+    "BTCUSDT"
+  ],
+  "metrics": {
+    "grid_mean_oos_pnl": -1.95,
+    "optimize_mean_oos_pnl": 10.14,
+    "holdout_wf_mean_oos_pnl": 8.22,
+    "holdout_pnl": 54.09,
+    "holdout_trades": 3,
+    "robust_sign_match": true,
+    "ci_crosses_zero": true,
+    "chosen_window": 14,
+    "chosen_num_std": 1.5,
+    "bar_interval_sec": 86400,
+    "provider_resolved": "ccxt",
+    "variants_optimize": 20
+  },
+  "conclusions": [
+    "Dense optimize required; do not trust grid for bollinger.",
+    "Holdout sign match on BTCUSDT clearance is recorded.",
+    "Not live-ready solely on this: CI crosses zero; holdout n_trades=3."
+  ],
+  "next_steps": [
+    "Apply chosen window=14 num_std=1.5; keep observe_only on BTC/USDT.",
+    "Optional: holdout batch on ETH/SOL before any live lineup add.",
+    "Shadow/observe for trade count before promoting to live votes."
+  ],
+  "sections": [
+    "Mode table",
+    "Caveats"
+  ],
+  "attachments": {
+    "clearance_snapshot": "data/ai_reports/20260802T232234Z_bollinger_reversion_phantom_modes_deep-dive/attachments/clearance_snapshot.json"
+  },
+  "author": "ai_analyst",
+  "generated_at": "2026-08-02T23:22:34.802839+00:00",
+  "folder": "data/ai_reports/20260802T232234Z_bollinger_reversion_phantom_modes_deep-dive",
+  "report_md": "data/ai_reports/20260802T232234Z_bollinger_reversion_phantom_modes_deep-dive/report.md",
+  "bytes_md": 2675
+}

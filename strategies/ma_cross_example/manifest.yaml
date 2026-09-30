@@ -1,0 +1,8 @@
+id: ma_cross_example
+name: MA Cross Example
+version: "1.0.0"
+description: Public example — SMA fast/slow cross on market.candle
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:MaCrossExamplePlugin

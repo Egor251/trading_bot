@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>APHINA — Operator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0c0f;
+      --bg-elev: #12161c;
+      --line: #243040;
+      --ink: #e8edf2;
+      --mute: #8a97a8;
+      --copper: #c9854a;
+      --mint: #3dba8b;
+      --kill: #e23d3d;
+      --warn: #e0b45a;
+      --ok: #3dba8b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 13px;
+    }
+    body {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 10% -10%, rgba(201,133,74,0.14), transparent 50%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, rgba(61,186,139,0.08), transparent 45%),
+        linear-gradient(180deg, #0a0c0f 0%, #0d1117 100%);
+      min-height: 100%;
+    }
+    .shell {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px 28px 48px;
+      display: grid;
+      gap: 22px;
+    }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+    }
+    .brand {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 800;
+      font-size: clamp(2rem, 4vw, 3rem);
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+    }
+    .brand span { color: var(--copper); }
+    .sub {
+      color: var(--mute);
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    .link-state {
+      text-align: right;
+      color: var(--mute);
+    }
+    .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background: var(--warn);
+      box-shadow: 0 0 0 3px rgba(224,180,90,0.15);
+    }
+    .dot.on { background: var(--mint); box-shadow: 0 0 0 3px rgba(61,186,139,0.18); }
+    .dot.off { background: var(--kill); box-shadow: 0 0 0 3px rgba(226,61,61,0.18); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.4fr 0.9fr;
+      gap: 18px;
+    }
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 18px 20px;
+      backdrop-filter: blur(8px);
+    }
+    .panel h2 {
+      margin: 0 0 14px;
+      font-family: Syne, sans-serif;
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--mute);
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 28px;
+      align-items: baseline;
+    }
+    .metric .label { color: var(--mute); font-size: 11px; letter-spacing: 0.06em; }
+    .metric .value {
+      font-family: Syne, sans-serif;
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-top: 2px;
+    }
+    .metric .value.halt { color: var(--kill); }
+    .metric .value.live { color: var(--mint); }
+
+    .kill-wrap {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 14px;
+      min-height: 180px;
+      background:
+        linear-gradient(160deg, rgba(226,61,61,0.12), transparent 55%),
+        var(--bg-elev);
+      border-color: color-mix(in srgb, var(--kill) 45%, var(--line));
+    }
+    .kill-btn, .resume-btn {
+      border: 0;
+      cursor: pointer;
+      font-family: Syne, sans-serif;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 18px 16px;
+      border-radius: 3px;
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+    .kill-btn {
+      background: var(--kill);
+      color: #fff;
+      font-size: 1.35rem;
+      box-shadow: 0 10px 40px rgba(226,61,61,0.25);
+    }
+    .resume-btn {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      font-size: 0.85rem;
+    }
+    .kill-btn:hover, .resume-btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+    .kill-btn:active, .resume-btn:active { transform: translateY(1px); }
+    .kill-hint { color: var(--mute); font-size: 11px; line-height: 1.45; }
+
+    .grid3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    @media (max-width: 900px) {
+      .grid3 { grid-template-columns: 1fr; }
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 7px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+      vertical-align: top;
+    }
+    th { color: var(--mute); font-weight: 500; font-size: 11px; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--mute);
+      font-size: 11px;
+    }
+    .pill.buy { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 40%, var(--line)); }
+    .pill.sell { color: var(--kill); border-color: color-mix(in srgb, var(--kill) 40%, var(--line)); }
+    .empty { color: var(--mute); }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      border: 1px solid var(--line);
+      padding: 4px 8px;
+      border-radius: 2px;
+      color: var(--ink);
+      background: rgba(255,255,255,0.02);
+    }
+    footer {
+      color: var(--mute);
+      font-size: 11px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <div class="brand">APHINA <span>OPERATOR</span></div>
+        <div class="sub">Paper cockpit · Engine bridge · consilium &amp; phantom read-model</div>
+      </div>
+      <div class="link-state">
+        <div><span id="dot" class="dot"></span><span id="conn">connecting…</span></div>
+        <div id="clock" style="margin-top:6px"></div>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="panel">
+        <h2>Runtime</h2>
+        <div class="status-row">
+          <div class="metric">
+            <div class="label">STATE</div>
+            <div class="value" id="state">—</div>
+          </div>
+          <div class="metric">
+            <div class="label">MODE</div>
+            <div class="value" id="mode" style="font-size:1.6rem">—</div>
+          </div>
+          <div class="metric">
+            <div class="label">EQUITY</div>
+            <div class="value" id="equity" style="font-size:1.6rem">—</div>
+          </div>
+          <div class="metric">
+            <div class="label">FILLS</div>
+            <div class="value" id="fills" style="font-size:1.6rem">—</div>
+          </div>
+        </div>
+        <div style="margin-top:18px">
+          <div class="label" style="color:var(--mute);font-size:11px;letter-spacing:0.06em">ACTIVE UNIVERSE</div>
+          <div class="chips" id="universe" style="margin-top:8px"><span class="empty">waiting for engine…</span></div>
+        </div>
+      </div>
+
+      <div class="panel kill-wrap">
+        <div>
+          <h2>Emergency</h2>
+          <p class="kill-hint">KILL publishes <code>system.halt</code> on the Engine event bus. Trading continues if this UI dies.</p>
+        </div>
+        <button class="kill-btn" id="kill" type="button">Kill switch</button>
+        <button class="resume-btn" id="resume" type="button">Resume</button>
+      </div>
+    </section>
+
+    <section class="grid3">
+      <div class="panel">
+        <h2>Consilium</h2>
+        <div id="ensemble" class="empty">no weights yet</div>
+      </div>
+      <div class="panel">
+        <h2>Plugins</h2>
+        <div id="plugins" class="empty">—</div>
+      </div>
+      <div class="panel">
+        <h2>Phantom</h2>
+        <div id="phantom" class="empty">—</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Event tape</h2>
+      <table>
+        <thead>
+          <tr><th>time</th><th>type</th><th>source</th><th>detail</th></tr>
+        </thead>
+        <tbody id="tape"></tbody>
+      </table>
+    </section>
+
+    <footer>
+      <div>UI process ≠ Engine · TCP bridge :8765 · cockpit :8787</div>
+      <div id="ts">snapshot —</div>
+    </footer>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const fmt = (n) => (n == null || Number.isNaN(n)) ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const timeOf = (t) => {
+      if (!t) return "—";
+      const d = new Date(t * 1000);
+      return d.toLocaleTimeString();
+    };
+
+    function setConn(ok, label) {
+      const dot = $("dot");
+      dot.className = "dot " + (ok ? "on" : "off");
+      $("conn").textContent = label;
+    }
+
+    function render(s) {
+      if (!s || s.empty) return;
+      const halted = !!s.halted;
+      const stateEl = $("state");
+      stateEl.textContent = halted ? "HALTED" : "LIVE";
+      stateEl.className = "value " + (halted ? "halt" : "live");
+      $("mode").textContent = (s.mode || "—").toUpperCase();
+      $("equity").textContent = fmt(s.equity);
+      $("fills").textContent = s.fills ?? "—";
+      $("ts").textContent = "snapshot " + timeOf(s.ts);
+
+      const uni = s.active_keys || [];
+      $("universe").innerHTML = uni.length
+        ? uni.map(k => `<span class="chip">${k}</span>`).join("")
+        : `<span class="empty">empty active book</span>`;
+
+      const ens = s.ensemble || {};
+      const weights = ens.weights || {};
+      const wKeys = Object.keys(weights);
+      let ensHtml = wKeys.length
+        ? `<table><thead><tr><th>strategy</th><th>weight</th></tr></thead><tbody>` +
+          wKeys.map(k => `<tr><td>${k}</td><td>${(weights[k]*100).toFixed(1)}%</td></tr>`).join("") +
+          `</tbody></table>`
+        : `<span class="empty">no weights</span>`;
+      if (ens.last) {
+        ensHtml += `<div style="margin-top:10px">last <span class="pill ${(ens.last.action||'').toLowerCase()}">${ens.last.action || "?"}</span> ${ens.last.ticker || ""} · decisions ${ens.decisions ?? 0}</div>`;
+      }
+      $("ensemble").innerHTML = ensHtml;
+
+      const plugins = s.plugins || [];
+      $("plugins").innerHTML = plugins.length
+        ? `<table><thead><tr><th>id</th><th>run</th></tr></thead><tbody>` +
+          plugins.map(p => `<tr><td>${p.id}</td><td>${p.running ? "yes" : "no"}</td></tr>`).join("") +
+          `</tbody></table>`
+        : `<span class="empty">none</span>`;
+
+      const ph = s.phantom || {};
+      $("phantom").innerHTML = `shadow fills <strong>${ph.fills ?? 0}</strong>` +
+        (ph.last_grid && ph.last_grid.length
+          ? `<div style="margin-top:8px" class="empty">grid rows: ${ph.last_grid.length}</div>`
+          : "");
+
+      const tape = $("tape");
+      const rows = s.recent || [];
+      tape.innerHTML = rows.length ? rows.map(r => {
+        const p = r.payload || {};
+        const detail = [p.ticker, p.action, p.via, p.reason, p.message, p.close].filter(Boolean).join(" · ");
+        return `<tr><td>${timeOf(r.t)}</td><td>${r.type}</td><td>${r.source || ""}</td><td>${detail || "—"}</td></tr>`;
+      }).join("") : `<tr><td colspan="4" class="empty">quiet tape</td></tr>`;
+    }
+
+    function send(cmd) {
+      if (window._ws && window._ws.readyState === 1) {
+        window._ws.send(JSON.stringify({ cmd }));
+        return;
+      }
+      fetch("/api/command/" + cmd, { method: "POST" });
+    }
+
+    $("kill").onclick = () => send("KILL");
+    $("resume").onclick = () => send("RESUME");
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      window._ws = ws;
+      ws.onopen = () => setConn(true, "cockpit linked");
+      ws.onclose = () => {
+        setConn(false, "cockpit reconnecting…");
+        setTimeout(connect, 1200);
+      };
+      ws.onerror = () => setConn(false, "cockpit error");
+      ws.onmessage = (ev) => {
+        try { render(JSON.parse(ev.data)); } catch (_) {}
+      };
+    }
+
+    async function pollHealth() {
+      try {
+        const r = await fetch("/api/health");
+        const h = await r.json();
+        if (!h.engine_connected) setConn(false, "engine bridge down");
+        else if (window._ws && window._ws.readyState === 1) setConn(true, "engine + cockpit");
+      } catch (_) {
+        setConn(false, "ui offline");
+      }
+    }
+
+    setInterval(() => { $("clock").textContent = new Date().toLocaleString(); }, 1000);
+    setInterval(pollHealth, 2000);
+    connect();
+    pollHealth();
+  </script>
+</body>
+</html>

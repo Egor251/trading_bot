@@ -1,0 +1,8 @@
+id: volatility_breakout_example
+name: Volatility Breakout Example
+version: "1.0.0"
+description: Public example — Donchian + ATR breakout on market.candle
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:VolatilityBreakoutExamplePlugin

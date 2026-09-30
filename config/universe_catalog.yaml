@@ -1,0 +1,162 @@
+# Seed catalog with metrics for different screen profiles.
+# Production: filled by broker listings + history job (volume, ATR%, IV rank…).
+
+instruments:
+  - symbol: AAPL
+    class_code: US
+    asset_class: equity
+    exchange: NASDAQ
+    price: 190.0
+    volume: 50000000
+    dollar_volume: 9500000000
+    atr_pct: 0.012
+    realized_vol: 0.22
+    iv_rank: 40
+    option_open_interest: 100000
+    bid_ask_pct: 0.0002
+
+  - symbol: MSFT
+    class_code: US
+    asset_class: equity
+    exchange: NASDAQ
+    price: 420.0
+    volume: 20000000
+    dollar_volume: 8400000000
+    atr_pct: 0.011
+    realized_vol: 0.20
+    iv_rank: 35
+    option_open_interest: 80000
+    bid_ask_pct: 0.0002
+
+  - symbol: SPY
+    class_code: US
+    asset_class: etf
+    exchange: ARCA
+    price: 520.0
+    volume: 80000000
+    dollar_volume: 41600000000
+    atr_pct: 0.008
+    realized_vol: 0.14
+    iv_rank: 30
+    option_open_interest: 200000
+    bid_ask_pct: 0.0001
+
+  - symbol: SBER
+    class_code: TQBR
+    asset_class: equity
+    exchange: MOEX
+    price: 285.0
+    volume: 5000000
+    dollar_volume: 1425000000
+    atr_pct: 0.015
+    realized_vol: 0.22
+    iv_rank: 35
+    option_open_interest: 50000
+    bid_ask_pct: 0.0004
+
+  - symbol: GAZP
+    class_code: TQBR
+    asset_class: equity
+    exchange: MOEX
+    price: 165.0
+    volume: 3000000
+    dollar_volume: 495000000
+    atr_pct: 0.04
+    realized_vol: 0.45
+    iv_rank: 70
+    option_open_interest: 20000
+    bid_ask_pct: 0.0008
+
+  - symbol: LKOH
+    class_code: TQBR
+    asset_class: equity
+    exchange: MOEX
+    price: 7200.0
+    volume: 200000
+    dollar_volume: 1440000000
+    atr_pct: 0.012
+    realized_vol: 0.20
+    iv_rank: 40
+    option_open_interest: 8000
+    bid_ask_pct: 0.0005
+
+  - symbol: VTBR
+    class_code: TQBR
+    asset_class: equity
+    exchange: MOEX
+    price: 0.025
+    volume: 50000000
+    dollar_volume: 1250000
+    atr_pct: 0.06
+    realized_vol: 0.55
+    iv_rank: 20
+    option_open_interest: 0
+    bid_ask_pct: 0.01
+
+  - symbol: Si
+    class_code: SPBFUT
+    asset_class: future
+    exchange: MOEX
+    price: 90000.0
+    volume: 150000
+    dollar_volume: 13500000000
+    atr_pct: 0.02
+    realized_vol: 0.18
+    bid_ask_pct: 0.0001
+
+  - symbol: BR
+    class_code: SPBFUT
+    asset_class: future
+    exchange: MOEX
+    price: 80.0
+    volume: 80000
+    dollar_volume: 2000000000
+    atr_pct: 0.035
+    realized_vol: 0.40
+    bid_ask_pct: 0.0002
+
+  - symbol: BTC/USDT
+    class_code: CRYPTO
+    asset_class: crypto
+    exchange: bitget
+    price: 65000.0
+    volume: 20000
+    dollar_volume: 1300000000
+    atr_pct: 0.05
+    realized_vol: 0.60
+    bid_ask_pct: 0.0001
+
+  - symbol: ETH/USDT
+    class_code: CRYPTO
+    asset_class: crypto
+    exchange: bitget
+    price: 3500.0
+    volume: 80000
+    dollar_volume: 280000000
+    atr_pct: 0.055
+    realized_vol: 0.65
+    bid_ask_pct: 0.00015
+
+  - symbol: SOL/USDT
+    class_code: CRYPTO
+    asset_class: crypto
+    exchange: bitget
+    price: 150.0
+    volume: 120000
+    dollar_volume: 180000000
+    atr_pct: 0.07
+    realized_vol: 0.75
+    bid_ask_pct: 0.0002
+
+  - symbol: PENNY
+    class_code: TQBR
+    asset_class: equity
+    exchange: MOEX
+    price: 0.5
+    volume: 10000
+    dollar_volume: 5000
+    atr_pct: 0.25
+    realized_vol: 1.2
+    iv_rank: 90
+    option_open_interest: 0
+    bid_ask_pct: 0.05

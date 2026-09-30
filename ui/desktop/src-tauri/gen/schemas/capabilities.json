@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default Operator capability","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-show","core:window:allow-hide","core:window:allow-set-focus","core:window:allow-set-title","core:window:allow-close","notification:default","shell:allow-open"]}}

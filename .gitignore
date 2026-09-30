@@ -1,0 +1,63 @@
+# --- secrets / local ---
+.env
+.env.*
+!.env.example
+data/secrets.env
+
+# --- runtime data ---
+data/storage/
+data/ui/
+data/execution/
+data/ops/
+data/phantom/
+logs/
+*.db
+*.db-*
+*.duckdb
+*.chdb/
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+
+# Private strategies / extension plugins
+strategies_local/*
+!strategies_local/README.md
+plugins_local/*
+!plugins_local/README.md
+
+# --- Tracked strategies (StrategyPlugin) ---
+# Base class: engine/strategy_plugin.py
+strategies/*
+!strategies/__init__.py
+!strategies/README.md
+!strategies/test_strategy/
+!strategies/test_strategy/**
+!strategies/ma_cross_example/
+!strategies/ma_cross_example/**
+!strategies/mean_reversion_example/
+!strategies/mean_reversion_example/**
+!strategies/volatility_breakout_example/
+!strategies/volatility_breakout_example/**
+!strategies/volume_impulse_example/
+!strategies/volume_impulse_example/**
+
+# --- Tracked non-strategy plugins ---
+# order_execution, ai_analyst, market connectors under plugins/market/
+plugins/*
+!plugins/__init__.py
+!plugins/order_execution/
+!plugins/order_execution/**
+!plugins/ai_analyst/
+!plugins/ai_analyst/**
+!plugins/market/
+!plugins/market/**

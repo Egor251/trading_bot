@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading_bot"
+version = "2.0.0"
+description = "Algotrader microkernel engine + Tauri Operator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "pyyaml>=6.0",
+    "prettytable",
+    "pandas",
+    "pydantic>=2.0",
+    "jinja2>=3.1",
+    "loguru>=0.7",
+    "aiofiles>=23.0",
+    "cursor-sdk>=1.0.0",
+    "ccxt>=4.0",
+    "alpaca-py>=0.40",
+    "sympy>=1.12",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "Pillow>=10.0",
+    "yfinance",
+    "matplotlib",
+    "mplfinance",
+    "aiomoex",
+    "aiohttp",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+algotrader = "host.main:main"
+algotrader-operator = "run_operator:main"
+
+[tool.setuptools]
+py-modules = ["main", "run_operator"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["engine*", "host*", "services*", "strategies*", "ui*", "plugins*", "tools*"]
+exclude = ["tests*", "docs*", "data*", "ops*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

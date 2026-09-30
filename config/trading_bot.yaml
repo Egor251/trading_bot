@@ -1,0 +1,648 @@
+core:
+  log_level: INFO
+  name: trading_bot
+  version: 2.0.0
+event_bus:
+  max_queue_size: 50000
+instance:
+  id: local
+  role: standalone
+ipc:
+  pub_port: 5555
+  sub_port: 5556
+market:
+  default_class_code: CRYPTO
+plugins:
+  adx_di_trend:
+    adx_min: 25
+    class_code: CRYPTO
+    enabled: true
+    observe_only: true
+    period: 14
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  ai_analyst:
+    default_provider: mock
+    enabled: true
+    max_tool_iterations: 5
+    profiles:
+      cursor:
+        display_name: Cursor
+        enabled: true
+        provider_type: cursor
+        settings:
+          api_key_env: CURSOR_API_KEY
+          cloud_repo: ''
+          cwd: ''
+          max_tokens: 2048
+          model: composer-2.5
+          runtime: local
+          temperature: 0.20000000298023224
+          timeout: 60
+      cursor_3:
+        display_name: deepseek
+        enabled: true
+        provider_type: deepseek
+        settings:
+          api_key_env: DEEPSEEK_API_KEY
+          base_url: https://api.deepseek.com/v1
+          frequency_penalty: 0.0
+          max_tokens: 2048
+          model: deepseek-chat
+          presence_penalty: 0.0
+          stream: true
+          temperature: 0.30000001192092896
+          timeout: 60
+          top_p: 0.949999988079071
+      mock:
+        display_name: Mock
+        enabled: true
+        provider_type: mock
+        settings:
+          max_tokens: 2048
+          stream: false
+          temperature: 0.20000000298023224
+          timeout: 60
+  bollinger_reversion:
+    class_code: CRYPTO
+    enabled: true
+    num_std: 1.5
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    window: 14
+  cci_reversion:
+    class_code: CRYPTO
+    enabled: true
+    entry: 100
+    observe_only: true
+    period: 20
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  dual_thrust:
+    class_code: CRYPTO
+    enabled: true
+    k1: 0.7
+    k2: 0.7
+    lookback: 3
+    observe_only: false
+    quantity: 0.01
+    tickers:
+    - ETH/USDT
+  ema_cross:
+    class_code: CRYPTO
+    enabled: true
+    fast: 12
+    observe_only: true
+    quantity: 0.01
+    slow: 26
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  exclude: []
+  heikin_ashi_trend:
+    class_code: CRYPTO
+    enabled: true
+    min_streak: 2
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  installed_paths:
+  - strategies_local
+  - plugins_local
+  keltner_breakout:
+    atr_period: 10
+    class_code: CRYPTO
+    ema_period: 20
+    enabled: false
+    mult: 1.5
+    observe_only: false
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  ma_cross_example:
+    class_code: CRYPTO
+    enabled: true
+    fast: 3
+    observe_only: true
+    quantity: 0.001
+    slow: 8
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  macd_trend:
+    class_code: CRYPTO
+    enabled: true
+    fast: 8
+    observe_only: true
+    quantity: 0.01
+    signal: 9
+    slow: 17
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  mean_reversion_example:
+    class_code: CRYPTO
+    enabled: true
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - ETH/USDT
+    - SOL/USDT
+    window: 20
+    z_entry: 1.2
+  momentum_roc:
+    class_code: CRYPTO
+    enabled: true
+    entry: 0.02
+    observe_only: true
+    period: 12
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - SOL/USDT
+  order_execution:
+    mode: paper
+  parabolic_sar_follow:
+    af_max: 0.2
+    af_start: 0.02
+    af_step: 0.02
+    class_code: CRYPTO
+    enabled: true
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  paths:
+  - strategies
+  - plugins
+  rsi_reversion:
+    class_code: CRYPTO
+    enabled: true
+    observe_only: true
+    overbought: 70
+    oversold: 30
+    period: 14
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  stochastic_reversion:
+    class_code: CRYPTO
+    d_period: 3
+    enabled: false
+    k_period: 14
+    observe_only: false
+    overbought: 80
+    oversold: 20
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  supertrend_follow:
+    atr_period: 10
+    class_code: CRYPTO
+    enabled: true
+    multiplier: 3.0
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  test_strategy:
+    candles_before_signal: 2
+    class_code: TQBR
+    enabled: false
+    observe_only: false
+    parameters:
+      a: 100
+      b: 120
+    tickers:
+    - SBER
+  turtle_breakout:
+    class_code: CRYPTO
+    enabled: true
+    entry_lookback: 20
+    exit_lookback: 10
+    observe_only: true
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+  volatility_breakout_example:
+    atr_mult: 0.5
+    atr_window: 14
+    class_code: CRYPTO
+    enabled: false
+    lookback: 20
+    observe_only: false
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+  volume_impulse_example:
+    class_code: CRYPTO
+    enabled: false
+    min_return: 0.001
+    observe_only: false
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+    vol_mult: 2.0
+    vol_window: 20
+  vwap_reversion:
+    class_code: CRYPTO
+    enabled: false
+    entry_pct: 0.01
+    observe_only: false
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+    window: 20
+  williams_r_reversion:
+    class_code: CRYPTO
+    enabled: true
+    observe_only: true
+    overbought: -20
+    oversold: -80
+    period: 14
+    quantity: 0.01
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+repl:
+  enabled: true
+rules:
+  enabled: true
+  path: data/rules
+services:
+  alpaca_market_service:
+    api_key_env: ALPACA_API_KEY
+    asset_class: stock
+    auto_start: false
+    class_code: US
+    enabled: false
+    feed: iex
+    follow_universe: true
+    interval_sec: 15
+    paper: true
+    secret_key_env: ALPACA_SECRET_KEY
+    seed_bars: 120
+    tickers:
+    - AAPL
+    - MSFT
+    - SPY
+    timeframe: 1m
+  ccxt_market_service:
+    auto_start: true
+    class_code: CRYPTO
+    enabled: true
+    exchange: bitget
+    # Silent mock fills are dangerous — only enable with TRADING_ALLOW_MOCK=1
+    fallback_mock: false
+    follow_universe: true
+    interval_sec: 5
+    sandbox: false
+    seed_bars: 500
+    tickers:
+    - BTC/USDT
+    - ETH/USDT
+    - SOL/USDT
+    timeframe: 1m
+    use_watch: true
+    disk_cache_dir: data/ohlc_cache
+    disk_cache_ttl_sec: 86400
+    disk_cache_stale_ok: true
+    disk_cache_persist_every_ticks: 12
+    api_key_env: BITGET_API_KEY
+    secret_env: BITGET_SECRET
+    password_env: BITGET_PASSWORD
+  ensemble_service:
+    auto_start: true
+    debounce_sec: 0.05
+    enabled: true
+    route_execution: false
+  exclude:
+  - base_service
+  execution_service:
+    accounts:
+      alpaca: default
+      binance: default
+      bitget: default
+      quik: default
+    attach_interval_sec: 2
+    auto_start: true
+    enabled: true
+    reconcile_interval_sec: 30
+    store_path: data/execution/orders.json
+  historical_data_service:
+    auto_start: true
+    cache_ttl_sec: 900
+    default_limit: 120
+    default_provider: auto
+    default_timeframe: 1d
+    enabled: true
+    intraday_timeframe: 1m
+    metrics_bars: 40
+    min_fetch_interval_sec: 0.25
+    publish_events: true
+    replay_delay_sec: 0
+    replay_pause_live: true
+  live_safety_service:
+    allow_unauthenticated_local: true
+    auto_start: true
+    enabled: true
+    evidence_secret_env: TRADING_EVIDENCE_HMAC_SECRET
+    hmac_secret_env: TRADING_CONTROL_HMAC_SECRET
+    kill_mode: halt_only
+    live_feature_flag_env: TRADING_LIVE_ENABLED
+  mock_market_service:
+    auto_start: false
+    class_code: TQBR
+    enabled: false
+    follow_universe: true
+    interval_sec: 1
+    tickers:
+    - SBER
+    - GAZP
+  ops_monitor_service:
+    alerts_path: data/ops/alerts.jsonl
+    auto_start: true
+    enabled: true
+    expected_candle_sec: 60
+    freeze_on_data_anomaly: true
+    heartbeat_timeout_sec: 45
+    journal_path: data/ops/trades.jsonl
+    telegram_bot_token: ''
+    telegram_chat_id: ''
+    telegram_enabled: false
+  phantom_service:
+    atr_mult: 2.0
+    atr_period: 14
+    auto_start: true
+    capture_signals: true
+    capture_source: ensemble
+    default_feed: history
+    enabled: true
+    fee_bps: 5
+    kelly_fraction: 0.5
+    max_position_pct: 0.25
+    pattern_bars: 80
+    pattern_start_price: 100.0
+    reward_risk: 1.5
+    scale_by_strength: true
+    sizing_mode: percent_of_equity
+    sizing_value: 10
+    slippage_bps: 2
+    start_equity: 10000
+    state_path: data/phantom/state.json
+    stop_pct: 0.02
+    strategy_sizing: {}
+    strength_floor: 0.25
+    timeline_path: data/phantom/timeline.jsonl
+    walk_forward:
+      auto_fit_folds: false
+      bars: 500
+      bootstrap_ci: 0.95
+      bootstrap_samples: 1000
+      feed: history
+      include_baselines: true
+      min_fold_wins: 1
+      min_folds: 5
+      pattern: sharp_rise
+      persist_report: true
+      report_dir: data/phantom/walk_forward
+      score_key: pnl
+      seed: 42
+      selection_mode: top_k_stable
+      step: null
+      test_bars: 20
+      timeframe: 1d
+      top_k: 3
+      train_bars: 60
+    win_rate: 0.55
+  quik_market_service:
+    account: ''
+    auto_start: false
+    class_code: TQBR
+    enabled: false
+    follow_universe: true
+    tickers:
+    - SBER
+    transport: null
+    transport_options: {}
+  storage_service:
+    auto_start: true
+    enabled: true
+  trading_runtime_service:
+    auto_start: true
+    enabled: true
+  ui_bridge_service:
+    auto_start: true
+    enabled: true
+    hz: 2
+    ohlc_bars: 360
+    ws_host: 127.0.0.1
+    ws_port: 8765
+    zmq_enabled: true
+  universe_service:
+    auto_start: true
+    catalog_path: config/universe_catalog.yaml
+    enabled: true
+    listings_include_marketdata: true
+    listings_mode: merge
+    refresh_listings: false
+    refresh_listings_boards:
+    - TQBR
+    refresh_listings_on_boot: false
+    refresh_listings_sec: 86400
+    refresh_metrics: false
+    refresh_metrics_asset_classes:
+    - equity
+    - etf
+    refresh_metrics_on_boot: false
+    refresh_metrics_provider: yahoo
+    refresh_metrics_sec: 3600
+    reselect_sec: 120
+storage:
+  backends:
+    chdb_local:
+      enabled: false
+      path: data/storage/analytics.chdb
+    clickhouse_main:
+      database: default
+      enabled: false
+      password: ''
+      url: http://127.0.0.1:8123
+      user: default
+    cockroach:
+      dbname: trading_bot
+      enabled: false
+      host: 127.0.0.1
+      password: ''
+      port: 26257
+      user: root
+    duckdb_local:
+      enabled: false
+      path: data/storage/events.duckdb
+    jsonl_local:
+      enabled: false
+      path: data/storage/events.jsonl
+    parquet_local:
+      enabled: false
+      path: data/storage/cold
+    postgres:
+      dbname: trading_bot
+      enabled: false
+      host: 127.0.0.1
+      password: ''
+      port: 5432
+      user: postgres
+    sqlite:
+      enabled: true
+      path: data/storage/records.db
+  default_backend: sqlite
+  deny_raw_persist: true
+  enabled: true
+  hot_buffer:
+    enabled: true
+    max_events: 2000
+    ttl_seconds: 120
+  routing:
+    backend_by_class:
+      audit: sqlite
+      finding: sqlite
+      semantic_stream: sqlite
+      state: sqlite
+  sink:
+    batch_size: 20
+    flush_interval_seconds: 0.5
+trading:
+  account_by_venue:
+    alpaca: default
+    binance: default
+    quik: default
+  candle_store:
+    maxlen: 1000
+  cost_store_path: data/cost_schedules
+  default_risk_archetype: trend
+  ensemble:
+    enabled: true
+    observe:
+    - adx_di_trend
+    - bollinger_reversion
+    - cci_reversion
+    - ema_cross
+    - heikin_ashi_trend
+    - macd_trend
+    - ma_cross_example
+    - mean_reversion_example
+    - momentum_roc
+    - parabolic_sar_follow
+    - rsi_reversion
+    - supertrend_follow
+    - turtle_breakout
+    - williams_r_reversion
+    strategies:
+    - dual_thrust
+    weight_mode: equal
+  equity: 100000.0
+  instruments:
+  - asset_class: crypto
+    class_code: CRYPTO
+    currency: USDT
+    lot_size: '0.0001'
+    symbol: BTC/USDT
+    tick_size: '0.01'
+    venue: BITGET
+  - asset_class: crypto
+    class_code: CRYPTO
+    currency: USDT
+    lot_size: '0.001'
+    symbol: ETH/USDT
+    tick_size: '0.01'
+    venue: BITGET
+  - asset_class: crypto
+    class_code: CRYPTO
+    currency: USDT
+    lot_size: '0.01'
+    symbol: SOL/USDT
+    tick_size: '0.001'
+    venue: BITGET
+  insurance:
+    preset: moderate
+  legacy_fee_bps: 5
+  legacy_slippage_bps: 2
+  live_readiness:
+    canary_quantity_scale: 0.25
+    max_age_days: 30
+    min_holdout_trades: 8
+    min_oos_trades: 20
+    min_profit_factor: 1.15
+    min_tickers_robust: 2
+    observe_min_holdout_trades: 1
+    observe_min_tickers_robust: 1
+    observe_require_ci_excludes_zero: false
+    require_ci_excludes_zero: true
+    require_params_applied: true
+  mode: paper
+  performance:
+    daily_minimum: 100
+    daily_target: 200
+    lookback_days: 7
+    target_profit_factor: 1.8
+    target_sharpe: 1.5
+    target_win_rate: 0.55
+    underperform_days: 3
+  position_policy:
+    forbid_net_flip: true
+  risk:
+    max_daily_loss_pct: 0.05
+    max_daily_turnover_pct: 0.5
+    max_leverage: 1.0
+    max_orders_per_minute: 10
+    max_portfolio_drawdown: 0.1
+    max_position_pct: 0.2
+    max_strategy_drawdown: 0.05
+  sizing:
+    atr_mult: 2.0
+    atr_period: 14
+    kelly_fraction: 0.5
+    max_position_pct: 0.25
+    mode: percent_of_equity
+    reward_risk: 1.5
+    scale_by_strength: true
+    stop_pct: 0.02
+    strength_floor: 0.25
+    value: 10
+    win_rate: 0.55
+  trade_journal:
+    path: data/ops/trades.jsonl
+  venue_by_class:
+    CRYPTO: bitget
+    SPBFUT: quik
+    TQBR: quik
+    US: alpaca
+universe:
+  exclude: []
+  include: []
+  mode: manual
+  profile: liquid
+  screen:
+    max_active: 10
+    max_candidates: 50
+    prefer_previous_active: true
+  static_active:
+  - CRYPTO:BTC/USDT
+  - CRYPTO:ETH/USDT
+  - CRYPTO:SOL/USDT

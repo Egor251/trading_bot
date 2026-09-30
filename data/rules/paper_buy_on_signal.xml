@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rules>
+  <!-- Direct strategy → execution disabled while ensemble_service routes consilium fills.
+       Re-enable if trading.ensemble.enabled=false and ensemble_service disabled. -->
+  <rule id="paper_buy_on_signal" enabled="false" priority="MEDIUM">
+    <name>Paper buy on test strategy signal</name>
+    <description>strategy.signal BUY from test_strategy → order_execution paper (legacy)</description>
+    <condition>
+      <plugin>test_strategy
+        <check>is_buy_signal</check>
+      </plugin>
+    </condition>
+    <actions>
+      <action type="execute_plugin">
+        <param name="plugin">order_execution</param>
+        <param name="action">place_order</param>
+      </action>
+    </actions>
+  </rule>
+</rules>
