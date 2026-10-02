@@ -101,6 +101,16 @@ class BrokerCapabilities:
     native_replace: bool = False
     client_order_id: bool = True
     fetch_fills: bool = True
+    #: Whether the venue honours ``reduceOnly``. Near-universal, but a venue that
+    #: silently ignores the flag is worse than one that rejects it: we would
+    #: believe a protective stop could not open a reverse position while it
+    #: could. Default assumes support so the flag is sent; set False where known
+    #: not to work, and the absence becomes auditable rather than invisible.
+    reduce_only: bool = True
+
+    @property
+    def supports_reduce_only(self) -> bool:
+        return self.reduce_only
 
     @property
     def native_stop_orders(self) -> bool:
@@ -139,6 +149,13 @@ class BrokerOrder:
     idempotency_key: str | None = None
     parent_order_id: str | None = None
     oco_group_id: str | None = None
+    #: May only reduce existing exposure; never open or add to the opposite
+    #: side. This was previously stashed in the free-form ``raw`` dict, which
+    #: meant our own books believed an order was reduce-only while the venue
+    #: received no such instruction at all -- a stop could fire on a flat book
+    #: and open a position in the wrong direction, which is the exact failure a
+    #: protective stop exists to prevent.
+    reduce_only: bool = False
     created_at: datetime | str = field(default_factory=_now)
     updated_at: datetime | str = field(default_factory=_now)
     raw: dict[str, Any] = field(default_factory=dict)
@@ -778,6 +795,12 @@ class CcxtExecutionAdapter:
     #: venue that would reject a GTX/post-only order outright.
     post_only_enabled: bool = True
 
+    #: Whether this venue honours ``reduceOnly``. Turn off for a venue that
+    #: silently ignores it rather than rejecting it -- then the order is still
+    #: sent, but ``venue_lacks_reduce_only`` says the guarantee is absent
+    #: instead of the system believing it holds.
+    reduce_only_supported: bool = True
+
     def __init__(self, client: Any, *, venue: str, account: str) -> None:
         self.client, self.venue, self.account = client, venue, account
 
@@ -799,6 +822,15 @@ class CcxtExecutionAdapter:
             # Must be GTX, not the order's own TIF: a post-only request with a
             # crossing TIF would still take liquidity while claiming not to.
             params["timeInForce"] = "GTX"
+        # `reduceOnly` was never sent. The runtime set `reduce_only` on native
+        # stops -- but into the free-form `raw` dict, which this method does not
+        # read -- so every protective stop reached the venue as an ordinary
+        # order that may open or add to the opposite side. A stop that fires on
+        # a flat or already-closed book would then take a position in the
+        # direction it was written to prevent, which is the precise failure a
+        # protective stop is meant to make impossible.
+        if getattr(order, "reduce_only", False) and self.reduce_only_supported:
+            params["reduceOnly"] = True
         raw = await _invoke(self.client.create_order, order.symbol, order.order_type, order.side.value, float(order.quantity), float(order.limit_price) if order.limit_price is not None else None, params)
         return self._order(raw, order)
 
@@ -863,10 +895,20 @@ class CcxtExecutionAdapter:
             venue=self.venue, account=self.account,
             client_id=str(raw.get("clientOrderId") or (original.client_id if original else raw.get("id"))),
             order_type=str(raw.get("type") or (original.order_type if original else "market")),
-            limit_price=raw.get("price"), stop_price=raw.get("stopPrice"),
+            limit_price=raw.get("price"),
+            # Fall back to what we asked for. A venue that does not echo
+            # `stopPrice` would otherwise null the trigger on the very object
+            # the rest of the system reasons about -- a stop with no stop price
+            # is not a stop, and `raw.get(...)` alone silently produced one.
+            stop_price=raw.get("stopPrice") or (original.stop_price if original else None),
             state=_state(raw.get("status")), broker_order_id=str(raw.get("id", "")) or None,
             filled_quantity=raw.get("filled", 0), average_fill_price=raw.get("average"),
             idempotency_key=(original.idempotency_key if original else raw.get("clientOrderId")), raw=raw,
+            # Carried from the request. The venue's echo does not contain it, and
+            # dropping it here would lose the guarantee on the very object the
+            # rest of the system reasons about -- the same class of bug as never
+            # sending it.
+            reduce_only=bool(getattr(original, "reduce_only", False)) if original else False,
         )
 
 

@@ -234,7 +234,12 @@ def test_native_stop_is_placed_after_a_fill(tmp_path: Path) -> None:
     order = port.placed[0]
     assert order.stop_price is not None, "stop_price must reach the broker"
     assert order.oco_group_id == "oco:s1"
-    assert str(order.raw.get("reduce_only")) == "True"
+    # Was `str(order.raw.get("reduce_only")) == "True"` -- which asserted a
+    # dictionary key in our own process. `_RecordingPort` never sees venue
+    # params, so that passed while nothing was sent to the exchange at all.
+    # The real field is what the adapter reads; the transmission itself is
+    # pinned in test_reduce_only_transmission.py against `create_order`.
+    assert order.reduce_only is True, "reduce_only must be a real field"
     # A long position is protected by a sell stop below the entry.
     assert str(order.side).lower().endswith("sell") or order.side is not None
 

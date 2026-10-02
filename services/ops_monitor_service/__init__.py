@@ -559,7 +559,24 @@ class OpsMonitorService(BaseService):
         unprotected = [
             key for key in open_keys if not protection.has_protection(key)
         ]
+        # A stop the venue will not honour as reduce-only protects against loss
+        # but can reverse the book if it triggers flat. That is not the same as
+        # having no stop, and it is not the same as having a good one, so it is
+        # counted separately rather than folded into coverage as if equal.
+        weak = [
+            key
+            for key in open_keys
+            if key in getattr(runtime, "_native_stop_weak_spots", {})
+        ]
         coverage = (len(open_keys) - len(unprotected)) / len(open_keys)
+        # Strict coverage excludes weak stops. Reported next to the plain number
+        # rather than instead of it: both are true, and the gap between them is
+        # the size of the reversal risk.
+        full_coverage = (
+            (len(open_keys) - len(unprotected) - len(weak)) / len(open_keys)
+            if open_keys
+            else 1.0
+        )
 
         if unprotected and self.alerts is not None:
             alert = self.alerts.emit(
@@ -573,10 +590,32 @@ class OpsMonitorService(BaseService):
                 },
             )
             await self._publish_alert(alert)
+        if weak and self.alerts is not None:
+            # A WARNING, not a CRITICAL: there *is* a stop, so the loss is still
+            # bounded. What is missing is the guarantee it cannot reverse the
+            # book. Saying CRITICAL would flatten the distinction between "no
+            # stop at all" and "a stop with a known hole".
+            alert = self.alerts.emit(
+                "weak_protective_stop",
+                f"{len(weak)} of {len(open_keys)} stops cannot guarantee "
+                "reduce-only at the venue",
+                severity=AlertSeverity.WARNING,
+                details={
+                    "weak": weak,
+                    "reasons": {
+                        key: getattr(runtime, "_native_stop_weak_spots", {})[key]
+                        for key in weak
+                    },
+                    "full_coverage": full_coverage,
+                },
+            )
+            await self._publish_alert(alert)
         return {
             "checked": len(open_keys),
             "unprotected": unprotected,
             "coverage": coverage,
+            "weak": weak,
+            "full_coverage": full_coverage,
         }
 
     async def _apply_quarantine(self, ens: Any) -> dict[str, Any]:

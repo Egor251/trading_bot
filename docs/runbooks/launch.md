@@ -279,6 +279,47 @@ Retention is an in-memory ring (`max_rows`, default 200k) plus append-only
 JSONL. `dropped_after_cap` is reported in `stats()` rather than silently
 discarding rows.
 
+## Protective stops are reduce-only at the venue
+
+`place_native_stop` set `raw={"reduce_only": True}` on the broker order, and that
+was the whole of it. `CcxtExecutionAdapter.place()` reads `clientOrderId`,
+`stopPrice`, `timeInForce` and `postOnly` — and never looked at `raw` for a
+reduce-only flag, so **nothing reached the exchange**. Every native stop was an
+ordinary order that may open or add to the opposite side.
+
+`reduce_only` is now a real field on `BrokerOrder` and is sent as `reduceOnly`.
+The consequence being prevented: if the book is flat, or the protective slice
+already closed, when the stop triggers it takes a position in exactly the
+direction the stop was written to avoid.
+
+### When the venue cannot honour it
+
+`BrokerCapabilities.reduce_only` defaults to `True`, so the flag is sent by
+default. Set it `False` for a venue that does not honour `reduceOnly`, and:
+
+- the order is **still placed** — losing protection entirely is strictly worse
+  than the reversal risk;
+- the slice is recorded in `runtime._native_stop_weak_spots`;
+- the protection audit raises `weak_protective_stop` at **WARNING**, not
+  CRITICAL — there *is* a stop, so the loss is still bounded; what is missing is
+  the guarantee it cannot reverse the book;
+- `audit_position_protection()` reports `coverage` and `full_coverage`
+  separately. Both are true, and the gap between them is the size of the
+  reversal risk.
+
+A venue that silently ignores `reduceOnly` is worse than one that rejects it:
+we would believe the guarantee holds while it does not.
+
+### Why the old test missed it
+
+`test_protection_durability.py` asserted
+`str(order.raw.get("reduce_only")) == "True"` against a fake `_RecordingPort`.
+That port sees our `BrokerOrder` and nothing else — it never sees venue params.
+The test verified a dictionary key in our own process and would have passed with
+the flag deleted outright. It now asserts the real field, and
+`tests/test_reduce_only_transmission.py` pins the transmission at the boundary,
+on what `create_order` was actually called with.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It

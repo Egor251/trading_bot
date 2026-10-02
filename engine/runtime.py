@@ -192,6 +192,10 @@ class TradingRuntime:
     live_authorized: bool = False
     live_preflight_report: Any | None = None
     pinned_keys: set[str] = field(default_factory=set)
+    #: Slice id -> why its native stop is weaker than it looks, keyed when a
+    #: venue cannot guarantee reduce-only. Read by the protection audit so a
+    #: stop that can reverse the book is not counted as full protection.
+    _native_stop_weak_spots: dict[str, str] = field(default_factory=dict)
     forbid_net_flip: bool = True
     insurance: InsuranceGuard | None = None
     performance: PerformanceMonitor | None = None
@@ -981,7 +985,22 @@ class TradingRuntime:
             stop_price=plan["trigger_price"],
             oco_group_id=f"oco:{slice_id}",
             raw={"reduce_only": True, "slice_id": slice_id, "native_stop": True},
+            # Real field, not just a marker in `raw`. It used to live only in
+            # `raw`, where nothing read it: our books believed the stop could
+            # not reverse the position while the venue had never been told.
+            reduce_only=True,
         )
+        if not getattr(capabilities, "reduce_only", True):
+            # The stop is real protection against loss but not against reversal.
+            # Say so, rather than letting `reduce_only` imply a guarantee the
+            # venue never agreed to.
+            self._native_stop_weak_spots[str(slice_id)] = "venue_lacks_reduce_only"
+            _log().warning(
+                "venue %s does not honour reduceOnly; stop %s can reverse "
+                "position if the book is flat when it triggers",
+                plan["venue"],
+                client_id,
+            )
         try:
             await self.execution_router.place(order)
         except Exception:
