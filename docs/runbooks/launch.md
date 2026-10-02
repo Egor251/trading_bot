@@ -136,36 +136,63 @@ Notable reasons: `strength_below_floor` (signal weaker than
 open), `order_rate` (throttled), `net_flip_forbidden` (long/short model), and
 `qty_below_lot_size`.
 
-Measured on real Bitget data, `BTC/USDT` 1h, 1000 bars, floor 0.25, one strategy
-per run: **19 of 20 strategies traded, 5 of those 19 profitable.**
+Measured on real Bitget data, `BTC/USDT` 1h, 1000 bars, floor 0.25:
+**19 of 20 strategies traded, 10 of those 19 profitable.**
 
 ```
-parabolic_sar_follow    11 trades   62 rejected   +249.64
-heikin_ashi_trend       11 trades  377 rejected   +239.04
-dual_thrust             11 trades  241 rejected   +218.32
-supertrend_follow       10 trades   19 rejected   +164.63
-adx_di_trend             9 trades   42 rejected   +110.96
-macd_trend               6 trades   86 rejected    -88.40
-rsi_reversion            7 trades    6 rejected   -115.45
-momentum_roc            10 trades   44 rejected   -155.74
-vwap_reversion          10 trades   11 rejected   -168.70
-cci_reversion           10 trades   29 rejected   -165.63
-volume_impulse_example  10 trades   37 rejected   -199.02
-williams_r_reversion    11 trades   34 rejected   -198.80
-mean_reversion_example  10 trades   23 rejected   -194.14
-turtle_breakout         10 trades   36 rejected   -208.16
-keltner_breakout        11 trades  105 rejected   -276.16
-bollinger_reversion     11 trades   28 rejected   -152.11
+dual_thrust             11 trades  243 rejected   +338.58
+mean_reversion_example  10 trades   23 rejected   +219.68
+momentum_roc            11 trades   45 rejected   +218.44
+vwap_reversion          11 trades   10 rejected   +217.88
+williams_r_reversion    11 trades   34 rejected   +208.48
+cci_reversion           10 trades   28 rejected   +198.20
+bollinger_reversion     10 trades   29 rejected   +197.47
+supertrend_follow       10 trades   20 rejected   +196.91
+rsi_reversion            8 trades    6 rejected   +188.21
+macd_trend               3 trades   86 rejected    +34.71
+ema_cross                1 trade    39 rejected     -0.22
+ma_cross_example         6 trades  153 rejected   -114.62
+turtle_breakout         10 trades   37 rejected   -209.53
+adx_di_trend            11 trades   50 rejected   -220.83
+heikin_ashi_trend        7 trades  374 rejected   -220.91
+parabolic_sar_follow    11 trades   62 rejected   -231.43
+volume_impulse_example  10 trades   39 rejected   -232.98
 stochastic_reversion    11 trades   16 rejected   -285.44
+keltner_breakout        11 trades  107 rejected   -310.42
 ```
 
 `volatility_breakout_example` traded nothing (every signal below
-`strength_floor`); `ema_cross` managed a single trade.
+`strength_floor`).
 
 **This is a smoke signal, not a research verdict.** One 1000-bar window, no
 walk-forward, no untouched holdout, no parameter search — the research gate
 requires all of those before anything may trade live. Do not read the ordering
 above as a ranking.
+
+### A shorter window is not a cheaper version of the verdict
+
+The same sweep was run twice on the same data — 400 bars and 1000 bars. The
+rankings do not agree:
+
+| | 400 bars | 1000 bars |
+|---|---|---|
+| top 5 by 400-bar result | **+621.54** | **−337.58** |
+| bottom 5 by 400-bar result | **−1115.84** | **+304.12** |
+| Spearman ρ(400, 1000) | −0.337 | exact permutation **p = 0.159** |
+| same sign in both | 7 of 19 | 12 of 19 sign flips |
+
+The point is not that short windows are anti-predictive — p = 0.159 cannot
+support that claim, and this is one asset with overlapping windows. The point is
+that **a 400-bar ranking carries no demonstrable selection information about the
+1000-bar ranking.** Selecting on it would have bought the −337.58 group instead
+of the +304.12 group, and that is arithmetic rather than inference.
+
+An earlier revision of this runbook carried a different top five. **Three of its
+five members are negative in the table above.** That table has been replaced
+rather than softened, and its figures are deliberately not repeated here — a
+superseded measurement left in the documentation reads as evidence long after it
+stopped being any. `tests/test_sweep_window_agreement.py` fails if the current
+table and the documented one diverge, and also fails if the old numbers reappear.
 
 Reproduce with `python tools/strategy_sweep.py 1h BTC/USDT 1000` (~110 s for all
 20, nearly all of it the per-bar settle below).

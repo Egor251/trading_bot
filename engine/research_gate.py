@@ -173,7 +173,24 @@ def record_digest_clearance(
         return None
     store = load_clearance(path)
     entries = dict(store.get("entries") or {})
-    entries[_key(sid, ticker)] = {
+    # This assignment used to be a plain overwrite, so each run discarded every
+    # prior evaluation of the same strategy/ticker. The entry then reported one
+    # run's `variants_count` as though it were the whole research history -- and
+    # the multiple-comparisons bias grows with the number of attempts actually
+    # made, not the number surviving in the file. A strategy evaluated thirty
+    # times looked identical to one evaluated once, which is precisely the
+    # illusion a research report must not tell.
+    #
+    # The prior bias already happened and cannot be undone by bookkeeping; what
+    # this restores is the ability to *see its size*. Carried forward rather
+    # than recomputed, because the earlier runs left no record to recompute from.
+    key = _key(sid, ticker)
+    prior = entries.get(key) if isinstance(entries.get(key), Mapping) else {}
+    evaluations = _i(prior.get("evaluations_count")) + 1
+    lifetime_variants = _i(prior.get("variants_tried_lifetime")) + _i(
+        digest.get("variants_count")
+    )
+    entries[key] = {
         "strategy_id": sid,
         "ticker": ticker,
         "holdout_bars": holdout_bars,
@@ -190,7 +207,14 @@ def record_digest_clearance(
         "bar_interval_sec": digest.get("bar_interval_sec"),
         "provider_resolved": digest.get("provider_resolved"),
         "variant_mode": digest.get("variant_mode"),
+        # This run's own grid size -- per-run provenance, correct as it always
+        # was.
         "variants_count": digest.get("variants_count"),
+        # Cumulative across every evaluation on record. This is the denominator
+        # a deflation argument needs; `variants_count` alone understates it by
+        # the number of discarded attempts.
+        "evaluations_count": evaluations,
+        "variants_tried_lifetime": lifetime_variants,
         "chosen": dict(digest.get("chosen") or {}),
         "recorded_at": datetime.now(UTC).isoformat(),
         # When the evidence was *produced*, i.e. the last bar the analysis saw.
