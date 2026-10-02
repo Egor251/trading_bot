@@ -148,3 +148,81 @@ def test_the_superseded_table_is_gone() -> None:
     text = RUNBOOK.read_text(encoding="utf-8")
     assert "+249.64" not in text, "the superseded top-5 table is still present"
     assert "+110.96" not in text
+
+def test_the_stability_tool_refuses_to_rank_on_broken_windows() -> None:
+    """It printed "0 of 20 positive in every window" and that meant nothing.
+
+    `start`/`end` reached `run_grid` but not the bar fetch, so all four windows
+    replayed the same bars and every window returned bit-identical PNL --
+    -15.047438940000575 four times over. The tool then reported zero strategies
+    positive in every window, which reads as a devastating result about the
+    strategies and is in fact a broken measurement.
+
+    Identical numbers across disjoint windows are *proof* the windows are not
+    disjoint, so the tool must abort rather than publish a ranking. This is the
+    sixth false-green of this family in this repository; the difference is that
+    this one now refuses to produce output at all.
+    """
+    import inspect
+
+    from tools import window_stability
+
+    src = inspect.getsource(window_stability)
+    assert "ABORT" in src, "a collapsed measurement must abort, not report"
+    assert "Refusing to print a ranking" in src
+    assert "identical" in src, "the abort must name the symptom it detected"
+
+
+def test_the_stability_tool_flags_a_short_fetch() -> None:
+    """Asked for 2000 bars, got 1000, and the shortfall was silent."""
+    import inspect
+
+    from tools import window_stability
+
+    src = inspect.getsource(window_stability.main)
+    assert "WARNING" in src, "a short fetch must be announced"
+    assert "asked for" in src
+
+
+def test_the_two_tools_agree_on_the_strategy_list() -> None:
+    """A duplicated list is only safe while it is checked.
+
+    `tools/window_stability.py` carries its own copy because importing
+    `strategy_sweep` executes its argv parsing. Duplication is the lesser evil
+    only if something notices when the two drift -- otherwise the stability tool
+    silently stops measuring a strategy that was added or removed.
+    """
+    import pathlib
+
+    sweep_path = (
+        pathlib.Path(__file__).resolve().parents[1] / "tools" / "strategy_sweep.py"
+    )
+    source = sweep_path.read_text(encoding="utf-8")
+    start = source.index("STRATEGIES = [")
+    end = source.index("]", start)
+    import re
+
+    # Name extraction rather than ast.literal_eval: the source contains a
+    # conditional expression (an `if False else` over two string literals),
+    # which is an expression rather than a literal and would not evaluate.
+    block = source[start : end + 1]
+    declared = [
+        name
+        for name in re.findall('"([a-z_]+)"', block)
+        if name != "williams_williams"
+    ]
+    from tools.window_stability import STRATEGIES as stability
+
+    assert sorted(declared) == sorted(stability), (
+        f"strategy lists drifted: {set(declared) ^ set(stability)}"
+    )
+
+
+def test_the_stability_tool_is_importable_without_argv() -> None:
+    """It parses argv at import; a test runner must not be able to break it."""
+    import importlib
+
+    from tools import window_stability
+
+    module = importlib.reload(window_stability)
+    assert module.BARS > 0 and module.WINDOWS > 0

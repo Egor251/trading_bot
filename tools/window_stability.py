@@ -47,12 +47,61 @@ ensure_code_base_path()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.strategy_sweep import STRATEGIES  # noqa: E402
+#: Duplicated from tools/strategy_sweep.py rather than imported. That module
+#: parses sys.argv at import time, so importing it under pytest put
+#: `-p no:cacheprovider` in its LIMIT slot and raised on `int()` -- which made
+#: this tool untestable, and an untestable tool is how the collapsed-window guard
+#: below would have shipped unverified. Keep the two lists in step; a test
+#: asserts equality.
+STRATEGIES = [
+    "adx_di_trend",
+    "bollinger_reversion",
+    "cci_reversion",
+    "dual_thrust",
+    "ema_cross",
+    "heikin_ashi_trend",
+    "keltner_breakout",
+    "macd_trend",
+    "ma_cross_example",
+    "mean_reversion_example",
+    "momentum_roc",
+    "parabolic_sar_follow",
+    "rsi_reversion",
+    "stochastic_reversion",
+    "supertrend_follow",
+    "turtle_breakout",
+    "volatility_breakout_example",
+    "volume_impulse_example",
+    "vwap_reversion",
+    "williams_r_reversion",
+]
 
-TIMEFRAME = sys.argv[1] if len(sys.argv) > 1 else "1h"
-TICKER = sys.argv[2] if len(sys.argv) > 2 else "BTC/USDT"
-BARS = int(sys.argv[3]) if len(sys.argv) > 3 else 1000
-WINDOWS = int(sys.argv[4]) if len(sys.argv) > 4 else 4
+def _arg(index: int, default: str) -> str:
+    """argv lookup that survives import from a test runner.
+
+    This module parses argv at import time, so under pytest `--no-cacheprovider`
+    landed in the BARS slot and raised `invalid literal for int()`. A tool that
+    cannot be imported cannot be tested, which is how the collapsed-window guard
+    below would have gone in untested.
+    """
+    try:
+        value = sys.argv[index]
+    except IndexError:
+        return default
+    return value if not value.startswith("-") else default
+
+
+def _arg_int(index: int, default: int) -> int:
+    try:
+        return int(_arg(index, str(default)))
+    except ValueError:
+        return default
+
+
+TIMEFRAME = _arg(1, "1h")
+TICKER = _arg(2, "BTC/USDT")
+BARS = _arg_int(3, 1000)
+WINDOWS = _arg_int(4, 4)
 
 _OVERRIDES = {
     "services.phantom_service.enabled": True,
@@ -167,6 +216,16 @@ async def main() -> int:
         for start, end, count in bounds:
             print(f"  {start[:19]} .. {end[:19]}  (~{count} bars)")
 
+        if len(series) < BARS:
+            # Requested BARS, got fewer, and the shortfall is silent. Four
+            # windows over half the intended series are four windows over a
+            # range nobody asked to measure.
+            print(
+                f"WARNING: asked for {BARS} bars, fetched {len(series)}. The "
+                f"windows below cover a shorter range than requested; treat "
+                f"the split as {len(series)}-bar, not {BARS}-bar."
+            )
+
         measured = int(os.environ.get("WINDOW_LIMIT") or len(STRATEGIES))
         targets = STRATEGIES[:measured]
         # Only the strategy under test may see candles; the rest are parked on a
@@ -231,6 +290,33 @@ async def main() -> int:
             )
 
         print()
+        # Refuse to publish a table built on windows that are not independent.
+        # `start`/`end` reached run_grid but did not reach the fetch, so every
+        # window replayed the same bars and produced bit-identical P&L. That
+        # printed as "0 of 20 strategies positive in every window", which reads
+        # as a devastating result and means nothing at all. Identical numbers
+        # across disjoint windows are proof of a broken measurement, not a
+        # finding about the strategies.
+        collapsed = [
+            (sid, nets)
+            for sid, nets, _p, _t in rows
+            if WINDOWS > 1 and len(set(nets)) < WINDOWS
+        ]
+        if collapsed:
+            print(
+                f"ABORT: {len(collapsed)} of {len(rows)} strategies returned "
+                f"identical results across all {WINDOWS} windows."
+            )
+            for sid, nets in collapsed[:5]:
+                print(f"  {sid}: {nets}")
+            print(
+                "\nThe windows are not independent -- the same bars were "
+                "measured more than once. This is a broken measurement, not a "
+                "result about the strategies. Refusing to print a ranking."
+            )
+            await core.shutdown()
+            return 3
+
         print(f"measurements taken: {len(rows)} strategies x {WINDOWS} windows "
               f"= {len(rows) * WINDOWS} numbers")
         ranked = sorted(rows, key=lambda r: -r[2] / max(1, r[3]))
