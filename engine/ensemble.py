@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 WeightMode = Literal["equal", "manual", "risk_parity", "bandit_ucb"]
 
@@ -153,6 +153,8 @@ class EnsembleManager:
 
     def __init__(self, strategy_ids: list[str] | None = None) -> None:
         self._weights: dict[str, float] = {}
+        #: Last computed pairwise correlation, for the operator read-model.
+        self._last_correlation: dict[str, dict[str, float]] = {}
         self.stats = StrategyStats()
         if strategy_ids:
             self.set_equal_weights(strategy_ids)
@@ -217,11 +219,96 @@ class EnsembleManager:
             w = 1.0 / max(1, len(ids))
             weights = {sid: w for sid in ids}
 
-        if apply_corr and mode_l not in {"equal", "manual"} and len(ids) > 1:
+        # Correlation dampening used to be skipped in `equal` and `manual` modes --
+        # and `equal` is the shipped default. That made the diversification
+        # completely unguarded in the configuration operators actually run:
+        # two strategies at rho=0.95 both trade at full size, which is one bet
+        # presented as two. It now applies in every computed mode, including
+        # `equal`. `manual` stays exempt because there the operator stated the
+        # weights deliberately -- but the correlation is still reported, so the
+        # choice is at least visible.
+        if apply_corr and mode_l != "manual" and len(ids) > 1:
             weights = _apply_corr_dampen(weights, self.stats, corr_cap=float(corr_cap))
 
         self._weights = weights
+        self._last_correlation = self.correlation_matrix(ids)
         return dict(self._weights)
+
+    def last_correlation(self) -> dict[str, dict[str, float]]:
+        """Pairwise realised correlation from the most recent rebalance."""
+        return {a: dict(row) for a, row in self._last_correlation.items()}
+
+    def correlation_matrix(
+        self, strategy_ids: Sequence[str] | None = None
+    ) -> dict[str, dict[str, float]]:
+        """Pairwise realised correlation between lineup members.
+
+        Published rather than only acted on. Whether the dampening applies, the
+        operator has to be able to see that five strategies are really one and a
+        half bets -- otherwise "diversified across five strategies" is a claim
+        the system quietly contradicts and never says.
+        """
+        ids = list(strategy_ids) if strategy_ids is not None else list(self.stats._returns)  # noqa: SLF001
+        out: dict[str, dict[str, float]] = {}
+        for a in ids:
+            out[a] = {}
+            for b in ids:
+                if a == b:
+                    out[a][b] = 1.0
+                    continue
+                rho = self.stats.correlation(a, b)
+                out[a][b] = float(rho) if rho is not None else 0.0
+        return out
+
+    def effective_independent_bets(self) -> float:
+        """Rough count of genuinely independent risk sources in the lineup.
+
+        The eigenvalue trace of the correlation matrix -- the effective number of
+        independent bets, in the sense of a PCA. For five strategies all at
+        rho=0.9 this returns about one, which is the number an operator sizing a
+        book actually needs, and which a roster of five hides.
+        """
+        ids = [sid for sid in self.stats._returns if self.stats.count(sid) >= 1]  # noqa: SLF001
+        n = len(ids)
+        if n == 0:
+            return 0.0
+        if n == 1:
+            # A single member is one bet by definition; it needs no correlation
+            # estimate, and demanding one would report "unknown" as if it were
+            # a count.
+            return 1.0
+        # Correlation from a handful of points is arithmetic, not evidence, so
+        # members below the floor are counted as their own independent bets
+        # rather than folded in as if their relationship were known.
+        known = [sid for sid in ids if self.stats.count(sid) >= 3]
+        unknown = [sid for sid in ids if sid not in known]
+        if not known:
+            return float(len(ids))  # nothing measurable yet
+        matrix = self.correlation_matrix(known)
+        try:
+            import numpy as np  # noqa: PLC0415
+
+            cov = np.array(
+                [[matrix[a].get(b, 0.0) for b in known] for a in known], dtype=float
+            )
+            eig = np.linalg.eigvalsh(cov)
+            measured = float(max(0.0, eig.sum() ** 2 / max(1e-12, (eig**2).sum())))
+        except Exception:  # noqa: BLE001 - numpy absent is not an error here
+            # Fall back to the mean pairwise correlation, which is cruder but
+            # still answers "is this lineup diversified?".
+            pairs = [
+                abs(matrix[a][b])
+                for i, a in enumerate(known)
+                for b in known[i + 1 :]
+            ]
+            if not pairs:
+                measured = float(len(known))
+            else:
+                mean_rho = sum(pairs) / len(pairs)
+                measured = float(len(known) / (1.0 + (len(known) - 1) * mean_rho))
+        # Members too thinly observed to correlate are counted conservatively as
+        # independent rather than assumed to duplicate an existing risk.
+        return measured + len(unknown)
 
     def aggregate(self, signals: list[StrategySignal]) -> list[WeightedDecision]:
         by_symbol: dict[str, list[StrategySignal]] = defaultdict(list)

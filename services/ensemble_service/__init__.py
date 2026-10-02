@@ -507,6 +507,14 @@ class EnsembleService(BaseService):
                 "buffered_symbols": list(self._buffer.keys()),
                 "members": self.members_for_ui(),
                 "stats": self.manager.stats.snapshot(self.lineup_ids()),
+                # Diversification, made visible. A roster of five strategies
+                # reads as five bets; when their realised returns correlate it
+                # may be one. This is the number an operator sizing a book
+                # actually needs, and a roster size hides it.
+                "correlation": self.manager.last_correlation(),
+                "effective_independent_bets": (
+                    self.manager.effective_independent_bets()
+                ),
                 "fills_since_rebalance": self._fills_since_rebalance,
                 "regime": self._last_regime,
                 "regime_symbol": self._regime_symbol,
