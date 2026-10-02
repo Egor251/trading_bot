@@ -172,6 +172,9 @@ class OrderManager:
         *,
         mode: str = "paper",
         equity: float = 10_000.0,
+        #: Callable(symbol) -> recent traded notional, used by the liquidity
+        #: gate. Without it the gate has no data and resolves to "allow".
+        volume_feed: Any = None,
         cost_schedule: CostSchedule | None = None,
         instrument_registry: Any | None = None,
         account: str = "default",
@@ -196,6 +199,10 @@ class OrderManager:
         #: price and the realised price still exist.
         self._exec_observations: list[ExecutionObservation] = []
         self._exec_observation_limit = 5000
+        #: Optional callable(symbol) -> recent traded notional, wired by the
+        #: runtime to its candle store. None means "no liquidity data", which
+        #: the risk layer treats as unknown rather than as zero.
+        self._volume_feed: Any = volume_feed
         self._broker_applied_qty: dict[str, float] = {}
         self._broker_applied_notional: dict[str, float] = {}
         self.cost_schedule = cost_schedule or self._legacy_cost_schedule(
@@ -821,6 +828,14 @@ class OrderManager:
                     else self.equity_ex_unrealized
                 ),
                 daily_turnover=float(self._daily_turnover),
+                # Traded notional the risk gate needs to judge whether this
+                # order is a small share of the market. Previously this was
+                # never passed, so the liquidity gate resolved to "allow"
+                # whatever the limit said -- a control that looked like
+                # protection and provided none.
+                average_daily_volume=self._volume_feed(key)
+                if self._volume_feed is not None
+                else None,
             )
         finally:
             if dry_run:

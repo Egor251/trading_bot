@@ -137,6 +137,37 @@ def _publish_runtime_cost_schedule(
         pass
 
 
+def _average_daily_notional_from(candles: Any, *, lookback: int = 30) -> Any:
+        """Build a callable giving recent traded notional per symbol.
+
+        This is the liquidity proxy the system can actually compute today: an
+        order that is a large share of what the market recently traded will
+        cross the book and pay for it, and that is visible without an L2 feed.
+        True book impact still needs the book -- this stops the obvious case, it
+        does not price the fill.
+
+        Returns None rather than 0.0 when there is no history. Zero would read as
+        "no volume", which the risk layer would treat as an infinite ratio, and a
+        fabricated number here becomes a fabricated block.
+        """
+
+        def _volume(symbol: str) -> float | None:
+            stored = candles.bars(symbol)
+            if not stored and ":" in symbol:
+                stored = candles.bars(symbol.split(":", 1)[-1])
+            notionals = [
+                float(bar.close or 0.0) * float(bar.volume or 0.0)
+                for bar in stored
+                if bar.close and bar.close > 0 and bar.volume and bar.volume > 0
+            ]
+            if not notionals:
+                return None
+            window = notionals[-max(1, int(lookback)) :]
+            return sum(window) / len(window)
+
+        return _volume
+
+
 @dataclass
 class TradingRuntime:
     """
@@ -213,10 +244,17 @@ class TradingRuntime:
         # than the rest of its state. Resolve relative paths against the shared
         # data root instead (TRADING_DATA_DIR aware).
         cost_store_path = _resolve_data_path(cfg.get("cost_store_path"), "cost_schedules")
+        # Built before the OrderManager so the liquidity gate can be wired to it.
+        candles = CandleStore(maxlen=maxlen)
         orders = OrderManager(
             risk,
             mode=mode,
             equity=equity,
+            # Give the risk gate the traded-notional data it was written to need.
+            # Without this the liquidity check silently resolves to "allow": no
+            # volume ever reached it, and no ADV limit is configured either, so
+            # a gate that reads like protection provided none.
+            volume_feed=_average_daily_notional_from(candles),
             cost_schedule=schedule,
             instrument_registry=_build_instrument_registry(cfg),
             account=str(cfg.get("account") or "default"),
@@ -286,7 +324,7 @@ class TradingRuntime:
         return cls(
             risk=risk,
             orders=orders,
-            candles=CandleStore(maxlen=maxlen),
+            candles=candles,
             mode=mode,
             protection=protection,
             _state_store=runtime_state_store,
