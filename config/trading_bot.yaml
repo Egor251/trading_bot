@@ -393,6 +393,12 @@ services:
     expected_candle_sec: 60
     freeze_on_data_anomaly: true
     heartbeat_timeout_sec: 45
+    # How often to ask whether every open position still carries a protective
+    # stop. Stop coverage was already a snapshot gauge written for a dashboard
+    # and read by nobody; this is the loop that turns it into an incident.
+    # On a venue outage the audit deliberately does not try to flatten -- the
+    # venue being unreachable is why a market order cannot be placed.
+    protection_audit_sec: 30
     journal_path: data/ops/trades.jsonl
     telegram_bot_token: ''
     telegram_chat_id: ''

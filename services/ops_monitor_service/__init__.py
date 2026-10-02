@@ -72,6 +72,9 @@ class OpsMonitorService(BaseService):
         self._day_key: str = ""
         self._diagnose_every_sec: float = 60.0
         self._last_diagnose_ts: float = 0.0
+        #: How often to ask whether every open position still carries a stop.
+        self._protection_audit_sec: float = 30.0
+        self._last_protection_audit_ts: float = 0.0
 
     def default_config(self) -> dict[str, Any]:
         return {
@@ -142,6 +145,9 @@ class OpsMonitorService(BaseService):
         self._clean_bars = 0
         self._frozen_for_data = False
         self._diagnose_every_sec = float(self.config.get("diagnose_every_sec") or 60.0)
+        self._protection_audit_sec = float(
+            self.config.get("protection_audit_sec") or 30.0
+        )
         # The Prometheus exporter existed but nothing imported it, so all ten
         # alerts in ops/prometheus/alerts.yml could never fire.
         from engine.observability import OperationsObservability
@@ -216,6 +222,12 @@ class OpsMonitorService(BaseService):
                     if runtime is not None and not runtime.halted:
                         runtime.halt("ops_watchdog_dead_component")
             now = time.time()
+            if now - self._last_protection_audit_ts >= self._protection_audit_sec:
+                self._last_protection_audit_ts = now
+                try:
+                    await self.audit_position_protection()
+                except Exception:
+                    pass
             if now - self._last_diagnose_ts >= self._diagnose_every_sec:
                 self._last_diagnose_ts = now
                 try:
@@ -516,6 +528,55 @@ class OpsMonitorService(BaseService):
             "live_pnl": live_pnl,
             "ensemble": applied,
             "quarantine": quarantined,
+        }
+
+    async def audit_position_protection(self) -> dict[str, Any]:
+        """Report, loudly, any open position that carries no protective slice.
+
+        Stop coverage was already a gauge on the runtime snapshot -- a number for
+        a dashboard, checked by nobody. A position without a stop is the single
+        largest unbounded loss available to this system, so it is treated here as
+        an incident rather than a metric.
+
+        On a venue outage this deliberately does not try to close anything: the
+        venue being unreachable is exactly why a market order cannot be placed,
+        and pretending otherwise would convert a known exposure into an
+        unverified one. What it can do is make the gap unmissable and durable.
+        """
+        runtime = get_runtime(self.core)
+        if runtime is None:
+            return {"skipped": "no_runtime"}
+        try:
+            open_keys = list(runtime.open_position_keys())
+        except Exception:  # noqa: BLE001
+            return {"skipped": "runtime_unavailable"}
+        if not open_keys:
+            return {"checked": 0, "unprotected": [], "coverage": 1.0}
+
+        protection = getattr(runtime, "protection", None)
+        if protection is None:
+            return {"skipped": "no_protection_layer"}
+        unprotected = [
+            key for key in open_keys if not protection.has_protection(key)
+        ]
+        coverage = (len(open_keys) - len(unprotected)) / len(open_keys)
+
+        if unprotected and self.alerts is not None:
+            alert = self.alerts.emit(
+                "unprotected_position",
+                f"{len(unprotected)} of {len(open_keys)} positions carry no stop",
+                severity=AlertSeverity.CRITICAL,
+                details={
+                    "unprotected": unprotected,
+                    "coverage": coverage,
+                    "total_costs_note": "coverage is stop-bearing positions / open",
+                },
+            )
+            await self._publish_alert(alert)
+        return {
+            "checked": len(open_keys),
+            "unprotected": unprotected,
+            "coverage": coverage,
         }
 
     async def _apply_quarantine(self, ens: Any) -> dict[str, Any]:
