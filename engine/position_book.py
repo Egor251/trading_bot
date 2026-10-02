@@ -131,15 +131,24 @@ class PositionBook:
             return IntentDecision(False, reason="side_invalid")
 
         net = self.net_qty(symbol)
+        # Reduce-only is a *strategy-scoped* operation. Using the cross-strategy
+        # net made protective exits structurally unable to fire in a hedged book
+        # (strategy A long 1, strategy B short 1 -> net == 0 -> every exit
+        # rejected "reduce_only_flat" while real broker exposure stayed open),
+        # and let one strategy close another strategy's slice.
+        own = self.strategy_qty(strategy_id, symbol)
         if reduce_only:
-            if net == ZERO:
+            # Fall back to the cross-strategy net only when this strategy has no
+            # slice at all — e.g. an operator-driven flatten of the whole book.
+            reference = own if own != ZERO else net
+            if reference == ZERO:
                 return IntentDecision(False, reason="reduce_only_flat")
             # Must move toward flat.
-            if net > ZERO and signed >= ZERO:
+            if reference > ZERO and signed >= ZERO:
                 return IntentDecision(False, reason="reduce_only_wrong_side")
-            if net < ZERO and signed <= ZERO:
+            if reference < ZERO and signed <= ZERO:
                 return IntentDecision(False, reason="reduce_only_wrong_side")
-            max_close = abs(net)
+            max_close = abs(reference)
             if qty > max_close:
                 return IntentDecision(
                     True,

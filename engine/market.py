@@ -9,6 +9,11 @@ from typing import Any, AsyncIterator, Protocol, runtime_checkable
 from .execution import ExecutionPort as BrokerExecutionPort
 from .order import OrderIntent, OrderResult
 
+#: Re-exported for the market-adapter contract. `ruff --fix` previously removed
+#: this import as "unused" and broke `tests/test_universe.py`, which imports
+#: ``BrokerExecutionPort`` from here.
+__all__ = ["BrokerExecutionPort", "candle_to_market_payload"]
+
 
 @dataclass(slots=True)
 class Candle:
@@ -103,6 +108,15 @@ def candle_to_market_payload(
         ),
         "date": ts.strftime("%Y-%m-%d"),
         "time": ts.strftime("%H:%M:%S"),
+        # Exchange timestamp as a number. `DataGapDetector` used to fall back to
+        # `time.time()` because only `date`/`time` strings were published, so it
+        # measured the health of the *polling loop* rather than of the data:
+        # normal network jitter produced a "gap", the ops monitor froze risk, and
+        # with no auto-resume the bot stayed halted — 3,536 `risk.reject{stage:
+        # halted, reason: market_data_gap}` in one month, 0 orders placed.
+        # With `ts` present the detector sees real bar spacing, and
+        # "last candle age" becomes computable.
+        "ts": ts.timestamp(),
         "open": float(candle.open),
         "high": float(candle.high),
         "low": float(candle.low),

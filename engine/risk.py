@@ -120,9 +120,13 @@ class RiskManager:
         self._halt_reason = ""
 
     def check_daily_loss(
-        self, day_start_equity: float, equity: float
+        self,
+        day_start_equity: float,
+        equity: float,
+        *,
+        limits: "RiskLimits | None" = None,
     ) -> RiskDecision:
-        limit = self.limits.max_daily_loss_pct
+        limit = (limits or self.limits).max_daily_loss_pct
         if limit is None:
             return RiskDecision(True)
         if day_start_equity <= 0 or not self._finite(day_start_equity, equity):
@@ -133,8 +137,14 @@ class RiskManager:
             return RiskDecision(False, reason=self._halt_reason)
         return RiskDecision(True)
 
-    def check_turnover(self, turnover: float, equity: float) -> RiskDecision:
-        limit = self.limits.max_daily_turnover_pct
+    def check_turnover(
+        self,
+        turnover: float,
+        equity: float,
+        *,
+        limits: "RiskLimits | None" = None,
+    ) -> RiskDecision:
+        limit = (limits or self.limits).max_daily_turnover_pct
         if limit is None:
             return RiskDecision(True)
         if equity <= 0 or turnover < 0 or not self._finite(turnover, equity):
@@ -150,9 +160,17 @@ class RiskManager:
         *,
         now: float | None = None,
         record: bool = False,
+        limits: "RiskLimits | None" = None,
     ) -> RiskDecision:
-        """Check an injected count or the manager's local rolling counter."""
-        limit = self.limits.max_orders_per_minute
+        """Check an injected count or the manager's local rolling counter.
+
+        With no injected count the check **records** the current order by
+        default. The previous version only recorded when ``record=True`` was
+        passed explicitly, and nothing in production ever passed it — so
+        ``max_orders_per_minute`` could never reject anything and a runaway
+        strategy loop was not throttled.
+        """
+        limit = (limits or self.limits).max_orders_per_minute
         if limit is None:
             return RiskDecision(True)
         if orders_in_last_minute is not None:
@@ -166,11 +184,17 @@ class RiskManager:
             cutoff = current - 60.0
             while self._order_times and self._order_times[0] <= cutoff:
                 self._order_times.popleft()
-            count = len(self._order_times)
-            if record and count < limit:
+            if len(self._order_times) >= limit:
+                return RiskDecision(
+                    False, reason=f"order_rate={len(self._order_times)}/min"
+                )
+            if record:
+                # Record the order under test. An injected count is a different
+                # window's data, so it must not feed the local one, and a
+                # dry-run preview must not consume budget.
                 self._order_times.append(current)
-                count += 1
-        if count >= limit and not (record and count == limit):
+            return RiskDecision(True)
+        if count >= limit:
             return RiskDecision(False, reason=f"order_rate={count}/min")
         return RiskDecision(True)
 
@@ -265,8 +289,9 @@ class RiskManager:
         data_age_seconds: float | None = None,
         data_timestamp: float | None = None,
         now: float | None = None,
+        limits: "RiskLimits | None" = None,
     ) -> RiskDecision:
-        limit = self.limits.max_data_age_seconds
+        limit = (limits or self.limits).max_data_age_seconds
         if limit is None:
             return RiskDecision(True)
         if data_age_seconds is None:
@@ -314,6 +339,7 @@ class RiskManager:
     def check_order(
         self,
         *,
+        dry_run: bool = False,
         equity: float,
         symbol: str,
         notional: float,
@@ -334,36 +360,47 @@ class RiskManager:
     ) -> RiskDecision:
         if self._halted and not reduces_risk:
             return RiskDecision(False, reason=getattr(self, "_halt_reason", "halted"))
-        if equity <= 0:
-            return RiskDecision(False, reason="equity<=0")
         requested_delta = abs(notional)
         # Exits and other explicitly risk-reducing orders must remain available
-        # during stale feeds, limit breaches, and emergency halts.
+        # during stale feeds, limit breaches, emergency halts — and when the
+        # account is already wiped. Checking ``equity <= 0`` first made a
+        # zero-equity book impossible to flatten: the closing order was rejected
+        # with the same "equity<=0" that described the situation it would fix.
         if reduces_risk:
             return RiskDecision(True, scaled_size=requested_delta)
+        if equity <= 0:
+            return RiskDecision(False, reason="equity<=0")
 
         limits = self.limits_for(strategy_id)
         # Enabled advanced gates are fail-closed when the required metric is absent.
+        # Each check receives the *per-strategy* limits: `set_strategy_overrides`
+        # accepts max_daily_loss_pct / max_daily_turnover_pct / max_orders_per_minute
+        # and the UI writes them, but the checks used to read the global limits, so
+        # tightening them per strategy was accepted, persisted, and never enforced.
         advanced = (
-            self.check_daily_loss(day_start_equity, equity)
+            self.check_daily_loss(day_start_equity, equity, limits=limits)
             if day_start_equity is not None
             else self._required(limits.max_daily_loss_pct, "daily_loss_unknown")
         )
         if not advanced.allowed:
             return advanced
         advanced = (
-            self.check_turnover(daily_turnover + abs(notional), equity)
+            self.check_turnover(
+                daily_turnover + abs(notional), equity, limits=limits
+            )
             if daily_turnover is not None
             else self._required(limits.max_daily_turnover_pct, "turnover_unknown")
         )
         if not advanced.allowed:
             return advanced
         # Order-rate uses the injected count when provided; otherwise the
-        # manager's local rolling window (never fail-closed as "unknown").
+        # manager's local rolling window, which also *records* this order.
+        # A dry-run preview must not consume rate-limit budget.
         if orders_in_last_minute is not None:
-            advanced = self.check_order_rate(orders_in_last_minute)
-        elif self.limits.max_orders_per_minute is not None:
-            advanced = self.check_order_rate()
+            advanced = self.check_order_rate(orders_in_last_minute, limits=limits)
+        elif limits.max_orders_per_minute is not None:
+            advanced = self.check_order_rate(limits=limits, record=not dry_run)
+            # `record=False` still *checks*; it just does not consume budget.
         else:
             advanced = RiskDecision(True)
         if not advanced.allowed:
@@ -384,7 +421,9 @@ class RiskManager:
         )
         if not advanced.allowed:
             return advanced
-        advanced = self.check_stale_data(data_age_seconds=data_age_seconds)
+        advanced = self.check_stale_data(
+            data_age_seconds=data_age_seconds, limits=limits
+        )
         if not advanced.allowed:
             return advanced
 

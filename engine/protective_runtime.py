@@ -250,6 +250,22 @@ class ProtectiveLayer:
             },
         }
 
+    def has_protection(self, symbol: str) -> bool:
+        """True when at least one live protective slice exists for *symbol*."""
+        target = str(symbol or "").strip()
+        if not target:
+            return False
+        tail = target.split(":")[-1]
+        for slice_ in self.ledger.all():
+            if getattr(slice_, "state", None) is ExitState.CLOSED:
+                continue
+            if float(getattr(slice_, "remaining_quantity", 0.0) or 0.0) <= 0:
+                continue
+            sym = str(getattr(slice_, "symbol", "") or "")
+            if sym == target or sym.split(":")[-1] == tail:
+                return True
+        return False
+
     @classmethod
     def recover(cls, data: Mapping[str, Any]) -> "ProtectiveLayer":
         layer = cls(

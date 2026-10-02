@@ -5,6 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 
+def _first_number(*values: Any) -> float | None:
+    """First value that is present *and* numeric.
+
+    ``0`` and ``"0"`` are legitimate values, not "missing" — which is exactly
+    what an ``or`` chain gets wrong.
+    """
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _side_sign(side: str) -> int:
     s = str(side or "").strip().lower()
     if s in {"buy", "long", "b"}:
@@ -48,22 +64,29 @@ def normalize_fill_row(row: dict[str, Any]) -> dict[str, Any] | None:
         or row.get("side")
         or ""
     )
-    try:
-        qty = float(
-            order.get("filled_qty")
-            or payload.get("quantity")
-            or order.get("quantity")
-            or row.get("quantity")
-            or 0
-        )
-        price = float(
-            order.get("avg_price")
-            or payload.get("price")
-            or order.get("price")
-            or row.get("price")
-            or 0
-        )
-    except (TypeError, ValueError):
+    # `or` treats 0 / "0" as absent, so a *rejected or cancelled* order
+    # (filled_qty == 0, quantity == 10) fell through to `quantity` and was
+    # booked as a 10-unit fill. Durable execution.result payloads use
+    # `quantity`/`price` rather than `filled_qty`, so every row took that
+    # fallback path and operator/AI PnL reports showed trades that never
+    # happened. Coalesce on "is not None" and require a real fill.
+    qty = _first_number(order.get("filled_qty"), payload.get("filled_qty"))
+    price = _first_number(
+        order.get("avg_price"), order.get("average_fill_price")
+    )
+    if qty is None or price is None:
+        status = str(
+            order.get("status") or order.get("state") or payload.get("status") or ""
+        ).lower()
+        if status and status not in {"filled", "partial", "partially_filled"}:
+            return None
+        qty = _first_number(payload.get("quantity"), row.get("quantity"))
+        price = _first_number(payload.get("price"), row.get("price"))
+    if qty is None or price is None:
+        return None
+    if qty <= 0 or price <= 0:
+        return None
+    if qty is None or price is None:
         return None
     if qty <= 0 or price <= 0:
         return None

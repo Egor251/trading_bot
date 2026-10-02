@@ -170,18 +170,31 @@ def extract_result_cost(result: Any, runtime: Any = None) -> float | None:
             except (TypeError, ValueError):
                 pass
     orders = getattr(runtime, "orders", None) if runtime is not None else None
-    ledger = getattr(orders, "fills_ledger", None) if orders is not None else None
-    if ledger:
+    # The attribute is `fill_ledger` (singular). Reading `fills_ledger` always
+    # returned None, so every `execution.result` event carried `cost: null` and
+    # the durable journal had no per-trade cost — silently deflating
+    # expectancy in research and the cost columns in the UI.
+    ledger = getattr(orders, "fill_ledger", None)
+    if not ledger:
+        return None
+    # Prefer the fill for *this* order; `list(ledger)[-1]` attributed whichever
+    # fill happened to be last, which is a different trade under concurrency.
+    client_id = str(getattr(result, "client_id", "") or "")
+    candidates = [
+        item
+        for item in ledger
+        if not client_id or str(getattr(item, "order_id", "") or "") == client_id
+    ]
+    for item in reversed(candidates or list(ledger)):
         try:
-            last = list(ledger)[-1]
-            data = last.to_dict() if hasattr(last, "to_dict") else dict(last)
-            costs = data.get("costs") if isinstance(data.get("costs"), dict) else {}
-            if costs.get("total") not in (None, ""):
-                return float(costs["total"])
-            if data.get("total_cost") not in (None, ""):
-                return float(data["total_cost"])
+            data = item.to_dict() if hasattr(item, "to_dict") else dict(item)
         except Exception:
-            return None
+            continue
+        costs = data.get("costs") if isinstance(data.get("costs"), dict) else {}
+        if costs.get("total") not in (None, ""):
+            return float(costs["total"])
+        if data.get("total_cost") not in (None, ""):
+            return float(data["total_cost"])
     return None
 
 

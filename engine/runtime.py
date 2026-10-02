@@ -18,6 +18,7 @@ from .execution import (
 )
 from .instruments import InstrumentRegistry, InstrumentSpec
 from .order import OrderIntent, OrderManager, OrderResult, OrderSide, OrderStatus
+from .paths import data_dir, data_path
 from .protection import ExitState, PositionSide, StrategyRiskProfile
 from .protective_runtime import ProtectiveLayer
 from .insurance import InsuranceGuard, limits_from_preset, resolve_preset
@@ -40,6 +41,12 @@ _OPEN_BROKER_STATES = {
     "cancel_pending",
     "unknown",
 }
+
+
+def _log():
+    import logging
+
+    return logging.getLogger("runtime")
 
 
 def _best_insurance(
@@ -100,6 +107,25 @@ def _resolve_cost_schedule(cfg: dict[str, Any]) -> CostSchedule | None:
     return None
 
 
+def _resolve_data_path(configured: Any, *default_parts: str) -> str:
+    """Resolve a configured data path against the shared data root.
+
+    A relative ``data/...`` value used to be interpreted against the process CWD.
+    Anything under ``data/`` is now re-anchored on :func:`engine.paths.data_dir`,
+    which honours ``TRADING_DATA_DIR``. Absolute paths are left alone.
+    """
+    raw = str(configured or "").strip()
+    if not raw:
+        return str(data_path(*default_parts))
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return raw
+    parts = candidate.parts
+    if parts and parts[0] == "data":
+        return str(data_dir().joinpath(*parts[1:]))
+    return raw
+
+
 def _publish_runtime_cost_schedule(
     store_path: str | Path | None, schedule: CostSchedule | None
 ) -> None:
@@ -142,6 +168,9 @@ class TradingRuntime:
     phantom_timeline: PhantomTimeline | None = None
     sizing_config: SizingConfig | None = None
     exit_pending_timeout_sec: float = 30.0
+    #: Durable snapshot of the book + protective layer. Injected by
+    #: `from_config`; created lazily otherwise.
+    _state_store: Any | None = None
     _halt_reason: str = ""
 
     @classmethod
@@ -179,7 +208,11 @@ class TradingRuntime:
         schedule = _resolve_cost_schedule(cfg)
         if schedule is not None and not isinstance(schedule, CostSchedule):
             raise TypeError("trading.cost_schedule must be a CostSchedule or mapping")
-        cost_store_path = str(cfg.get("cost_store_path") or "")
+        # A bare "data/..." string here resolved against the process CWD, so a
+        # differently-started engine published its cost schedule somewhere other
+        # than the rest of its state. Resolve relative paths against the shared
+        # data root instead (TRADING_DATA_DIR aware).
+        cost_store_path = _resolve_data_path(cfg.get("cost_store_path"), "cost_schedules")
         orders = OrderManager(
             risk,
             mode=mode,
@@ -199,6 +232,17 @@ class TradingRuntime:
             if isinstance(protection_state, dict)
             else ProtectiveLayer()
         )
+        # When the config carries no protection state, fall back to the durable
+        # snapshot. Previously `protection_state` was only ever *read* — nothing
+        # ever wrote it — so this branch never fired and every restart started
+        # with a naked book.
+        runtime_state_store = None
+        if not isinstance(protection_state, dict):
+            from .state_store import StateStore
+
+            runtime_state_store = StateStore(
+                _resolve_data_path(cfg.get("state_path"), "state", "runtime.json")
+            )
         profiles: dict[str, StrategyRiskProfile] = {}
         for strategy_id, raw_profile in (cfg.get("strategy_profiles") or {}).items():
             if isinstance(raw_profile, StrategyRiskProfile):
@@ -245,6 +289,7 @@ class TradingRuntime:
             candles=CandleStore(maxlen=maxlen),
             mode=mode,
             protection=protection,
+            _state_store=runtime_state_store,
             execution_router=cfg.get("execution_router"),
             reconciliation=cfg.get("reconciliation"),
             venue_by_class={
@@ -269,6 +314,36 @@ class TradingRuntime:
                 cfg.get("exit_pending_timeout_sec") or 30.0
             ),
         )
+
+    def recover_from_disk(self) -> dict[str, Any] | None:
+        """Rehydrate the protective layer from the durable snapshot.
+
+        Called once after construction. Returns the recovered snapshot so the
+        caller can decide whether to block new risk until reconciliation has run.
+        """
+        if self._state_store is None:
+            return None
+        snapshot = self.restored_book()
+        if not isinstance(snapshot, dict):
+            return None
+        protection = snapshot.get("protection")
+        if not isinstance(protection, dict):
+            return None
+        try:
+            self.protection = ProtectiveLayer.recover(protection)
+        except Exception:
+            _log().exception("failed to recover protective state; starting flat")
+            return None
+        positions = snapshot.get("positions") or {}
+        _log().critical(
+            "recovered %d protective slice(s) and %d position(s) from %s. "
+            "Broker positions are authoritative — reconcile before opening new "
+            "risk.",
+            len((protection.get("ledger") or {}).get("slices") or []),
+            len(positions),
+            self.state_path,
+        )
+        return snapshot
 
     @property
     def halted(self) -> bool:
@@ -782,6 +857,215 @@ class TradingRuntime:
             slice_id, profile, self._protection_bars(symbol)
         )
 
+    def venue_for(self, symbol: str) -> str:
+        """Resolve the venue for an exposure key (``CLASS:SYMBOL``) or symbol."""
+        text = str(symbol or "")
+        class_code = text.split(":")[0] if ":" in text else ""
+        return self.venue_by_class.get(
+            class_code.upper(),
+            "ccxt"
+            if class_code.upper() in {"CRYPTO", "SPOT"}
+            else "alpaca"
+            if class_code.upper() == "US"
+            else "quik",
+        )
+
+    def account_for(self, symbol: str) -> str:
+        return self.account_by_venue.get(self.venue_for(symbol), "default")
+
+    def native_stop_plan(self, slice_id: str) -> dict[str, Any] | None:
+        """The stop to mirror at the broker for *slice_id*, or ``None``.
+
+        Returns ``{side, trigger_price, quantity, venue, account}`` for the
+        tightest stop that has a trigger price. The in-memory rules are
+        evaluated only by ``process_bar*`` inside this process, so a crash, a
+        restart or a wedged engine leaves the position naked. Every one of the 63
+        stored Quik orders has ``stop_price=null`` and ``filled_quantity=0``
+        precisely because nothing ever placed one.
+        """
+        rules = [
+            rule
+            for rule in self.protection.stops.for_slice(slice_id)
+            if rule.trigger_price is not None
+        ]
+        position = self.protection.ledger.get(slice_id)
+        if not rules or position is None:
+            return None
+        side = position.side
+        tightest = min(
+            rules,
+            key=lambda r: (
+                Decimal(str(r.trigger_price))
+                if side is PositionSide.LONG
+                else -Decimal(str(r.trigger_price))
+            ),
+        )
+        return {
+            "slice_id": slice_id,
+            "symbol": str(getattr(position, "symbol", "") or ""),
+            "side": (
+                BrokerOrderSide.SELL if side is PositionSide.LONG else BrokerOrderSide.BUY
+            ),
+            "trigger_price": Decimal(str(tightest.trigger_price)),
+            "quantity": Decimal(str(position.remaining_quantity)),
+            "venue": self.venue_for(str(getattr(position, "symbol", "") or "")),
+            "account": self.account_for(str(getattr(position, "symbol", "") or "")),
+        }
+
+    async def place_native_stop(self, slice_id: str) -> bool:
+        """Mirror a protective stop at the broker. Returns True when placed.
+
+        Fire-and-forget safe: any failure is logged and the in-memory rule stays
+        in place, so this degrades to the previous client-side-only behaviour
+        rather than leaving the slice unprotected.
+        """
+        plan = self.native_stop_plan(slice_id)
+        if plan is None or self.execution_router is None:
+            return False
+        try:
+            capabilities = self.execution_router.capabilities(
+                str(plan["venue"]), str(plan["account"])
+            )
+        except KeyError:
+            return False
+        if not getattr(capabilities, "native_stop", False):
+            return False
+        client_id = f"stop:{slice_id}"
+        order = BrokerOrder(
+            symbol=str(plan["symbol"] or slice_id.split(":")[-1]),
+            side=plan["side"],
+            quantity=plan["quantity"],
+            venue=str(plan["venue"]),
+            account=str(plan["account"]),
+            client_id=client_id,
+            idempotency_key=client_id,
+            order_type="stop",
+            stop_price=plan["trigger_price"],
+            oco_group_id=f"oco:{slice_id}",
+            raw={"reduce_only": True, "slice_id": slice_id, "native_stop": True},
+        )
+        try:
+            await self.execution_router.place(order)
+        except Exception:
+            _log().exception("native stop placement failed for %s", slice_id)
+            return False
+        _log().info(
+            "placed native stop %s @ %s for %s units of %s",
+            client_id,
+            plan["trigger_price"],
+            plan["quantity"],
+            slice_id,
+        )
+        return True
+
+    # -- durable protection state ------------------------------------------
+    #
+    # The protective layer used to live only in memory: `ProtectiveLayer.snapshot()`
+    # was never written anywhere, and `OrderManager.positions` / `fill_ledger` /
+    # `peak_equity` were process-local too. A restart therefore left a real broker
+    # position with *zero* protective orders and an empty local ledger, so the
+    # restarted bot computed gross_exposure == 0, believed it was flat, and opened
+    # fresh risk on top of the live exposure. All 63 stored Quik orders have
+    # `stop_price=null` and `filled_quantity=0` for exactly this reason.
+
+    @property
+    def state_path(self) -> Path:
+        if self._state_store is not None:
+            return self._state_store.path
+        from .paths import data_path
+
+        return data_path("state", "runtime.json")
+
+    def _state_store_or_create(self) -> Any:
+        if self._state_store is None:
+            from .state_store import StateStore
+
+            self._state_store = StateStore(self.state_path)
+        return self._state_store
+
+    def persist_protection_state(self) -> bool:
+        """Atomically publish the book + protective layer. Returns success.
+
+        Called after every fill, exit fill and stop change. Failure is logged and
+        swallowed: losing durability must not abort a trade that already reached
+        the broker, but it is surfaced so the gap is visible.
+        """
+        store = self._state_store_or_create()
+        try:
+            orders_payload: dict[str, Any] = {}
+            for key, position in self.orders.positions.items():
+                if abs(float(position.quantity)) <= 1e-12:
+                    continue
+                orders_payload[key] = {
+                    "quantity": float(position.quantity),
+                    "avg_price": float(position.avg_price),
+                    "mark_price": float(position.mark_price),
+                    "realized_pnl": float(position.realized_pnl),
+                    "contract_multiplier": float(position.contract_multiplier),
+                    "currency": str(position.currency),
+                }
+            store.save(
+                {
+                    "mode": self.mode,
+                    "protection": self.protection.snapshot(),
+                    "positions": orders_payload,
+                    "equity": float(self.orders.equity),
+                    "peak_equity": float(self.orders.peak_equity),
+                    "starting_equity": float(self.orders.starting_equity),
+                    "pinned_keys": sorted(self.pinned_keys),
+                    "halted": self.halted,
+                    "halt_reason": self._halt_reason,
+                },
+                label="runtime",
+            )
+            return True
+        except Exception:
+            _log().exception("failed to persist runtime/protection state")
+            return False
+
+    def restored_book(self) -> dict[str, Any] | None:
+        """Read the last durable snapshot, or ``None`` if there is none."""
+        store = self._state_store_or_create()
+        try:
+            return store.load()
+        except Exception:
+            return None
+
+    def _recover_protection(self, configured: Any) -> None:
+        """Restore protective slices recovered from disk.
+
+        Only *protective* state is restored. Rehydrating the position book from a
+        local snapshot is a different (and unsafe) operation — the authoritative
+        positions live at the broker, and the durable order store plus
+        reconciliation are the right inputs for that. What is restored here is the
+        set of stops the engine believed were live, so that a restarted process
+        does not silently claim a naked position is protected.
+        """
+        source = configured if isinstance(configured, dict) else None
+        if source is None:
+            snapshot = self.restored_book()
+            if isinstance(snapshot, dict) and isinstance(
+                snapshot.get("protection"), dict
+            ):
+                source = snapshot["protection"]
+                recovered_positions = snapshot.get("positions") or {}
+                if recovered_positions:
+                    _log().critical(
+                        "recovered %d position(s) and %d protective slice(s) from "
+                        "%s. The broker is the authority: reconcile before "
+                        "opening new risk.",
+                        len(recovered_positions),
+                        len((source.get("ledger") or {}).get("slices") or []),
+                        self.state_path,
+                    )
+        if not isinstance(source, dict):
+            return
+        try:
+            self.protection = ProtectiveLayer.recover(source)
+        except Exception:
+            _log().exception("failed to recover protective state; starting flat")
+            self.protection = ProtectiveLayer()
+
     def _attribute_fill(self, intent: OrderIntent, result: OrderResult) -> None:
         if result.status not in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
             return
@@ -842,6 +1126,9 @@ class TradingRuntime:
                 strategy_id=intent.strategy_id or "unknown",
                 symbol=intent.exposure_key,
             )
+        # Every book change is a point where a crash would leave the durable
+        # state describing a different world than the broker.
+        self.persist_protection_state()
 
     def _resolve_atr(self, *, ticker: str, class_code: str) -> float | None:
         cfg = self.sizing_config
@@ -1270,6 +1557,23 @@ class TradingRuntime:
         if risk_reject is not None:
             return risk_reject
 
+        # The reconciliation gate must apply to *both* execution paths. It used to
+        # sit inside the `durable_route` branch, so whenever `capabilities()` raised
+        # KeyError (broker client not attached — i.e. exactly while the link is
+        # flapping) execution fell through to the legacy broker path with no gate
+        # at all, and an active CASH_BREAK / BROKER_ERROR block was ignored.
+        if self.reconciliation is not None and not intent.reduce_only:
+            try:
+                self.reconciliation.assert_new_risk_allowed()
+            except Exception as exc:
+                result = OrderResult(
+                    client_id=intent.client_id,
+                    status=OrderStatus.REJECTED,
+                    reason=str(exc),
+                )
+                self.orders.history.append(result)
+                return result
+
         durable_route = False
         if self.execution_router is not None:
             try:
@@ -1278,17 +1582,6 @@ class TradingRuntime:
             except KeyError:
                 durable_route = False
         if durable_route and self.execution_router is not None:
-            if self.reconciliation is not None and not intent.reduce_only:
-                try:
-                    self.reconciliation.assert_new_risk_allowed()
-                except Exception as exc:
-                    result = OrderResult(
-                        client_id=intent.client_id,
-                        status=OrderStatus.REJECTED,
-                        reason=str(exc),
-                    )
-                    self.orders.history.append(result)
-                    return result
             durable = BrokerOrder(
                 symbol=intent.symbol,
                 side=(
@@ -1363,7 +1656,27 @@ class TradingRuntime:
                 self.pinned_keys.add(intent.exposure_key)
             else:
                 self.pinned_keys.discard(intent.exposure_key)
+        # Mirror the protective stop at the broker. The in-memory rule only lives
+        # as long as this process, so without this every entry is naked the moment
+        # the engine restarts, crashes or wedges — and a restart left the bot
+        # believing it held no positions at all.
+        if result.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
+            for slice_id in self._slices_for_exposure(intent.exposure_key):
+                await self.place_native_stop(slice_id)
+            self.persist_protection_state()
         return result
+
+    def _slices_for_exposure(self, exposure_key: str) -> tuple[str, ...]:
+        """Open slice ids matching an exposure key, in stable order."""
+        target = str(exposure_key or "")
+        tail = target.split(":")[-1]
+        return tuple(
+            slice_.slice_id
+            for slice_ in self.protection.ledger.all()
+            if getattr(slice_, "state", None) is not ExitState.CLOSED
+            and float(getattr(slice_, "remaining_quantity", 0.0) or 0.0) > 0
+            and str(getattr(slice_, "symbol", "")) in {target, tail}
+        )
 
     def snapshot(self, *, ohlc_limit: int = 0) -> dict[str, Any]:
         return {
@@ -1420,6 +1733,59 @@ class TradingRuntime:
             ),
         }
 
+    def publish_metrics(self) -> None:
+        """Feed the Prometheus gauges the alert rules in ops/ actually read.
+
+        The exporter existed and all ten alerts had matching metric names, but
+        nothing ever called this, so the alerts could not fire — including
+        ``trading_reconciliation_ok``, whose incident has been persisted in the
+        order store since 2026-07-29. Called from the UI bridge snapshot loop.
+        """
+        try:
+            obs = getattr(self.core, "operations_observability", None)
+            if obs is None:
+                return
+            equity = float(self.orders.equity or 0.0)
+            peak = float(self.orders.peak_equity or equity)
+            drawdown = max(0.0, (peak - equity) / peak) if peak > 0 else 0.0
+            obs.drawdown.set(drawdown, {"scope": "portfolio"})
+            obs.broker_up.set(
+                1.0 if self.broker is not None else 0.0,
+                {"broker": str(getattr(self, "venue", "") or "default")},
+            )
+            obs.reconcile_ok.set(
+                1.0
+                if (self.reconciliation is not None and not self.reconciliation.new_risk_blocked)
+                else 0.0,
+                {"account": self.orders.account},
+            )
+            # Stop coverage: fraction of open positions that carry a live
+            # protective slice. With no broker-native stops (see ProtectiveLayer)
+            # this is the honest measure of how much of the book is unprotected.
+            open_keys = set(self.open_position_keys())
+            if open_keys:
+                protected = {
+                    key
+                    for key in open_keys
+                    if self.protection.has_protection(key)
+                }
+                obs.stop_coverage.set(
+                    len(protected) / len(open_keys), {"account": self.orders.account}
+                )
+            else:
+                obs.stop_coverage.set(1.0, {"account": self.orders.account})
+            # Orders whose broker state is unknowable. This is the signal that
+            # reconciliation is overdue: the send may or may not have reached the
+            # venue, so neither "no position" nor "filled" can be assumed.
+            unknown = sum(
+                1
+                for row in self.orders.history
+                if getattr(row, "status", None) is OrderStatus.UNKNOWN
+            )
+            obs.unknown_orders.set(unknown, {"account": self.orders.account})
+        except Exception:  # noqa: BLE001 - metrics must never break trading
+            pass
+
     def protective_instructions(
         self,
         *,
@@ -1450,8 +1816,13 @@ class TradingRuntime:
         """If a protective exit never got a fill, free the EXIT_PENDING reservation."""
         if result.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
             return
-        if result.status == OrderStatus.ACCEPTED:
+        if result.status in {OrderStatus.ACCEPTED, OrderStatus.UNKNOWN}:
             # Live path: keep reservation until fill or stale-timeout recovery.
+            # UNKNOWN is grouped with ACCEPTED deliberately. The send failed in a
+            # way that leaves the broker's state unknowable, so the protective
+            # exit may well be live; releasing the reservation here would let the
+            # layer book a second exit against the same quantity and, worse,
+            # treat a still-protected slice as naked.
             return
         try:
             self.protection.cancel_exit(

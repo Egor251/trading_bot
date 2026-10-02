@@ -50,6 +50,14 @@ class TradingRuntimeService(BaseService):
         self.runtime = TradingRuntime.from_config(trading_cfg)
         setattr(self.core, "trading", self.runtime)
         self._attach_execution_handles()
+        # Rehydrate the protective layer from disk. Without this a restart began
+        # with a naked book: `protection_state` was only ever read, never written,
+        # so the durable snapshot was ignored and the engine came up believing it
+        # held no positions while the broker held a real one.
+        try:
+            self.recovered_state = self.runtime.recover_from_disk()
+        except Exception:
+            self.recovered_state = None
 
     def _attach_execution_handles(self) -> None:
         if self.runtime is None:
