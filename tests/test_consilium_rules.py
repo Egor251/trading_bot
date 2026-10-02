@@ -83,12 +83,27 @@ async def _ensemble_publishes_without_direct_fill() -> None:
             },
         )
     )
-    await asyncio.sleep(0.12)
+    await _await_event(published, "ensemble.decision")
     types = [e.event_type for e in published]
-    assert "ensemble.decision" in types
     assert "execution.result" not in types  # RuleEngine path, not direct
 
 
+
+
+async def _await_event(published, event_type: str, *, timeout: float = 5.0) -> None:
+    """Wait for *event_type* to appear, up to *timeout*.
+
+    Replaces a fixed sleep that was racing the Consilium debounce. See the note
+    in tests/test_adaptive_consilium.py.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if any(e.event_type == event_type for e in published):
+            return
+        await asyncio.sleep(0.01)
+    assert any(
+        e.event_type == event_type for e in published
+    ), f"{event_type} not published within {timeout}s"
 def test_ensemble_rule_path_no_direct_fill() -> None:
     asyncio.run(_ensemble_publishes_without_direct_fill())
 

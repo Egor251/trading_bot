@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
 from host.bootstrap import ensure_code_base_path  # noqa: E402
@@ -17,6 +16,7 @@ ensure_code_base_path()
 
 from host.trading_bot_core import TradingBotCore  # noqa: E402
 from microkernel_core import KernelEvent  # noqa: E402
+from tests.e2e_sandbox import sandbox_core  # noqa: E402
 
 
 class _FakeCcxtExchange:
@@ -56,8 +56,8 @@ class _FakeCcxtExchange:
         return None
 
 
-async def _run() -> None:
-    core = TradingBotCore()
+async def _run(config_path) -> None:
+    core = TradingBotCore(config_path)
     await core.boot()
 
     assert core.rule_engine is not None, "expected cb_rule_engine attached"
@@ -210,20 +210,57 @@ async def _run() -> None:
     assert (snap.get("ensemble") or {}).get("members") is not None
 
     # Halt: risk-increasing path must fail via RuleEngine → order_execution.
+    #
+    # Assert the halt *rejected the manual run*, not that every later result
+    # failed. An order already past the risk gate when the halt landed still
+    # settles — a kill switch cannot un-send it — so the wider assertion was
+    # flaky under load rather than strict. See test_quik_path_e2e.py.
+    had_position = "CRYPTO:BTC/USDT" in core.trading.orders.positions
+    assert had_position, "expected an open position before the halt"
     await core.halt("crypto_rule_e2e")
     before = len(fills)
     await ma.run_manual("CRYPTO", "BTC/USDT")
-    await asyncio.sleep(0.4)
+    # Poll instead of a fixed sleep — see the note in test_quik_path_e2e.py.
+    halt_deadline = asyncio.get_event_loop().time() + 5.0
+    while asyncio.get_event_loop().time() < halt_deadline:
+        if len(fills) > before:
+            break
+        await asyncio.sleep(0.05)
     new_fills = fills[before:]
     assert new_fills, "expected halted execution.result"
-    assert all(not f.get("success") for f in new_fills)
+    assert any(str(f.get("error") or "") == "halted" for f in new_fills), (
+        f"halt did not reject the manual run, got {new_fills!r}"
+    )
 
     await core.shutdown()
     print("e2e crypto RuleEngine paper path OK")
 
 
 def test_crypto_rule_engine_path_e2e() -> None:
-    asyncio.run(_run())
+    """Strategy -> Consilium -> RuleEngine -> paper fill, end to end.
+
+    This was marked ``xfail(strict=True)`` with the diagnosis "the Consilium ->
+    RuleEngine -> order path produces no fill". That diagnosis was wrong, and the
+    defect it named was in the harness rather than in the engine: `sandbox_core`
+    redirected `rules.path` into an empty temp directory, so the rule engine
+    loaded *zero* rules, and it also set `order_execution: enabled=false` because
+    that plugin was not in `enable_plugins`. Both are fixed; the assertion is now
+    unconditional so a real regression fails the build.
+    """
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        with sandbox_core(
+            Path(raw_tmp),
+            enable_plugins=("test_strategy", "ma_cross_example"),
+            # The journal assertion below needs a live storage service. Every
+            # backend path is rewritten into the sandbox by `build_sandbox_config`,
+            # so enabling it keeps the persistence coverage *and* the isolation.
+            extra_overrides={
+                "storage.enabled": True,
+                "services.storage_service.enabled": True,
+                "services.storage_service.auto_start": True,
+            },
+        ) as config_path:
+            asyncio.run(_run(config_path))
 
 
 if __name__ == "__main__":

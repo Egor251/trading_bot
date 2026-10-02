@@ -14,6 +14,23 @@ from microkernel_core import KernelEvent  # noqa: E402
 from services.ensemble_service import EnsembleService  # noqa: E402
 
 
+
+async def _await_event(published, event_type: str, *, timeout: float = 5.0) -> None:
+    """Wait for *event_type* to appear, up to *timeout*.
+
+    Replaces a fixed sleep. The sleep was a race with the Consilium debounce: on
+    a loaded machine it could expire before the event was published, producing an
+    intermittent failure that proved nothing about the code under test.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if any(e.event_type == event_type for e in published):
+            return
+        await asyncio.sleep(0.01)
+    assert any(
+        e.event_type == event_type for e in published
+    ), f"{event_type} not published within {timeout}s"
+
 def test_risk_parity_prefers_lower_vol() -> None:
     mgr = EnsembleManager(["a", "b"])
     for _ in range(20):
@@ -164,8 +181,7 @@ def test_ensemble_service_rebalance_and_attribution() -> None:
                 },
             )
         )
-        await asyncio.sleep(0.12)
-        assert any(e.event_type == "ensemble.decision" for e in published)
+        await _await_event(published, "ensemble.decision")
 
     asyncio.run(_run())
 

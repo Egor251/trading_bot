@@ -12,7 +12,7 @@ from host.bootstrap import ensure_code_base_path
 
 ensure_code_base_path()
 
-from engine.ops_safety import AlertBus, OpsAlert, AlertSeverity, TelegramAlertSink  # noqa: E402
+from engine.ops_safety import AlertBus, AlertSeverity, TelegramAlertSink  # noqa: E402
 from engine.phantom_patterns import (  # noqa: E402
     MarketPattern,
     PatternSpec,

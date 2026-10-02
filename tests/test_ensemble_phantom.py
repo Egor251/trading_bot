@@ -21,6 +21,22 @@ from host.events import (  # noqa: E402
 from services.phantom_service import PhantomService  # noqa: E402
 
 
+
+
+async def _await_event(published, event_type: str, *, timeout: float = 5.0) -> None:
+    """Wait for *event_type* to appear, up to *timeout*.
+
+    Replaces a fixed sleep that was racing the Consilium debounce. See the note
+    in tests/test_adaptive_consilium.py.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if any(e.event_type == event_type for e in published):
+            return
+        await asyncio.sleep(0.01)
+    assert any(
+        e.event_type == event_type for e in published
+    ), f"{event_type} not published within {timeout}s"
 def test_ensemble_manager_still_aggregates() -> None:
     ens = EnsembleManager(["a", "b"])
     decs = ens.aggregate(
@@ -124,9 +140,9 @@ async def _ensemble_service_flush() -> None:
             },
         )
     )
-    await asyncio.sleep(0.12)
+    await _await_event(published, "ensemble.decision")
     types = [e.event_type for e in published]
-    assert "ensemble.decision" in types
+    assert "ensemble.decision" in types  # awaited above; kept as the explicit check
 
 
 def test_ensemble_service_publishes_decision() -> None:

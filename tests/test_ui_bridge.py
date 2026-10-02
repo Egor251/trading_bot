@@ -213,6 +213,26 @@ async def _tcp_roundtrip() -> None:
     svc.config = svc.default_config()
     svc.config["ws_port"] = 18766
     svc.config["zmq_enabled"] = False
+    # A real authorizer: the whole privileged command surface is exercised
+    # below, so it must run through real HMAC verification, not a bypass.
+    from engine.control_auth import ControlAuthorizer, HMACTokenAuth
+
+    secret = "ui-bridge-test-secret-that-is-long-enough"
+    authorizer = ControlAuthorizer(HMACTokenAuth(secret))
+    vars(core)["control_authorizer"] = authorizer
+    nonce = [0]
+
+    def signed(body: dict) -> bytes:
+        nonce[0] += 1
+        payload = {
+            **body,
+            "auth_token": HMACTokenAuth(secret).issue(
+                "operator", ["admin", "risk"], ttl_seconds=600
+            ),
+            "nonce": f"n{nonce[0]}",
+        }
+        return (json.dumps(payload) + "\n").encode()
+
     await svc.on_initialize()
     await svc.start()
 
@@ -231,19 +251,32 @@ async def _tcp_roundtrip() -> None:
         assert members[0]["stance"] == "for"
         assert members[1]["stance"] == "against"
 
+        pending: list[dict] = []
+
         async def read_ack(request_id: str) -> dict:
-            deadline = asyncio.get_running_loop().time() + 3.0
+            deadline = asyncio.get_running_loop().time() + 5.0
             while asyncio.get_running_loop().time() < deadline:
+                for idx, msg in enumerate(pending):
+                    if (
+                        msg.get("schema") == "ui.ack.v1"
+                        and msg.get("request_id") == request_id
+                    ):
+                        return pending.pop(idx)
                 remaining = deadline - asyncio.get_running_loop().time()
                 raw = await asyncio.wait_for(reader.readline(), timeout=remaining)
                 message = json.loads(raw.decode())
-                if (
-                    message.get("schema") == "ui.ack.v1"
-                    and message.get("request_id") == request_id
+                if message.get("schema") == "ui.ack.v1" and (
+                    message.get("request_id") == request_id
                 ):
                     return message
-            raise TimeoutError(f"ack not received: {request_id}")
+                pending.append(message)
+            raise TimeoutError(
+                f"ack not received: {request_id}; pending="
+                f"{[(m.get('schema'), m.get('request_id')) for m in pending]}"
+            )
 
+        # HALT stays available without any token — risk reduction must never be
+        # gated on credentials.
         writer.write(b'{"cmd":"KILL","reason":"test","request_id":"r1"}\n')
         await writer.drain()
         ack = await read_ack("r1")
@@ -251,13 +284,28 @@ async def _tcp_roundtrip() -> None:
         assert ack.get("request_id") == "r1"
         assert any(e.event_type == "system.halt" for e in published)
 
-        writer.write(b'{"cmd":"RESUME","request_id":"r2"}\n')
+        # An unsigned privileged command is refused.
+        writer.write(b'{"cmd":"RESUME","request_id":"r-unsigned"}\n')
         await writer.drain()
-        await read_ack("r2")
+        ack = await read_ack("r-unsigned")
+        assert ack.get("ok") is False
+        assert "requires authentication" in (ack.get("error") or "")
+
+        writer.write(signed({"cmd": "RESUME", "request_id": "r2"}))
+        await writer.drain()
+        ack = await read_ack("r2")
+        assert ack.get("ok") is True
 
         writer.write(
-            b'{"cmd":"SET_UNIVERSE","mode":"manual","static_active":["TQBR:SBER","TQBR:GAZP"],'
-            b'"persist":false,"request_id":"r3"}\n'
+            signed(
+                {
+                    "cmd": "SET_UNIVERSE",
+                    "mode": "manual",
+                    "static_active": ["TQBR:SBER", "TQBR:GAZP"],
+                    "persist": False,
+                    "request_id": "r3",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r3")
@@ -265,8 +313,16 @@ async def _tcp_roundtrip() -> None:
         assert "TQBR:GAZP" in (ack.get("active_keys") or [])
 
         writer.write(
-            b'{"cmd":"SET_TRADING","mode":"paper","equity":12000,"risk":{"max_position_pct":0.15},'
-            b'"persist":false,"request_id":"r4"}\n'
+            signed(
+                {
+                    "cmd": "SET_TRADING",
+                    "mode": "paper",
+                    "equity": 12000,
+                    "risk": {"max_position_pct": 0.15},
+                    "persist": False,
+                    "request_id": "r4",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r4")
@@ -274,8 +330,15 @@ async def _tcp_roundtrip() -> None:
         assert core.trading.orders.equity == 12000.0
 
         writer.write(
-            b'{"cmd":"SET_ENSEMBLE","strategies":["ma_cross_example"],'
-            b'"weights":{"ma_cross_example":1.0},"persist":false,"request_id":"r5"}\n'
+            signed(
+                {
+                    "cmd": "SET_ENSEMBLE",
+                    "strategies": ["ma_cross_example"],
+                    "weights": {"ma_cross_example": 1.0},
+                    "persist": False,
+                    "request_id": "r5",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r5")
@@ -283,21 +346,35 @@ async def _tcp_roundtrip() -> None:
         ens.manager.set_weights.assert_called()
 
         writer.write(
-            b'{"cmd":"SET_STRATEGY_PARAMS","plugin_id":"ma_cross_example",'
-            b'"params":{"fast":5},"persist":false,"request_id":"r6"}\n'
+            signed(
+                {
+                    "cmd": "SET_STRATEGY_PARAMS",
+                    "plugin_id": "ma_cross_example",
+                    "params": {"fast": 5},
+                    "persist": False,
+                    "request_id": "r6",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r6")
         assert ack.get("ok") is True
         assert raw_cfg["plugins"]["ma_cross_example"]["fast"] == 5
 
-        writer.write(b'{"cmd":"SAVE_CONFIG","request_id":"r7"}\n')
+        writer.write(signed({"cmd": "SAVE_CONFIG", "request_id": "r7"}))
         await writer.drain()
         ack = await read_ack("r7")
         assert ack.get("ok") is True
 
         writer.write(
-            b'{"cmd":"ASK","text":"status?","use_tools":true,"request_id":"r8"}\n'
+            signed(
+                {
+                    "cmd": "ASK",
+                    "text": "status?",
+                    "use_tools": True,
+                    "request_id": "r8",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r8")
@@ -305,11 +382,34 @@ async def _tcp_roundtrip() -> None:
         assert "echo:status?" in (ack.get("answer") or "")
 
         writer.write(
-            b'{"cmd":"SET_AI","default_provider":"mock","max_tool_iterations":3,'
-            b'"persist":false,"request_id":"r9"}\n'
+            signed(
+                {
+                    "cmd": "SET_AI",
+                    "default_provider": "mock",
+                    "max_tool_iterations": 3,
+                    "persist": False,
+                    "request_id": "r9",
+                }
+            )
         )
         await writer.drain()
         ack = await read_ack("r9")
+        assert ack.get("ok") is True
+
+        # `caller_role` is derived from the verified principal, never from the
+        # request body (an unauthenticated peer could otherwise promote itself).
+        writer.write(
+            signed(
+                {
+                    "cmd": "ASK",
+                    "text": "who am i",
+                    "caller_role": "operator",
+                    "request_id": "r10",
+                }
+            )
+        )
+        await writer.drain()
+        ack = await read_ack("r10")
         assert ack.get("ok") is True
 
         writer.close()
@@ -319,6 +419,46 @@ async def _tcp_roundtrip() -> None:
             pass
     finally:
         await svc.stop()
+
+
+def test_bridge_fails_closed_without_authorizer_but_keeps_halt() -> None:
+    """Losing the safety service must not open the control plane (A5).
+
+    Previously an absent ``control_authorizer`` meant "no checks at all", so a
+    disabled or mis-ordered ``live_safety_service`` silently turned SET_SECRETS
+    and paper PLACE_ORDER into unauthenticated commands.
+    """
+    from engine.control_auth import AuthorizationDenied
+    from services.ui_bridge_service import UiBridgeService
+
+    core = MagicMock()
+
+    async def _cfg_get(key, default=None):
+        return {"pub_port": 5555, "sub_port": 5556}.get(key, default)
+
+    core.config.get = _cfg_get
+    core.event_bus.publish = AsyncMock()
+    vars(core).pop("control_authorizer", None)
+
+    svc = UiBridgeService(core, "ui_bridge_service")
+    svc.config = svc.default_config()
+
+    async def _run() -> None:
+        await svc.on_initialize()
+        halt = await svc.handle_command({"cmd": "KILL", "reason": "t"})
+        assert halt.get("ok") is True, "HALT must never be gated on credentials"
+
+        for cmd in ("SET_SECRETS", "SET_TRADING", "RESET_PAPER", "RESUME", "ASK"):
+            out = await svc.handle_command({"cmd": cmd, "text": "x"})
+            assert out.get("ok") is False, cmd
+            assert "fail-closed" in (out.get("error") or ""), cmd
+
+        # Read-only commands stay open so the Operator can still inspect state.
+        status = await svc.handle_command({"cmd": "STATUS"})
+        assert status.get("ok") is True
+
+    asyncio.run(_run())
+    assert isinstance(AuthorizationDenied("x"), PermissionError)
 
 
 def test_ui_bridge_tcp_kill_resume() -> None:
@@ -353,7 +493,14 @@ async def _confirm_live_roundtrip() -> None:
     core.event_bus.publish = AsyncMock()
     core.event_bus.subscribe = AsyncMock()
     core.event_bus.unsubscribe = AsyncMock()
-    core.service_registry.get = MagicMock(return_value=None)
+    # Live arming refuses when the research gate leaves nothing cleared to trade,
+    # so this stub has to present a lineup that *is* cleared; the refusal path has
+    # its own tests.
+    _ens = MagicMock()
+    _ens.lineup_ids = MagicMock(return_value=["cleared_strategy"])
+    core.service_registry.get = MagicMock(
+        side_effect=lambda sid: _ens if sid == "ensemble_service" else None
+    )
     core.plugin_manager = MagicMock()
     core.plugin_manager.get_plugin = MagicMock(return_value=None)
     runtime = MagicMock()
@@ -365,21 +512,33 @@ async def _confirm_live_roundtrip() -> None:
     core.trading = runtime
 
     svc = UiBridgeService(core, {"host": "127.0.0.1", "port": 0})
-    denied = await svc._cmd_set_trading({"mode": "live", "persist": False})
-    assert denied.get("ok") is False
-    assert denied.get("error") == "confirm_live_required"
-    assert raw_cfg["trading"]["mode"] == "paper"
+    import engine.research_gate as _gate
 
-    ok = await svc._cmd_set_trading(
-        {"mode": "live", "confirm_live": True, "persist": False}
-    )
-    assert ok.get("ok") is True
-    assert raw_cfg["trading"]["mode"] == "live"
-    assert runtime.mode == "live"
+    _saved = _gate.evaluate_live_readiness
+    _gate.evaluate_live_readiness = lambda sid, **kw: {
+        "live_ok": True,
+        "blockers": [],
+        "grade": "live_ok",
+        "score": 1.0,
+    }
+    try:
+        denied = await svc._cmd_set_trading({"mode": "live", "persist": False})
+        assert denied.get("ok") is False
+        assert denied.get("error") == "confirm_live_required"
+        assert raw_cfg["trading"]["mode"] == "paper"
 
-    # Same mode again does not require confirm.
-    again = await svc._cmd_set_trading({"mode": "live", "persist": False})
-    assert again.get("ok") is True
+        ok = await svc._cmd_set_trading(
+            {"mode": "live", "confirm_live": True, "persist": False}
+        )
+        assert ok.get("ok") is True
+        assert raw_cfg["trading"]["mode"] == "live"
+        assert runtime.mode == "live"
+
+        # Same mode again does not require confirm.
+        again = await svc._cmd_set_trading({"mode": "live", "persist": False})
+        assert again.get("ok") is True
+    finally:
+        _gate.evaluate_live_readiness = _saved
 
 
 def test_set_trading_confirm_live() -> None:

@@ -49,7 +49,13 @@ async def _run() -> None:
                     "enabled": True,
                     "strategies": ["trend", "momentum"],
                     "weight_mode": "equal",
-                }
+                },
+                # This test exercises Consilium aggregation, not research
+                # validation; "trend" and "momentum" have no clearance on file,
+                # so the gate would demote them and no decision could be formed.
+                # Gate behaviour itself is covered in
+                # tests/test_research_gate_enforced.py.
+                "live_readiness": {"enforce": False},
             }
             if key == "trading"
             else "test"

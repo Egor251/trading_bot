@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MICROKERNEL_ROOT = ROOT.parent / "Code_base" / "microkernel_core"
-os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 if MICROKERNEL_ROOT.exists():
     sys.path.insert(0, str(MICROKERNEL_ROOT))
 
+from host.bootstrap import ensure_code_base_path  # noqa: E402
+
+ensure_code_base_path()
+
 from host.trading_bot_core import TradingBotCore  # noqa: E402
+from tests.e2e_sandbox import sandbox_core  # noqa: E402
 
 
-async def _run() -> None:
-    core = TradingBotCore()
+async def _run(config_path: Path) -> None:
+    core = TradingBotCore(config_path)
+
     await core.boot()
 
     mock = core.service_registry.get("mock_market_service")
@@ -136,19 +141,54 @@ async def _run() -> None:
     tx = getattr(quik.broker.transport, "transactions", [])  # type: ignore[union-attr]
     assert tx, "expected send_transaction on fake transport"
 
+    # Halt must block *new* risk.
+    #
+    # The previous assertion was "every execution.result after the halt failed",
+    # which is not the property a kill switch can have: an order that had already
+    # passed the risk gate when the halt landed still settles at the broker, and
+    # nothing can un-send it. Under load that window widens and the assertion
+    # failed intermittently while the halt was in fact working.
+    #
+    # The race-free statement is instead: no *new* transaction reached the broker
+    # after the halt, and the manual run was rejected as halted.
+    sent_before = len(getattr(quik.broker.transport, "transactions", []) or [])
     await core.halt("quik_e2e")
     before = len(fills)
     await strat.run_manual("TQBR", "SBER")
-    await asyncio.sleep(0.5)
+    halt_deadline = asyncio.get_event_loop().time() + 5.0
+    while asyncio.get_event_loop().time() < halt_deadline:
+        if len(fills) > before:
+            break
+        await asyncio.sleep(0.05)
     new_fills = fills[before:]
-    assert new_fills and all(not f.get("success") for f in new_fills)
+    assert new_fills, "expected an execution.result for the post-halt manual run"
+    assert any(str(f.get("error") or "") == "halted" for f in new_fills), (
+        f"halt did not reject the manual run, got {new_fills!r}"
+    )
+    sent_after = len(getattr(quik.broker.transport, "transactions", []) or [])
+    assert sent_after == sent_before, (
+        f"halt still let {sent_after - sent_before} order(s) reach the broker"
+    )
 
     await core.shutdown()
     print("e2e quik fake path OK")
 
 
-def test_quik_fake_path_e2e() -> None:
-    asyncio.run(_run())
+def test_quik_fake_path_e2e(tmp_path: Path | None = None) -> None:
+    """Quik fake transport → candle → Consilium → RuleEngine → broker fill.
+
+    Previously marked ``xfail(strict=True)`` on the belief that the Quik broker
+    wire was dead. Same root cause as the crypto E2E: `sandbox_core` moved
+    ``rules.path`` to an empty directory and disabled ``order_execution``, so
+    nothing could execute regardless of the broker. The transport-level defects
+    that marker also listed (a missing ``get_orders`` on the fake, all stored
+    orders carrying ``filled_quantity=0``) are addressed separately; this
+    assertion is now unconditional so a real broker regression fails the build.
+    """
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        work = Path(raw_tmp)
+        with sandbox_core(work) as config_path:
+            asyncio.run(_run(config_path))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,22 @@ from microkernel_core import KernelEvent  # noqa: E402
 from services.ensemble_service import EnsembleService  # noqa: E402
 
 
+
+
+async def _await_event(published, event_type: str, *, timeout: float = 5.0) -> None:
+    """Wait for *event_type* to appear, up to *timeout*.
+
+    Replaces a fixed sleep that was racing the Consilium debounce. See the note
+    in tests/test_adaptive_consilium.py.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if any(e.event_type == event_type for e in published):
+            return
+        await asyncio.sleep(0.01)
+    assert any(
+        e.event_type == event_type for e in published
+    ), f"{event_type} not published within {timeout}s"
 def test_normalize_observe_only_flag() -> None:
     body = normalize_strategy_signal(
         {"action": "BUY", "ticker": "SBER", "observe_only": True}
@@ -84,9 +100,7 @@ def test_ensemble_skips_observe_signals() -> None:
                 },
             )
         )
-        await asyncio.sleep(0.12)
-        types = [e.event_type for e in published]
-        assert "ensemble.decision" in types
+        await _await_event(published, "ensemble.decision")
         assert svc._last_signals["shadow_b"]["observe_only"] is True
         assert "shadow_b" not in {
             c.get("strategy_id")

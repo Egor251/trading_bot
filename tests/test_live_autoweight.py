@@ -10,7 +10,7 @@ from host.bootstrap import ensure_code_base_path
 
 ensure_code_base_path()
 
-from engine.performance_monitor import DiagnosisKind, PerformanceMonitor  # noqa: E402
+from engine.performance_monitor import DiagnosisKind  # noqa: E402
 from microkernel_core import KernelEvent  # noqa: E402
 from services.ensemble_service import EnsembleService  # noqa: E402
 from services.ops_monitor_service import OpsMonitorService  # noqa: E402

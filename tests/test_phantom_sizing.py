@@ -14,7 +14,7 @@ from host.bootstrap import ensure_code_base_path
 
 ensure_code_base_path()
 
-from engine.position_sizing import SizingConfig, SizingMode  # noqa: E402
+from engine.position_sizing import SizingMode  # noqa: E402
 from services.phantom_service import PhantomService  # noqa: E402
 
 

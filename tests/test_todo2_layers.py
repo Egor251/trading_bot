@@ -29,7 +29,6 @@ from engine.order import OrderStatus  # noqa: E402
 from engine.performance_monitor import DiagnosisKind, PerformanceMonitor  # noqa: E402
 from engine.phantom_timeline import PhantomTimeline  # noqa: E402
 from engine.position_book import PositionBook  # noqa: E402
-from engine.protection import PositionSide, PositionSlice  # noqa: E402
 from engine.protective_runtime import ProtectiveLayer  # noqa: E402
 from engine.risk import RiskManager  # noqa: E402
 from engine.runtime import TradingRuntime  # noqa: E402

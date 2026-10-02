@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
 from host.bootstrap import ensure_code_base_path  # noqa: E402
@@ -21,7 +19,6 @@ from engine.trade_ledger import (  # noqa: E402
     summarize_cost_schedule,
 )
 from engine.ai_tools import TRADING_AI_TOOL_CLASSES  # noqa: E402
-from engine.order import OrderManager  # noqa: E402
 from engine.runtime import TradingRuntime  # noqa: E402
 
 
