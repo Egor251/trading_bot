@@ -622,3 +622,26 @@ def _ts(i: int):
     from datetime import UTC, datetime, timedelta
 
     return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=i)
+
+def test_run_grid_reports_the_timeframe_that_produced_the_bars() -> None:
+    """A silent timeframe fallback already cost this project one session.
+
+    `run_grid` resolves the replay interval from the walk_forward config block
+    and falls back to "1d" when the caller set nothing. A new tool missed that,
+    replayed a different series than it named, got zero trades, and would have
+    reported "no strategy trades in any window" -- indistinguishable from a
+    real finding about the strategies.
+
+    The result must therefore carry the interval and whether it was chosen or
+    defaulted. Disclosure, not prohibition: the 1d fallback is deliberate for
+    some callers, and `tools/strategy_sweep.py` sets the block explicitly.
+    """
+    import inspect
+
+    from services.phantom_service import PhantomService
+
+    src = inspect.getsource(PhantomService.run_grid)
+    assert '"timeframe"' in src, "the result does not report its timeframe"
+    assert "timeframe_defaulted" in src, (
+        "a defaulted interval must be distinguishable from a requested one"
+    )

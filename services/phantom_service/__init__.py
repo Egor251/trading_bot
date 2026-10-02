@@ -1917,6 +1917,8 @@ class PhantomService(BaseService):
         strategy_id: str = "ma_cross_example",
         variants: list[dict[str, Any]] | None = None,
         feed: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
         patterns: list[str] | None = None,
         pattern_seed: int = 42,
         start_price: float | None = None,
@@ -2039,11 +2041,28 @@ class PhantomService(BaseService):
                 patterns=selected,
             )
 
+        # Resolved here so the result row can report it on both feed paths. Set
+            # properly in the history branch below; a pattern-only run never used
+            # a timeframe at all.
+            history_timeframe = str(
+                (self.config.get("walk_forward") or {}).get("timeframe") or ""
+            )
+            wf_tf_defaulted = not history_timeframe
         try:
             if feed_mode in {"history", "both"} and hist is not None and hasattr(hist, "fetch"):
-                wf_tf = str(
-                    (self.config.get("walk_forward") or {}).get("timeframe") or "1d"
-                )
+                _requested_tf = (self.config.get("walk_forward") or {}).get("timeframe")
+                wf_tf_defaulted = not _requested_tf
+                wf_tf = str(_requested_tf or "1d")
+                if wf_tf_defaulted:
+                    _log().warning(
+                        "run_grid: no walk_forward.timeframe configured; "
+                        "falling back to %s. A result labelled %s would not "
+                        "come from %s bars. Set "
+                        "phantom.config['walk_forward']['timeframe'].",
+                        wf_tf,
+                        wf_tf,
+                        wf_tf,
+                    )
                 history_timeframe = wf_tf
                 bars_hist = await hist.fetch(
                     ticker,
@@ -2123,6 +2142,15 @@ class PhantomService(BaseService):
                             provider=provider,
                             timeframe=history_timeframe,
                             limit=limit,
+                            # Disjoint-window measurement needs a time range, not
+                            # a bar count: varying `limit` only ever yields
+                            # nested tails, so every window would share its most
+                            # recent bars and the results would not be
+                            # independent. Previously unreachable from run_grid,
+                            # which is why the whole-sweep measurement could
+                            # only ever be one window.
+                            start=start,
+                            end=end,
                             run_id=rid,
                             strategy_id=strategy_id,
                             delay_sec=0,
@@ -2169,6 +2197,16 @@ class PhantomService(BaseService):
                         "feed": feed_label,
                         "pattern": pattern_name,
                         "bars": bars_n,
+                        # The timeframe that actually produced these bars.
+                        # `run_grid` resolves it from the walk_forward config
+                        # block and silently falls back to "1d" when the caller
+                        # set nothing, so a result could be labelled 1h while
+                        # being measured on a different series entirely. A new
+                        # tool hit exactly that and reported zero trades as if
+                        # the strategies had none. `timeframe_defaulted` says
+                        # outright that nobody asked for this interval.
+                        "timeframe": history_timeframe,
+                        "timeframe_defaulted": bool(wf_tf_defaulted),
                         "fills": len(self._fills),
                         "recent_fills": list(self._fills[-80:]),
                         "timeline": timeline_ui,
