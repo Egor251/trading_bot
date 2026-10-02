@@ -35,32 +35,42 @@ export function SnapshotProvider({ children }: { children: ReactNode }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
-    const url = wsUrl();
-    if (!url) return;
     let closed = false;
-    const ws = new WebSocket(url);
-    ws.onopen = () => {
-      setWsConnected(true);
-      setLastError("");
-    };
-    ws.onmessage = (ev) => {
+    let ws: WebSocket | null = null;
+    // wsUrl() bootstraps the operator token, so it is async now.
+    void (async () => {
+      let url: string;
       try {
-        const data = JSON.parse(ev.data) as Snapshot;
-        setSnap(data);
+        url = await wsUrl();
       } catch {
-        /* ignore */
+        if (!closed) timer.current = setTimeout(connect, 1200);
+        return;
       }
-    };
-    ws.onerror = () => setLastError("ws error");
-    ws.onclose = () => {
-      setWsConnected(false);
-      if (!closed) {
-        timer.current = setTimeout(connect, 1200);
-      }
-    };
+      if (closed || !url) return;
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        setWsConnected(true);
+        setLastError("");
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data) as Snapshot;
+          setSnap(data);
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onerror = () => setLastError("ws error");
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (!closed) {
+          timer.current = setTimeout(connect, 1200);
+        }
+      };
+    })();
     return () => {
       closed = true;
-      ws.close();
+      ws?.close();
     };
   }, []);
 

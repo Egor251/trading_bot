@@ -13,20 +13,37 @@ from typing import Any
 
 HEALTHY_STATES = {"ok", "ready", "healthy", "running"}
 
+#: States that mean "the engine is alive and deliberately not trading". These do
+#: NOT fail the probe: bouncing a container because risk management halted it
+#: would replace a correct refusal with an uncontrolled restart, and the halt
+#: reason is already visible in the state file and the metrics. They are reported
+#: distinctly so an operator (or an alerting rule) can tell a *deliberate* halt
+#: from a wedged process.
+DEGRADED_STATES = {"degraded", "halted"}
 
-def check_state_file(path: Path, *, now: float, max_age: float) -> tuple[bool, str]:
+
+def check_state_file(
+    path: Path, *, now: float, max_age: float
+) -> tuple[bool, str]:
     try:
         payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         state = str(payload["status"]).lower()
         age = now - float(payload["timestamp"])
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         return False, f"invalid health state: {exc}"
-    if state not in HEALTHY_STATES:
-        return False, f"unhealthy state: {state}"
+    detail = str(payload.get("detail") or "")
     if age < -5:
         return False, "health timestamp is in the future"
+    # A stale state file means the writer stopped — that is a real failure, and
+    # it is the one thing the old PID-only probe could never detect.
     if age > max_age:
-        return False, f"health state is stale: {age:.1f}s"
+        return False, f"health state is stale: {age:.1f}s (writer stopped?)"
+    if state in DEGRADED_STATES:
+        # Alive and intentionally not trading. Surface it, do not restart it.
+        print(f"NOTE: engine reports {state}: {detail}")
+        return True, f"state={state} age={age:.1f}s detail={detail}"
+    if state not in HEALTHY_STATES:
+        return False, f"unhealthy state: {state} detail={detail}"
     return True, f"state={state} age={age:.1f}s"
 
 
