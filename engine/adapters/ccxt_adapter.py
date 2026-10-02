@@ -244,13 +244,38 @@ class CcxtMarketDataAdapter:
         limit: int = 200,
         class_code: str = "",
     ) -> list[Candle]:
+        """Fetch ``limit`` bars, walking backwards when the exchange caps a request.
+
+        Measured against Bitget, a single ``fetch_ohlcv`` call returns far less
+        than the limit it was given, and the shortfall is what broke research:
+
+            limit= 500 -> 300 bars      limit=1000 -> 300 bars (1d)
+            limit=2000 -> 300 bars      limit=5000 -> 300 bars (1d)
+            1m/5m/15m/1h/4h/12h -> 1000 bars
+            1w -> 100 bars
+
+        So every caller asking for more silently got a short window, and the
+        effect on the product was concrete: 600 bars of 1m is five hours, far too
+        little to measure any edge, which is why no strategy showed profit on
+        phantom.
+
+        Walking backwards needs the right parameter per venue. ``since`` is
+        *ignored* for Bitget daily bars — the second page came back identical to
+        the first — while ``endTime`` returns a genuinely earlier window. Intraday
+        ``since`` does work. So the loop tries ``endTime`` first, notices when a
+        venue ignores it, and falls back to ``since``.
+
+        Note that a *short* page is not exhaustion: the venue caps below the size
+        we ask for (300 daily bars against a request for 1000), so every page
+        looks short. Only a page that yields no new timestamps ends the walk.
+        """
         if self._exchange is None:
             await self.connect()
         assert self._exchange is not None
         market = normalize_ccxt_symbol(symbol, class_code=class_code)
-        raw = await self._exchange.fetch_ohlcv(market, timeframe=timeframe, limit=limit)
+        rows = await self._fetch_ohlcv_paged(market, timeframe, int(limit))
         out: list[Candle] = []
-        for row in raw:
+        for row in rows:
             out.append(
                 _row_to_candle(
                     row,
@@ -261,6 +286,72 @@ class CcxtMarketDataAdapter:
                 )
             )
         return out
+
+    #: Per-timeframe cap on bars per klines request. A venue may still return
+    #: fewer; the loop treats a short page as "this is as far as it goes".
+    PAGE_LIMIT_BY_TIMEFRAME: dict[str, int] = {"1w": 100, "1M": 100}
+    PAGE_LIMIT = 1000
+
+    #: Safety bound on requests per fetch. 60 pages at the intraday cap is 60k
+    #: bars, and a venue that keeps replaying the same window exits far sooner.
+    MAX_PAGES = 60
+
+    def _page_limit(self, timeframe: str, want: int) -> int:
+        cap = self.PAGE_LIMIT_BY_TIMEFRAME.get(timeframe, self.PAGE_LIMIT)
+        return max(1, min(want, cap))
+
+    async def _fetch_ohlcv_paged(
+        self, market: str, timeframe: str, limit: int
+    ) -> list[list]:
+        assert self._exchange is not None
+        want = max(1, int(limit))
+        page_size = self._page_limit(timeframe, want)
+        by_ts: dict[int, list] = {}
+        cursor: int | None = None
+        mode = "end"  # "end" uses endTime, "since" is the fallback
+        for _ in range(self.MAX_PAGES):
+            kwargs: dict[str, Any] = {"limit": page_size}
+            if cursor is not None:
+                if mode == "end":
+                    kwargs["params"] = {"endTime": cursor}
+                else:
+                    kwargs["since"] = cursor
+            page = await self._exchange.fetch_ohlcv(
+                market, timeframe=timeframe, **kwargs
+            )
+            if not page:
+                break
+            oldest = min(int(row[0]) for row in page)
+            fresh = [row for row in page if int(row[0]) not in by_ts]
+            for row in page:
+                by_ts[int(row[0])] = row
+            if len(by_ts) >= want:
+                break
+            if not fresh:
+                # The venue replayed a window we already hold. That is the real
+                # exhaustion signal — *not* a short page.
+                if mode == "end" and cursor is not None:
+                    mode = "since"
+                    cursor = oldest - 1
+                    continue
+                break
+            next_cursor = oldest - 1
+            if cursor is not None and next_cursor >= cursor:
+                break
+            cursor = next_cursor
+        rows = [by_ts[k] for k in sorted(by_ts)]
+        return rows[-want:]
+
+    @staticmethod
+    def bar_gaps(rows: list[list]) -> list[int]:
+        """Gaps between consecutive bars, in milliseconds.
+
+        Exposed so a caller can prove a stitched series is contiguous before
+        doing research on it: a silently gappy series produces metrics that
+        describe a history that never existed.
+        """
+        stamps = sorted(int(row[0]) for row in rows)
+        return [b - a for a, b in zip(stamps, stamps[1:])]
 
     async def fetch_instrument_spec(self, symbol: str) -> InstrumentSpec:
         """Load exchange metadata required by live preflight."""

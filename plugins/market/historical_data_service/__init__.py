@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import time
@@ -17,7 +18,10 @@ from engine.adapters.ccxt_adapter import CcxtMarketDataAdapter
 from engine.adapters.moex_adapter import MoexMarketDataAdapter
 from engine.adapters.yahoo_adapter import YahooMarketDataAdapter
 from engine.market import Candle, candle_to_market_payload
+from host.event_bus_settle import settle_unsatisfied, wait_for_bus_quiescence
 from host.events import publish_market_candle, publish_market_history_candle
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
@@ -644,6 +648,20 @@ class HistoricalDataService(BaseService):
             end=end,
         )
         rid = run_id or uuid.uuid4().hex[:12]
+        # Verify the series really is the timeframe the caller asked for. A caller
+        # that *forgets* `timeframe=` used to get the service default (1m) with
+        # the result still labelled as whatever it had in mind — a silent mislabel
+        # that makes every metric on it describe a different history. Only an
+        # explicit request is a contract: without one the venue default may
+        # legitimately differ (equities are 1d), so that case is reported instead
+        # of raised.
+        served_tf = self._observe_timeframe(bars)
+        requested_tf = str(timeframe) if timeframe is not None else ""
+        if requested_tf and served_tf and served_tf != requested_tf:
+            raise ValueError(
+                f"timeframe_mismatch: requested={requested_tf} served={served_tf} "
+                f"bars={len(bars)} for {ticker}"
+            )
         prov = self._resolve_provider(provider, ticker=ticker, class_code=class_code)
         delay = float(
             delay_sec
@@ -697,6 +715,10 @@ class HistoricalDataService(BaseService):
         )
 
         published = 0
+        settle: dict[str, Any] = {}
+        unsettled_bars = 0
+        dropped_events = 0
+        settle_per_bar = self.config.get("replay_settle_per_bar", True) is not False
         try:
             for bar in bars:
                 payload = candle_to_market_payload(
@@ -713,6 +735,42 @@ class HistoricalDataService(BaseService):
                 published += 1
                 if delay > 0:
                     await asyncio.sleep(delay)
+                # Order matters as much as delivery. The bus has a single worker
+                # draining one FIFO queue, so publishing every bar up front means
+                # every signal is dispatched *after* the last candle — and a
+                # `next_open` fill needs the bar after the signal. Publishing a
+                # burst therefore discarded every fill of the run: the signals
+                # arrived with no bar left to fill against.
+                #
+                # Settling each bar before publishing the next one reproduces the
+                # live ordering: a decision on bar N is dispatched, becomes a
+                # signal, and only then does bar N+1 arrive to fill it.
+                #
+                # This costs one or two bus round-trips per bar — measured ~33s for
+                # a 1000-bar replay — and that cost is the price of exact fill
+                # ordering. `replay_settle_per_bar: false` restores the fast
+                # burst-publish path, which silently loses `next_open` fills and so
+                # must not be used to produce a research result.
+                if settle_per_bar:
+                    bar_settle = await wait_for_bus_quiescence(
+                        self.core.event_bus,
+                        timeout_sec=float(
+                            self.config.get("replay_settle_timeout_sec") or 30.0
+                        ),
+                    )
+                    if settle_unsatisfied(bar_settle):
+                        unsettled_bars += 1
+                    dropped_events += int(bar_settle.get("dropped") or 0)
+            # `publish` only enqueues; the worker dispatches later. Every bar
+            # above was still pending when this loop ended, so any caller that
+            # read state afterwards — the phantom ledger, fills, signals — saw
+            # an empty book and then had it reset. That is why research
+            # reported zero trades for every strategy. Settle before returning.
+            settle = await wait_for_bus_quiescence(
+                self.core.event_bus,
+                timeout_sec=float(self.config.get("replay_settle_timeout_sec") or 30.0),
+            )
+            dropped_events += int(settle.get("dropped") or 0)
         finally:
             for svc in paused:
                 try:
@@ -727,6 +785,8 @@ class HistoricalDataService(BaseService):
             "class_code": class_code,
             "provider": prov,
             "bars": published,
+            "timeframe_requested": requested_tf or None,
+            "timeframe_served": served_tf or None,
             "strategy_id": strategy_id,
             "mode": "replay",
             "summary": self.summarize(bars),
@@ -740,7 +800,46 @@ class HistoricalDataService(BaseService):
             )
         )
         self._last_replay = finished
+        finished["settle"] = settle
+        # A replay that could not deliver every bar must say so: a silently
+        # truncated history produces metrics that describe a run that never
+        # happened, which is exactly the failure this whole path had.
+        finished["unsettled_bars"] = unsettled_bars
+        finished["dropped_events"] = dropped_events
+        if unsettled_bars or dropped_events:
+            logger.warning(
+                "replay %s delivered %d/%d bars (unsettled=%d dropped=%d)",
+                rid,
+                published - unsettled_bars,
+                published,
+                unsettled_bars,
+                dropped_events,
+            )
         return finished
+
+    @staticmethod
+    def _observe_timeframe(bars: list[Candle]) -> str:
+        """Timeframe implied by the median gap between bar timestamps.
+
+        Uses the median, not the first gap: venues open with irregular spacing
+        (a session boundary, a halt) and one odd gap must not decide the answer.
+        """
+        stamps = sorted(
+            b.ts.timestamp() for b in bars if getattr(b, "ts", None) is not None
+        )
+        if len(stamps) < 3:
+            return ""
+        gaps = sorted(b - a for a, b in zip(stamps, stamps[1:]))
+        mid = gaps[len(gaps) // 2]
+        for candidate in (1, 5, 15, 30, 60, 240, 900, 3600, 14400, 21600, 43200,
+                          86400, 604800):
+            if mid >= candidate * 0.9 and mid <= candidate * 1.1:
+                return f"{candidate // 60}m" if candidate < 60 else (
+                    "1h" if candidate == 3600 else f"{candidate // 3600}h"
+                ) if candidate < 86400 else (
+                    "1d" if candidate == 86400 else "1w"
+                )
+        return f"{int(mid)}s"
 
     def summarize(self, bars: list[Candle]) -> dict[str, Any]:
         if not bars:

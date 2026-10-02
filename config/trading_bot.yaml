@@ -358,8 +358,19 @@ services:
     publish_events: true
     replay_delay_sec: 0
     replay_pause_live: true
+    # Wait for the event bus to finish dispatching each bar before publishing the
+    # next one. The bus delivers asynchronously, so without this every signal
+    # arrives after the last candle and `next_open` fills have no bar to fill
+    # against — the run reports zero trades while the strategies are signalling.
+    # Costs ~1-2 bus round-trips per bar (measured ~33s per 1000-bar replay).
+    # Set false only for fast smoke runs; it makes fill ordering a lie.
+    replay_settle_per_bar: true
+    replay_settle_timeout_sec: 30
   live_safety_service:
-    allow_unauthenticated_local: true
+    # Fail-closed: with no TRADING_CONTROL_HMAC_SECRET only HALT is accepted.
+    # Set true to allow an unsigned *local* peer to run CONFIG commands
+    # (RESUME and LIVE stay refused). See .env.example.
+    allow_unauthenticated_local: false
     auto_start: true
     enabled: true
     evidence_secret_env: TRADING_EVIDENCE_HMAC_SECRET
@@ -584,6 +595,17 @@ trading:
   legacy_fee_bps: 5
   legacy_slippage_bps: 2
   live_readiness:
+    # ENFORCED, not advisory. At Consilium start-up every live member that does
+    # not reach `live_ok` is moved to the observe roster and the reason is
+    # published as `ensemble.reject{reason: research_gate_demoted}`. Previously
+    # nothing on the decision path called the gate at all — it was reachable only
+    # from an operator command and as an LLM tool — so this YAML block described a
+    # standard that nothing applied.
+    #
+    # To trade a strategy that has not cleared validation, either run
+    # phantom_walk_forward with holdout_bars > 0 until it clears, or set
+    # `enforce: false` and accept that you are trading an unvalidated system.
+    enforce: true
     canary_quantity_scale: 0.25
     max_age_days: 30
     min_holdout_trades: 8

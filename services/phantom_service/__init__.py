@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from decimal import Decimal
 from pathlib import Path
@@ -31,9 +32,54 @@ from engine.position_sizing import (
 from engine.runtime import TradingRuntime
 from engine.state_store import StateStore
 from host.events import publish_market_candle, publish_phantom_fill, publish_phantom_run
+from engine.paths import data_dir, data_path
+
+
+def _log() -> logging.Logger:
+    return logging.getLogger("phantom")
+
+
+def _series_bound_iso(series: Any, *, first: bool) -> str | None:
+    """First or last timestamp of a bar series, as an ISO string.
+
+    Used to stamp research digests with the window they were computed over.
+    """
+    if not isinstance(series, dict):
+        return None
+    ts = series.get("ts") or series.get("timestamp") or series.get("time")
+    if not isinstance(ts, (list, tuple)) or not ts:
+        return None
+    value = ts[0] if first else ts[-1]
+    try:
+        if isinstance(value, (int, float)):
+            from datetime import UTC, datetime
+
+            seconds = float(value)
+            # Bars carry milliseconds when the value is implausibly large.
+            if seconds > 1e11:
+                seconds /= 1000.0
+            return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+        return str(value)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _reanchor(raw: str) -> str:
+    """Map a relative ``data/...`` path onto the shared data root."""
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return raw
+    parts = candidate.parts
+    if parts and parts[0] == "data":
+        return str(data_dir().joinpath(*parts[1:]))
+    return raw
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
+
+    # Imported at runtime inside `walk_forward_config` (to keep the walk-forward
+    # import off the boot path); declared here so the quoted annotation resolves.
+    from engine.walk_forward import WalkForwardConfig
 
 
 class PhantomService(BaseService):
@@ -64,6 +110,19 @@ class PhantomService(BaseService):
         self.state_store: StateStore | None = None
         # 0-based index of the last ingested bar; -1 means no bars yet.
         self._bar_index = -1
+        #: Signals waiting for the next bar's open (fill_timing: next_open).
+        self._pending_fills: list[tuple[dict[str, Any], str]] = []
+        #: Signals raised on a final bar with no next bar to fill against, from the
+        #: last grid run. Kept out of `results` so that list stays one shape.
+        self._last_unfilled_signals: list[dict[str, Any]] = []
+        #: Rejected shadow signals by normalised reason. Declared here as well as
+        #: in `on_initialize` so any caller touching the counters before boot —
+        #: a status readout, a test harness — cannot hit an AttributeError.
+        self._shadow_rejects: dict[str, int] = {}
+        #: Set when the previous process died mid-run with open phantom
+        #: positions. Surfaced in `get_status` so an operator can see that
+        #: research metrics spanning a restart are not comparable.
+        self._interrupted_run: dict[str, Any] | None = None
         self._last_pattern: str | None = None
         self.sizing = SizingConfig()
 
@@ -78,8 +137,14 @@ class PhantomService(BaseService):
             # ensemble = shadow live consilium path; signals = raw strategy votes;
             # both = ensemble preferred, signals only when no ensemble payload.
             "capture_source": "ensemble",
-            "timeline_path": "data/phantom/timeline.jsonl",
-            "state_path": "data/phantom/state.json",
+            # next_open = a signal raised on bar N fills at bar N+1's open, which
+            # is the first price a live run could actually trade at. bar_close
+            # fills at bar N's close — the close the strategy just reacted to —
+            # which flatters every walk-forward result. Keep bar_close only to
+            # reproduce historical numbers; do not gate live promotion on it.
+            "fill_timing": "next_open",
+            "timeline_path": str(data_path("phantom", "timeline.jsonl")),
+            "state_path": str(data_path("phantom", "state.json")),
             "default_feed": "history",  # history | patterns | both
             "pattern_bars": 80,
             "pattern_start_price": 100.0,
@@ -110,7 +175,7 @@ class PhantomService(BaseService):
                 "bootstrap_samples": 1000,
                 "bootstrap_ci": 0.95,
                 "persist_report": True,
-                "report_dir": "data/phantom/walk_forward",
+                "report_dir": str(data_path("phantom", "walk_forward")),
                 "pattern": "sharp_rise",
             },
         }
@@ -200,15 +265,19 @@ class PhantomService(BaseService):
         )
 
     async def _resolve_cost_store_path(self, trading_cfg: dict[str, Any]) -> str:
+        # Relative "data/..." values used to be resolved against the process CWD
+        # (or the repo root here), which split the cost schedule across two
+        # locations depending on how the engine was started. Re-anchor them on
+        # the shared data root so phantom, paper and the AI tools all read the
+        # same schedule.
         path = str(trading_cfg.get("cost_store_path") or "").strip()
         if path:
-            return path
+            return _reanchor(path)
         costs = await self.core.config.get("costs", {}) or {}
         configured = (costs or {}).get("store_path") if isinstance(costs, dict) else None
         if configured:
-            return str(configured)
-        root = Path(__file__).resolve().parents[2]
-        return str(root / "data" / "cost_schedules")
+            return _reanchor(str(configured))
+        return str(data_path("cost_schedules"))
 
     async def _build_runtime_cfg(self) -> dict[str, Any]:
         trading_cfg = dict(await self.core.config.get("trading", {}) or {})
@@ -242,10 +311,21 @@ class PhantomService(BaseService):
         self.timeline = PhantomTimeline(path=path)
         self.runtime.phantom_timeline = self.timeline
         self._bar_index = -1
+        self._pending_fills: list[tuple[dict[str, Any], str]] = []
+        # Rejected signals used to vanish: only FILLED/PARTIAL/ACCEPTED reached
+        # `_fills`, so a run whose every signal fell below `strength_floor`
+        # reported `trades=0` with no indication that any decision was ever made.
+        # That is what made phantom look broken rather than merely unprofitable.
+        self._shadow_rejects: dict[str, int] = {}
         self.apply_sizing_config()
-        state_path = str(self.config.get("state_path") or "data/phantom/state.json")
+        state_path = str(self.config.get("state_path") or data_path("phantom", "state.json"))
         root = Path(__file__).resolve().parents[2]
         self.state_store = StateStore(root / state_path)
+        # The previous run's fills/last_run were persisted but never read back:
+        # `restore_state` had no caller, so after any restart the phantom ledger
+        # and the "last run" panel started empty and an interrupted research run
+        # disappeared without a trace.
+        self.restore_state()
         setattr(self.core, "phantom", self.runtime)
 
     def _capture_source(self) -> str:
@@ -349,6 +429,10 @@ class PhantomService(BaseService):
                 "capturing": self._capturing,
                 "grid_running": self._grid_running,
                 "last_run": self._last_run,
+                "interrupted_run": dict(self._interrupted_run)
+                if self._interrupted_run
+                else None,
+                "fill_timing": self._fill_timing(),
                 "last_grid": self._last_grid,
                 "metrics": {
                     "pnl": metrics["pnl"],
@@ -405,6 +489,7 @@ class PhantomService(BaseService):
             }
         if not sid and not sym:
             self._fills.clear()
+            self._shadow_rejects = {}
             self._leverage_skip_noted = False
             cfg = dict(self._runtime_cfg) if self._runtime_cfg else {
                 "mode": "phantom",
@@ -549,6 +634,15 @@ class PhantomService(BaseService):
         self.runtime.candles.ingest_payload(event.payload)
         # Keep 0-based index; signals are queued and fill after this handler.
         self._bar_index = self._bar_index_for_payload(event.payload)
+        # Signals raised against the *previous* bar become fillable now, at this
+        # bar's open. See `_fill_timing`.
+        if self._pending_fills:
+            queued = self._pending_fills
+            self._pending_fills = []
+            for signal, run_id in queued:
+                await self._shadow_fill(
+                    signal, run_id=run_id, price_override=self._bar_open(event.payload)
+                )
 
     async def _on_signal(self, event: KernelEvent) -> None:
         if not self._capturing or self.runtime is None:
@@ -559,7 +653,7 @@ class PhantomService(BaseService):
         p = event.payload or {}
         if str(p.get("strategy_id") or "") == "consilium":
             return
-        await self._shadow_fill(p, run_id=str(p.get("run_id") or ""))
+        await self._dispatch_shadow_fill(p, run_id=str(p.get("run_id") or ""))
 
     async def _on_ensemble(self, event: KernelEvent) -> None:
         """Shadow the live consilium decision (same side/ticker as execution path)."""
@@ -572,7 +666,56 @@ class PhantomService(BaseService):
         if str(p.get("action") or "").upper() in {"", "FLAT", "HOLD"}:
             return
         p.setdefault("strategy_id", "consilium")
-        await self._shadow_fill(p, run_id=str(p.get("run_id") or "ensemble"))
+        await self._dispatch_shadow_fill(p, run_id=str(p.get("run_id") or "ensemble"))
+
+    def _bar_open(self, payload: Any) -> float | None:
+        raw = (payload or {}).get("open") if isinstance(payload, dict) else None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    async def _dispatch_shadow_fill(
+        self, signal: dict[str, Any], *, run_id: str
+    ) -> None:
+        """Either fill now, or queue for the next bar's open.
+
+        Filling at the close of the bar that produced the signal is optimistic:
+        the strategy acted *because* of that close, and in live trading the first
+        price it can trade at is the next bar's open. The walk-forward results
+        that gate live promotion were produced that way, so the gate was clearing
+        strategies on numbers no live run could reproduce.
+        """
+        if self._fill_timing() == "next_open":
+            self._pending_fills.append((dict(signal), run_id))
+            return
+        await self._shadow_fill(signal, run_id=run_id)
+
+    def _fill_timing(self) -> str:
+        return str(self.config.get("fill_timing") or "next_open").lower()
+
+    def flush_pending_fills(self) -> list[dict[str, Any]]:
+        """Drop queued signals at end of run; report them rather than lose them.
+
+        A signal raised on the final bar has no next bar, so it cannot fill under
+        `next_open`. Silently dropping it would flatter the results by one trade
+        per bar of the run; the count is returned so the caller can log it.
+        """
+        dropped = [
+            {
+                "strategy_id": str(sig.get("strategy_id") or "phantom"),
+                "ticker": sig.get("ticker"),
+                "action": sig.get("action"),
+                "bar_index": self._bar_index,
+                "status": "unfilled",
+                "reason": "no_next_bar",
+                "run_id": run_id,
+            }
+            for sig, run_id in self._pending_fills
+        ]
+        self._pending_fills = []
+        return dropped
 
     def _record_timeline(
         self,
@@ -637,7 +780,13 @@ class PhantomService(BaseService):
         except (TypeError, ValueError):
             return 0.0
 
-    async def _shadow_fill(self, signal: dict[str, Any], *, run_id: str = "") -> dict[str, Any]:
+    async def _shadow_fill(
+        self,
+        signal: dict[str, Any],
+        *,
+        run_id: str = "",
+        price_override: float | None = None,
+    ) -> dict[str, Any]:
         assert self.runtime is not None
         action = str(signal.get("action") or "BUY")
         ticker = str(signal.get("ticker") or "")
@@ -650,14 +799,21 @@ class PhantomService(BaseService):
         if bar is None and ticker:
             bar = self.runtime.candles.last(ticker)
         raw_px = signal.get("price")
-        price = float(raw_px) if raw_px not in (None, "") else 0.0
+        if price_override is not None:
+            # Next-bar open: the first price actually reachable after the signal.
+            price = float(price_override)
+        else:
+            price = float(raw_px) if raw_px not in (None, "") else 0.0
         if price <= 0:
             price = self.runtime.candles.mark_price(key) or self.runtime.candles.mark_price(
                 ticker
             )
         price = float(price or 0)
         # Candle-close fills must stay inside the active bar's traded range.
-        if bar is not None and price > 0:
+        # A next-bar *open* is already inside that bar's range by construction and
+        # must not be clamped: doing so would let an unreachable price be nudged
+        # to the bar's favourable extreme and silently manufacture profit.
+        if bar is not None and price > 0 and price_override is None:
             lo = float(bar.low or price)
             hi = float(bar.high or price)
             if hi < lo:
@@ -686,6 +842,9 @@ class PhantomService(BaseService):
         )
         if sizing.rejects_strength(strength):
             # Explicit reject — do not fall back to a percent-of-equity retry.
+            # Counted, not silently dropped: a run where every signal falls
+            # below the floor must say so instead of reporting trades=0.
+            self._note_shadow_reject("strength_below_floor")
             fill = {
                 "action": action.upper(),
                 "ticker": signal.get("ticker"),
@@ -800,7 +959,29 @@ class PhantomService(BaseService):
                 payload=fill,
                 instance_id=instance_id,
             )
+        else:
+            self._note_shadow_reject(str(result.reason or result.status.value or "rejected"))
         return fill
+
+    def _note_shadow_reject(self, reason: str) -> None:
+        """Record one rejected shadow signal under a normalised reason."""
+        key = str(reason or "rejected").strip() or "rejected"
+        # Broker/execution reasons carry free-form detail; keep the shape stable
+        # so the counters stay readable instead of one key per message.
+        head = key.split("=", 1)[0].split(":", 1)[0].strip() or "rejected"
+        self._shadow_rejects[head] = int(self._shadow_rejects.get(head, 0)) + 1
+
+    def shadow_reject_summary(self) -> dict[str, Any]:
+        """How many shadow signals were dropped, and why.
+
+        Without this a phantom run that rejected every signal is
+        indistinguishable from a strategy that never traded.
+        """
+        rejects = dict(self._shadow_rejects or {})
+        return {
+            "rejected": int(sum(rejects.values())),
+            "reject_reasons": rejects,
+        }
 
     async def replay_candles(
         self,
@@ -850,6 +1031,19 @@ class PhantomService(BaseService):
         return str(path)
 
     def restore_state(self) -> bool:
+        """Reload the persisted run summary, and flag an interrupted run.
+
+        The *position book* is deliberately not restored. A phantom position only
+        means something together with the bars that produced it, and those bars
+        are not replayed on restart — so rehydrating positions from a snapshot
+        would present marks that no longer correspond to any observed price, and
+        the next result would silently absorb a book it never saw being opened.
+
+        Silently starting empty was the other failure: `restore_state` had no
+        caller at all, so the last run and recent fills vanished on every
+        restart. Both are now explicit — the summary is restored, and an
+        interrupted run with open positions is logged and surfaced.
+        """
         if self.state_store is None or self.runtime is None:
             return False
         payload = self.state_store.load()
@@ -861,6 +1055,32 @@ class PhantomService(BaseService):
         self._last_run = (
             payload.get("last_run") if isinstance(payload.get("last_run"), dict) else None
         )
+        runtime_payload = payload.get("runtime")
+        open_positions: dict[str, Any] = {}
+        if isinstance(runtime_payload, dict):
+            raw_positions = runtime_payload.get("positions")
+            if isinstance(raw_positions, dict):
+                open_positions = {
+                    str(k): v
+                    for k, v in raw_positions.items()
+                    if isinstance(v, dict) and abs(float(v.get("quantity") or 0.0)) > 1e-12
+                }
+        if open_positions:
+            self._interrupted_run = {
+                "open_positions": open_positions,
+                "restored": False,
+                "reason": (
+                    "phantom run was interrupted with open positions; the book was "
+                    "not restored because the bars that opened it are not replayed"
+                ),
+            }
+            _log().critical(
+                "phantom recovered %d open position(s) from a previous run and "
+                "did NOT restore them (%s). Research metrics that spanned the "
+                "restart are not comparable to ones measured in a single run.",
+                len(open_positions),
+                self.state_store.path,
+            )
         return True
 
     async def what_if(
@@ -1058,6 +1278,8 @@ class PhantomService(BaseService):
         resolved_tf = str(cfg.timeframe or "1d")
         provider_resolved = ""
         bar_interval_sec: float | None = None
+        data_start_iso: str | None = None
+        data_end_iso: str | None = None
         if feed_mode == "history":
             from engine.ohlc_timeframe import (
                 TimeframeMismatchError,
@@ -1105,8 +1327,23 @@ class PhantomService(BaseService):
                 "low": [float(b.low) for b in bars],
                 "close": [float(b.close) for b in bars],
                 "volume": [float(getattr(b, "volume", 0) or 0) for b in bars],
+                # Bar timestamps, so a research digest can record *which window*
+                # it was computed over. The research gate judges clearance
+                # freshness on the last bar seen, not on when the run happened.
+                "ts": [
+                    getattr(b, "ts", None).isoformat()
+                    if getattr(b, "ts", None) is not None
+                    else None
+                    for b in bars
+                ],
             }
             source = str(provider or "history")
+            # Capture the full window before the holdout slice narrows `series`,
+            # so the digest records the newest bar the analysis truly observed
+            # (the holdout tail counts as evidence) rather than the end of the
+            # research prefix.
+            data_start_iso = _series_bound_iso(series, first=True)
+            data_end_iso = _series_bound_iso(series, first=False)
             try:
                 last = getattr(hist, "_last_fetch", None) or {}
                 if isinstance(last, dict):
@@ -1151,6 +1388,8 @@ class PhantomService(BaseService):
                 "volume": [float(getattr(b, "volume", 0) or 0) for b in candles],
             }
             source = f"pattern:{pattern_name}"
+            data_start_iso = _series_bound_iso(series, first=True)
+            data_end_iso = _series_bound_iso(series, first=False)
 
         # Optional untouched holdout tail (robustness): WF on prefix only.
         holdout_series: dict[str, list[float]] | None = None
@@ -1274,6 +1513,11 @@ class PhantomService(BaseService):
                     "source": source,
                     "timeframe": resolved_tf,
                     "bar_interval_sec": bar_interval_sec,
+                    # The window of bars this analysis actually saw. The research
+                    # gate judges freshness on this, not on when the run happened,
+                    # so a stale cache cannot be re-dated into a valid clearance.
+                    "data_start": data_start_iso,
+                    "data_end": data_end_iso,
                     "expected_interval_sec": (
                         float(expected_interval_sec) if expected_interval_sec else None
                     ),
@@ -1759,6 +2003,7 @@ class PhantomService(BaseService):
 
         orig_cfg = dict(getattr(plugin, "config", {}) or {})
         results: list[dict[str, Any]] = []
+        unfilled: list[dict[str, Any]] = []
         instance_id = str(await self.core.config.get("instance.id", "local") or "local")
         self._grid_running = True
         # Always capture strategy.signal during research, even if the Operator
@@ -1768,6 +2013,14 @@ class PhantomService(BaseService):
         self._last_ohlc = None
 
         pattern_specs: list[PatternSpec] = []
+        # The timeframe the history feed will actually replay. `run_grid` used to
+        # omit this from `hist.replay(...)`, so the replay silently fell back to
+        # the service default (1m) no matter what the research run asked for.
+        # Measured consequence on `BTC/USDT` "1h": the replay published 60-second
+        # bars, and momentum ROC collapsed from ±0.036..0.059 to
+        # ±0.008..0.005 — 89 threshold crossings became 0, so the strategy went
+        # silent while every result was still labelled 1h.
+        history_timeframe: str | None = None
         if feed_mode in {"patterns", "both"}:
             bars = int(limit or self.config.get("pattern_bars") or 80)
             px = float(
@@ -1791,6 +2044,7 @@ class PhantomService(BaseService):
                 wf_tf = str(
                     (self.config.get("walk_forward") or {}).get("timeframe") or "1d"
                 )
+                history_timeframe = wf_tf
                 bars_hist = await hist.fetch(
                     ticker,
                     class_code=class_code,
@@ -1824,6 +2078,8 @@ class PhantomService(BaseService):
                     if self.runtime is not None:
                         self.runtime.phantom_timeline = self.timeline
                 self._bar_index = -1
+                # A fresh run must not inherit the previous run's queued signals.
+                self._pending_fills = []
                 session_cfg = (
                     plugin.isolated_config(var)
                     if hasattr(plugin, "isolated_config")
@@ -1865,6 +2121,7 @@ class PhantomService(BaseService):
                             ticker,
                             class_code=class_code,
                             provider=provider,
+                            timeframe=history_timeframe,
                             limit=limit,
                             run_id=rid,
                             strategy_id=strategy_id,
@@ -1921,6 +2178,8 @@ class PhantomService(BaseService):
                         "trades": metrics["trades"],
                         "final_equity": metrics["final_equity"],
                         "total_costs": metrics.get("total_costs"),
+                        # Surface why nothing happened when nothing happened.
+                        **self.shadow_reject_summary(),
                     }
                     results.append(row)
                     await publish_phantom_run(
@@ -1951,7 +2210,33 @@ class PhantomService(BaseService):
                 self.persist_state()
             except Exception:
                 pass
+            # A signal on the final bar of a variant has no next bar to fill
+            # against under `next_open`. Report it so the grid's trade count is
+            # honest rather than quietly short by one per variant.
+            for skipped in self.flush_pending_fills():
+                unfilled.append(
+                    {
+                        "run_id": skipped.get("run_id") or "",
+                        "status": "unfilled",
+                        "reason": "no_next_bar",
+                        "bars": self._bar_index,
+                        "ticker": skipped.get("ticker"),
+                        "action": skipped.get("action"),
+                        "strategy_id": skipped.get("strategy_id"),
+                    }
+                )
 
+        # `results` is one row per variant. The unfilled-signal notices used to be
+        # appended into the same list, which gave them a second, incompatible
+        # shape: no `feed`, no `pnl`, `trades: 0`. Anything that consumed the
+        # grid positionally — a research report, a UI panel, the sweep tool —
+        # then read one of those as a variant result and reported a run that
+        # traded nothing, while the real row next to it held the actual trades.
+        # They are reported as a count on each row and in full on
+        # `last_unfilled_signals`, keeping `results` single-shaped.
+        for row in results:
+            row["unfilled_signals"] = len(unfilled)
+        self._last_unfilled_signals = list(unfilled)
         self._last_grid = results
         self._last_run = results[-1] if results else None
         return results
