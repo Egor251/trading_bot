@@ -11,6 +11,7 @@ import math
 from typing import Any
 from uuid import uuid4
 
+from .cost_calibration import ExecutionObservation
 from .costs import (
     CostBreakdown,
     CostComponent,
@@ -65,7 +66,22 @@ class OrderIntent:
     account: str = ""
     reduce_only: bool = False
     exit_reason: str = ""
+    #: Market price when the decision was taken. Slippage is measured against
+    #: this, not against the previous close, because the strategy acted *because*
+    #: of this price. Falls back to `limit_price` when the caller does not say.
+    reference_price: float | None = None
     client_id: str = field(default_factory=lambda: uuid4().hex)
+
+    @property
+    def slippage_reference(self) -> float | None:
+        for candidate in (self.reference_price, self.limit_price):
+            try:
+                value = float(candidate)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return None
 
     @property
     def exposure_key(self) -> str:
@@ -175,6 +191,11 @@ class OrderManager:
         #: Deliberately separate from `total_costs`, which is a sum over the
         #: fill ledger — funding is not a fill and never appears there.
         self._carry_charged: float = 0.0
+        #: Recent executions with expected-versus-actual costs. Kept here rather
+        #: than derived later: the fill is the only moment both the reference
+        #: price and the realised price still exist.
+        self._exec_observations: list[ExecutionObservation] = []
+        self._exec_observation_limit = 5000
         self._broker_applied_qty: dict[str, float] = {}
         self._broker_applied_notional: dict[str, float] = {}
         self.cost_schedule = cost_schedule or self._legacy_cost_schedule(
@@ -286,6 +307,52 @@ class OrderManager:
     def carry_costs(self) -> float:
         """Net carry charged (positive = paid out, negative = received)."""
         return float(self._carry_charged)
+
+    def _record_execution_observation(
+        self, intent: Any, record: Any, *, raw: Any = None
+    ) -> None:
+        """Capture what this fill actually cost, so the model can be checked.
+
+        Without this the cost model is never tested against reality: every fill
+        books the configured constants whether or not the venue agrees, and the
+        error propagates into every PnL derived from it without ever surfacing.
+        An observation that cannot be measured is dropped rather than recorded as
+        zero, since a fabricated zero is worse than a gap -- it would read as
+        free execution.
+        """
+        reference = getattr(intent, "slippage_reference", None)
+        if not reference:
+            return
+        try:
+            multiplier = float(getattr(record, "contract_multiplier", 1.0) or 1.0)
+            notional = abs(float(record.quantity) * float(record.price) * multiplier)
+            if notional <= 0:
+                return
+            broker_fee = (raw or {}).get("fee")
+            observation = ExecutionObservation(
+                fill_id=str(record.fill_id),
+                venue=str(record.venue),
+                symbol=str(record.symbol),
+                side=str(record.side),
+                quantity=abs(float(record.quantity)),
+                reference_price=float(reference),
+                fill_price=float(record.price),
+                notional=notional,
+                expected_cost=float(record.total_cost),
+                actual_fee=float(broker_fee) if broker_fee is not None else None,
+            )
+        except Exception:  # noqa: BLE001 - measurement must never break a fill
+            return
+        self._exec_observations.append(observation)
+        # Bounded: calibration needs a recent window, and an unbounded list
+        # here would grow for the life of the process.
+        if len(self._exec_observations) > self._exec_observation_limit:
+            del self._exec_observations[: len(self._exec_observations)
+                                         - self._exec_observation_limit]
+
+    def execution_observations(self) -> list[ExecutionObservation]:
+        """Recent fills with expected-versus-actual costs, for calibration."""
+        return list(self._exec_observations)
 
     @property
     def exposures(self) -> dict[str, float]:
@@ -600,6 +667,7 @@ class OrderManager:
             costs=costs,
         )
         self.fill_ledger.append(record)
+        self._record_execution_observation(intent, record, raw=raw)
         self.cash += record.cash_delta
         self._daily_turnover += abs(float(quantity) * float(price) * float(multiplier))
         position = self.positions.setdefault(
