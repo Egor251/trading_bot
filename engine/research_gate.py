@@ -7,9 +7,10 @@ from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from engine.paths import data_path
 
 
-DEFAULT_CLEARANCE_PATH = Path("data/phantom/research_clearance.json")
+DEFAULT_CLEARANCE_PATH = data_path("phantom", "research_clearance.json")
 
 GRADE_RESEARCH = "research_only"
 GRADE_OBSERVE = "observe_ok"
@@ -64,6 +65,19 @@ class LiveReadinessPolicy:
     observe_min_tickers_robust: int = 1
     observe_require_ci_excludes_zero: bool = False
     observe_min_holdout_trades: int = 1
+    #: Whether the gate actually *gates*. When true (the default) a member that
+    #: does not reach ``live_ok`` is demoted from the live lineup to observe at
+    #: Consilium start-up, instead of merely being reported as unready.
+    #:
+    #: This defaulted to advisory because nothing on the decision path ever
+    #: called the gate: `evaluate_live_readiness` was reachable only from an
+    #: operator UI command and as an LLM tool, and the LLM was merely *asked*
+    #: not to promote an uncleared strategy. The shipped config therefore armed
+    #: `dual_thrust` for live votes while its own research snapshot cleared 0 of
+    #: 28 entries — 28/28 had `ci_crosses_zero: true`, the best holdout had 8
+    #: trades against a required 20, and the snapshot had been stale since
+    #: 2026-08-06. Set false to restore the previous advisory-only behaviour.
+    enforce: bool = True
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> LiveReadinessPolicy:
@@ -86,10 +100,35 @@ def policy_from_config(raw_cfg: Mapping[str, Any] | None) -> LiveReadinessPolicy
     return LiveReadinessPolicy.from_mapping(trading.get("live_readiness"))
 
 
+#: Parsed `research_clearance.json`, keyed by (path, mtime_ns, size).
+#:
+#: `build_snapshot()` calls `evaluate_many()` for every UI frame, which calls
+#: `evaluate_live_readiness()` per strategy, which calls `load_clearance()`. That
+#: was an `is_file()` + `read_text()` + `json.loads()` *per strategy per frame* —
+#: ~21 strategies at 4 Hz is ~84 synchronous disk reads a second on the event loop
+#: that also serves `/api/*` commands and the broadcast. A cache keyed on mtime
+#: and size makes the file read once and still invalidate the instant the research
+#: service rewrites it.
+_CLEARANCE_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_CLEARANCE_CACHE_MAX = 8
+
+
+def clear_clearance_cache() -> None:
+    """Drop the parsed-snapshot cache. Used by tests and after a rewrite."""
+    _CLEARANCE_CACHE.clear()
+
+
 def load_clearance(path: str | Path | None = None) -> dict[str, Any]:
     p = Path(path or DEFAULT_CLEARANCE_PATH)
-    if not p.is_file():
+    try:
+        stat = p.stat()
+    except OSError:
+        _CLEARANCE_CACHE.pop(str(p), None)
         return {"entries": {}, "updated_at": None}
+    key = str(p)
+    cached = _CLEARANCE_CACHE.get(key)
+    if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -99,7 +138,11 @@ def load_clearance(path: str | Path | None = None) -> dict[str, Any]:
     entries = raw.get("entries")
     if not isinstance(entries, dict):
         entries = {}
-    return {"entries": entries, "updated_at": raw.get("updated_at")}
+    out: dict[str, Any] = {"entries": entries, "updated_at": raw.get("updated_at")}
+    if len(_CLEARANCE_CACHE) >= _CLEARANCE_CACHE_MAX:
+        _CLEARANCE_CACHE.clear()
+    _CLEARANCE_CACHE[key] = (stat.st_mtime_ns, stat.st_size, out)
+    return out
 
 
 def save_clearance(store: Mapping[str, Any], path: str | Path | None = None) -> str:
@@ -150,6 +193,13 @@ def record_digest_clearance(
         "variants_count": digest.get("variants_count"),
         "chosen": dict(digest.get("chosen") or {}),
         "recorded_at": datetime.now(UTC).isoformat(),
+        # When the evidence was *produced*, i.e. the last bar the analysis saw.
+        # `recorded_at` alone was misleading: re-running walk-forward today on a
+        # two-month-old cache stamped the entry with today's date and satisfied
+        # the 30-day freshness rule, so a strategy could be cleared on stale
+        # prices simply by re-running the analysis.
+        "data_start": digest.get("data_start"),
+        "data_end": digest.get("data_end"),
         "report_path": digest.get("report_path"),
     }
     store = {"entries": entries}
@@ -192,11 +242,13 @@ def clearance_hits_for_strategy(
     return hits
 
 
-def _parse_recorded_at(row: Mapping[str, Any]) -> datetime | None:
-    raw = row.get("recorded_at")
+def _parse_recorded_at(row: Mapping[str, Any], field: str = "recorded_at") -> datetime | None:
+    raw = row.get(field)
     if not raw:
         return None
     try:
+        # Bare timestamps are bar opens in the market feed, so a naive value is
+        # UTC by definition.
         dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
@@ -345,17 +397,35 @@ def evaluate_live_readiness(
     ci_ok = not any_ci_cross
 
     age_ok = True
+    oldest_evidence: list[dict[str, Any]] = []
     for h in metric_pool:
-        ts = _parse_recorded_at(h)
+        # Judge the *evidence*, not the moment the analysis was run. Re-running
+        # walk-forward on a stale cache used to satisfy the freshness rule on its
+        # own, which meant clearance could be renewed indefinitely without ever
+        # looking at a new bar.
+        ts = _parse_recorded_at(h, "data_end") or _parse_recorded_at(h)
         if ts is None:
             continue
-        if instant - ts > timedelta(days=max(0, int(pol.max_age_days))):
+        age = instant - ts
+        if age > timedelta(days=max(0, int(pol.max_age_days))):
             age_ok = False
-            break
+        oldest_evidence.append(
+            {
+                "ticker": h.get("ticker"),
+                "evidence_at": ts.isoformat(),
+                "age_days": round(age.total_seconds() / 86400.0, 1),
+                "data_end": h.get("data_end"),
+            }
+        )
     _check(
         "clearance_fresh",
         age_ok,
-        detail={"max_age_days": pol.max_age_days},
+        detail={
+            "max_age_days": pol.max_age_days,
+            "evidence": sorted(
+                oldest_evidence, key=lambda r: -float(r["age_days"])
+            )[:6],
+        },
     )
 
     _check(

@@ -1,0 +1,8 @@
+id: supertrend_follow
+name: Supertrend Follow
+version: "1.0.0"
+description: ATR Supertrend trail — popular crypto/FX trend follower
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:SupertrendFollowPlugin

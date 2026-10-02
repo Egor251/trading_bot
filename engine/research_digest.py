@@ -69,6 +69,11 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         "class_code": str(prov.get("class_code") or report.get("class_code") or ""),
         "timeframe": str(prov.get("timeframe") or ""),
         "bar_interval_sec": prov.get("bar_interval_sec"),
+        # The window of bars this analysis actually covered. The research gate
+        # judges clearance freshness on the last bar seen rather than on when the
+        # run happened, so a stale cache cannot be re-dated into a valid clearance.
+        "data_start": prov.get("data_start"),
+        "data_end": prov.get("data_end"),
         "provider_resolved": str(prov.get("provider_resolved") or ""),
         "variant_mode": str(prov.get("variant_mode") or ""),
         "variants_count": int(prov.get("variants_count") or report.get("variants") or 0),

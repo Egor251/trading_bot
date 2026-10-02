@@ -1,0 +1,8 @@
+id: cci_reversion
+name: CCI Reversion
+version: "1.0.0"
+description: CCI style mean reversion
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:CciReversionPlugin

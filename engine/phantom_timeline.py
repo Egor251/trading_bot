@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from uuid import uuid4
 
 

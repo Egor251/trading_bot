@@ -1,0 +1,8 @@
+id: rsi_reversion
+name: RSI Reversion
+version: "1.0.0"
+description: Classic RSI oversold/overbought mean reversion
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:RsiReversionPlugin

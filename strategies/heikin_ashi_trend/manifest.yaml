@@ -1,0 +1,8 @@
+id: heikin_ashi_trend
+name: Heikin Ashi Trend
+version: "1.0.0"
+description: Heikin-Ashi candle color streak follower
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:HeikinAshiTrendPlugin

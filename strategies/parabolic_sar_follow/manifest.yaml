@@ -1,0 +1,8 @@
+id: parabolic_sar_follow
+name: Parabolic SAR Follow
+version: "1.0.0"
+description: Parabolic SAR trail flip follower
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:ParabolicSarFollowPlugin

@@ -1,0 +1,8 @@
+id: williams_r_reversion
+name: Williams R Reversion
+version: "1.0.0"
+description: Williams %R extremes mean reversion
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:WilliamsRReversionPlugin

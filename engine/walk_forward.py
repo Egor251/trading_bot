@@ -6,13 +6,13 @@ import json
 import math
 import random
 import statistics
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from engine.paths import data_path
 from engine.research import (
-    WalkForwardWindow,
     buy_hold_oos_metrics,
     expectancy_metrics,
     offline_variant_metrics,
@@ -69,7 +69,7 @@ class WalkForwardConfig:
     bootstrap_ci: float = 0.95
     score_key: str = "pnl"
     persist_report: bool = True
-    report_dir: str = "data/phantom/walk_forward"
+    report_dir: str = field(default_factory=lambda: str(data_path("phantom", "walk_forward")))
     pattern: str = "sharp_rise"
     # Research default 1d — crypto auto-fetch otherwise silently uses 1m.
     timeframe: str = "1d"
@@ -102,7 +102,7 @@ class WalkForwardConfig:
         object.__setattr__(self, "score_key", str(self.score_key or "pnl"))
         object.__setattr__(self, "persist_report", bool(self.persist_report))
         object.__setattr__(
-            self, "report_dir", str(self.report_dir or "data/phantom/walk_forward")
+            self, "report_dir", str(self.report_dir or data_path("phantom", "walk_forward"))
         )
         object.__setattr__(self, "pattern", str(self.pattern or "sharp_rise"))
         tf = str(self.timeframe or "1d").strip().lower() or "1d"

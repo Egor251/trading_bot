@@ -49,6 +49,19 @@ async def emit_on_side_change(
     if action == "HOLD" and intent == "flat":
         fields["intent"] = "flat"
         fields["reason"] = decision.reason or "exit_flat"
+        # A HOLD carries `strength=0.0` by definition, and the inverted exit
+        # inherited that. The Consilium then scored it as no opinion at all:
+        # `aggregate` multiplies by strength, so a zero-strength vote cancels to
+        # `flat_consensus` and the *entire* debounce window is discarded —
+        # including any real entry signal that arrived in the same window.
+        #
+        # That is what `dual_thrust` did on every one of its exits (measured: 42
+        # of 84 signals, all `dual_thrust_inside`, mean strength 0.19). As the
+        # only live member of the shipped lineup it could open a position and
+        # never contribute a vote to close it.
+        #
+        # A forced flat is a full-strength instruction, not a weak opinion.
+        fields["strength"] = 1.0
     await plugin.emit_signal(
         {
             **fields,

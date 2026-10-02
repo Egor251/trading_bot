@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from enum import Enum
 from math import sqrt
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping
 
 
 Clock = Callable[[], datetime]

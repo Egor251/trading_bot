@@ -1,0 +1,8 @@
+id: ema_cross
+name: EMA Cross
+version: "1.0.0"
+description: Classic EMA fast/slow crossover (12/26 style)
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:EmaCrossPlugin

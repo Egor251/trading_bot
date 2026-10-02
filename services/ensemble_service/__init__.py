@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,10 @@ from host.events import (
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
+
+
+def _log() -> logging.Logger:
+    return logging.getLogger("ensemble")
 
 
 def _coerce_signal_strength(raw: Any) -> float:
@@ -61,12 +66,29 @@ class EnsembleService(BaseService):
         self._rebalance_paused: bool = False
         self._risk_scale: float = 1.0
         self._last_diagnosis: dict[str, Any] | None = None
+        #: Weights as last announced on the event bus. ``None`` means "nothing
+        #: published yet", so the first publish always goes out.
+        self._last_published_weights: dict[str, float] | None = None
+        #: Whether the negative-mean weight cut has already been applied for the
+        #: current diagnosis episode. It used to be applied on *every* diagnosis,
+        #: multiplying each negative member's weight by `diagnosis_neg_weight_mult`
+        #: (0.25) again on each pass: with the monitor firing every 60s, weights
+        #: collapsed geometrically toward zero within minutes and never recovered
+        #: until a HEALTHY verdict cleared them. Reset by a HEALTHY diagnosis.
+        self._diagnosis_cut_applied: bool = False
+        #: `time.monotonic()` when the oldest buffered signal was queued. Used to
+        #: bound the debounce so a fast signal stream cannot starve the flush.
+        self._buffer_since: float | None = None
 
     def default_config(self) -> dict[str, Any]:
         return {
             "enabled": True,
             "auto_start": True,
             "debounce_sec": 0.05,
+            # Hard ceiling on how long a signal may wait for a quiet window.
+            # `debounce_sec` alone lets a fast signal stream starve the flush
+            # entirely, because every arrival reschedules it.
+            "debounce_max_wait_sec": 1.0,
             "route_execution": False,
             "rebalance_sec": 60.0,
             "rebalance_every_fills": 5,
@@ -150,7 +172,13 @@ class EnsembleService(BaseService):
             weights = dict(self.manager.weights)
         self._fills_since_rebalance = 0
         if publish:
-            await self._publish_weights(reason="rebalance")
+            # Only announce a change. `apply_weight_mode` runs on a timer and on
+            # every regime tick, and it used to publish unconditionally: the
+            # journal held 897,653 `ensemble.weights_changed` rows carrying two
+            # distinct payloads, i.e. the event stream was ~100% repeated state
+            # while still costing a full storage round-trip per row.
+            if await self._publish_weights_if_changed(reason="rebalance"):
+                self._last_published_weights = dict(self.manager.weights)
         return weights
 
     async def apply_diagnosis(self, diagnosis: Any) -> dict[str, Any]:
@@ -178,6 +206,7 @@ class EnsembleService(BaseService):
         if kind == DiagnosisKind.HEALTHY:
             self._rebalance_paused = False
             self._risk_scale = 1.0
+            self._diagnosis_cut_applied = False
             return {
                 "ok": True,
                 "kind": kind.value,
@@ -192,6 +221,7 @@ class EnsembleService(BaseService):
             self._rebalance_paused = True
 
         changed = False
+        already_cut = bool(self._diagnosis_cut_applied)
         if kind in {
             DiagnosisKind.PARAMETER_DRIFT,
             DiagnosisKind.STRUCTURAL_BREAK,
@@ -208,13 +238,18 @@ class EnsembleService(BaseService):
             )
             ids = self.lineup_ids()
             weights = dict(self.manager.weights) or {sid: 1.0 for sid in ids}
-            for sid in ids:
-                if float(self.manager.stats.mean_return(sid)) < 0.0:
-                    weights[sid] = float(weights.get(sid, 0.0)) * mult
-                    changed = True
+            if not already_cut:
+                for sid in ids:
+                    if float(self.manager.stats.mean_return(sid)) < 0.0:
+                        weights[sid] = float(weights.get(sid, 0.0)) * mult
+                        changed = True
             if changed:
                 self.manager.set_weights(weights)
-                await self._publish_weights(reason="diagnosis_autoweight")
+                if await self._publish_weights_if_changed(
+                    reason="diagnosis_autoweight"
+                ):
+                    self._last_published_weights = dict(self.manager.weights)
+        self._diagnosis_cut_applied = True
 
         return {
             "ok": True,
@@ -243,6 +278,19 @@ class EnsembleService(BaseService):
             out[sid] = arch.lower()
         return out
 
+    async def _publish_weights_if_changed(self, *, reason: str) -> bool:
+        """Publish weights only when they actually moved. Returns True if sent.
+
+        The first call always publishes, so a startup state is still observable.
+        """
+        current = {
+            str(k): round(float(v), 10) for k, v in (self.manager.weights or {}).items()
+        }
+        if self._last_published_weights is not None and current == self._last_published_weights:
+            return False
+        await self._publish_weights(reason=reason)
+        return True
+
     async def _publish_weights(self, *, reason: str) -> None:
         instance_id = str(await self.core.config.get("instance.id", "local") or "local")
         await publish_ensemble_weights_changed(
@@ -258,6 +306,96 @@ class EnsembleService(BaseService):
             instance_id=instance_id,
         )
 
+    async def _enforce_research_gate(self, ids: list[str]) -> list[str]:
+        """Demote live members that the research gate does not clear.
+
+        The gate exists to answer "is there evidence this strategy survives
+        out-of-sample?". Nothing on the decision path ever asked it: it was
+        reachable only from an operator command and as an LLM tool whose prompt
+        merely *asked* the model not to promote an uncleared strategy. So a YAML
+        line was the only thing standing between an unvalidated strategy and
+        live Consilium votes — and the shipped config had one armed.
+
+        With ``trading.live_readiness.enforce`` (default on) a member that does
+        not reach ``live_ok`` is moved to the observe roster and the reason is
+        published, so the Consilium keeps evaluating it without trading it.
+        """
+        if not ids:
+            return ids
+        try:
+            from engine.research_gate import (
+                LiveReadinessPolicy,
+                evaluate_live_readiness,
+            )
+
+            # `policy_from_config` takes the *whole* config and digs out the
+            # `trading` section itself; passing the section again silently
+            # yields the default policy, i.e. enforce=True.
+            trading_cfg = dict(await self.core.config.get("trading", {}) or {})
+            policy = LiveReadinessPolicy.from_mapping(
+                trading_cfg.get("live_readiness")
+            )
+        except Exception:
+            # Fail closed: if the policy cannot be read, nobody gets promoted.
+            return []
+        if not policy.enforce:
+            return ids
+        keep: list[str] = []
+        demoted: list[dict[str, Any]] = []
+        for sid in ids:
+            try:
+                verdict = evaluate_live_readiness(sid, policy=policy)
+            except Exception:
+                # An unusable gate must not silently promote anyone.
+                demoted.append({"strategy_id": sid, "reason": "gate_error"})
+                continue
+            if verdict.get("live_ok"):
+                keep.append(sid)
+            else:
+                demoted.append(
+                    {
+                        "strategy_id": sid,
+                        "reason": ",".join(
+                            str(b.get("reason")) for b in verdict.get("blockers") or []
+                        )
+                        or f"grade={verdict.get('grade')}",
+                        "grade": verdict.get("grade"),
+                        "score": verdict.get("score"),
+                    }
+                )
+        if not demoted:
+            return ids
+        observe = [str(x) for x in (self._ensemble_cfg.get("observe") or []) if x]
+        for entry in demoted:
+            if entry["strategy_id"] not in observe:
+                observe.append(entry["strategy_id"])
+        self._ensemble_cfg["observe"] = observe
+        _log().critical(
+            "research gate demoted %d Consilium member(s) from live to observe: %s. "
+            "Set trading.live_readiness.enforce=false to override.",
+            len(demoted),
+            ", ".join(
+                f"{d['strategy_id']}({d['reason']})" for d in demoted
+            ),
+        )
+        try:
+            await publish_ensemble_reject(
+                self.core.event_bus,
+                source_id=self.component_id,
+                payload={
+                    "reason": "research_gate_demoted",
+                    "stage": "consilium_start",
+                    "demoted": demoted,
+                    "live": list(keep),
+                },
+                instance_id=str(
+                    await self.core.config.get("instance.id", "local") or "local"
+                ),
+            )
+        except Exception:
+            pass
+        return keep
+
     async def start(self) -> None:
         if self.is_running:
             return
@@ -268,6 +406,8 @@ class EnsembleService(BaseService):
         # Legacy auto-fill of *all* StrategyPlugin ids into live was unsafe:
         # YAML ``strategies: []`` after restart became ~20 live strategies.
         ids = [str(x) for x in (self._ensemble_cfg.get("strategies") or []) if x]
+        self._ensemble_cfg["strategies"] = ids
+        ids = await self._enforce_research_gate(ids)
         self._ensemble_cfg["strategies"] = ids
         if not ids:
             self.manager.set_weights({})
@@ -569,6 +709,23 @@ class EnsembleService(BaseService):
             return
         self._buffer.setdefault(sig.symbol, []).append(sig)
         debounce = float(self.config.get("debounce_sec") or 0.05)
+        # Starvation guard. Every signal used to cancel and reschedule the flush,
+        # so while signals arrived faster than the debounce the flush never ran at
+        # all and `_buffer` grew without bound. On minute bars that is invisible —
+        # signals are a minute apart — but on second bars with several strategies
+        # the Consilium goes silent and leaks memory. The flush now also fires
+        # after `debounce_max_wait_sec` even if signals keep arriving.
+        max_wait = float(self.config.get("debounce_max_wait_sec") or 1.0)
+        now = time.monotonic()
+        if self._buffer_since is None:
+            self._buffer_since = now
+        waited = now - self._buffer_since
+        if waited >= max_wait:
+            self._buffer_since = None
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+            self._flush_task = asyncio.create_task(self._flush())
+            return
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
         self._flush_task = asyncio.create_task(self._flush_later(debounce))
@@ -576,11 +733,13 @@ class EnsembleService(BaseService):
     async def _flush_later(self, delay: float) -> None:
         try:
             await asyncio.sleep(delay)
+            self._buffer_since = None
             await self._flush()
         except asyncio.CancelledError:
             return
 
     async def _flush(self) -> None:
+        self._buffer_since = None
         if not self._buffer:
             return
         pending = self._buffer
