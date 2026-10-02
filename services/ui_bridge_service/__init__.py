@@ -33,6 +33,10 @@ from engine.cost_workflow import (
     SourceDocument,
     validate_cost_draft,
 )
+from engine.risk_patch_guard import (
+    guard_service_config_patch as _guard_service_config_patch,
+)
+from engine.risk_patch_guard import validate_risk_patch as _validate_risk_patch
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
@@ -75,6 +79,31 @@ _NOTIFY_EVENTS = frozenset(
 )
 
 
+#: Risk knobs an operator may set from the UI, with bounds that keep a value
+#: meaningful. `strength_floor` is here because it decides whether a strategy
+#: signal can open a position at all, and until now it was only reachable by
+#: editing YAML - the one policy dial with no UI affordance.
+_RISK_KNOBS: dict[str, tuple[float, float]] = {
+    "max_daily_loss": (0.0, 1.0),
+    "max_daily_turnover": (0.0, 1000.0),
+    "max_order_rate": (0.0, 10_000.0),
+    "max_position_pct": (0.0, 1.0),
+    "max_leverage": (0.0, 10.0),
+    "max_concentration": (0.0, 1.0),
+    "max_portfolio_drawdown": (0.0, 1.0),
+    "max_strategy_drawdown": (0.0, 1.0),
+    "max_data_age_seconds": (0.0, 86_400.0),
+    "strength_floor": (0.0, 1.0),
+}
+
+#: Execution knobs: resting-order lifetime and maker-only behaviour.
+_EXECUTION_KNOBS: dict[str, tuple[float, float]] = {
+    "stale_order_ttl_sec": (0.0, 86_400.0),
+    "stale_order_sweep_interval_sec": (1.0, 3600.0),
+}
+
+
+
 class UiBridgeService(BaseService):
     """Publishes a read-model snapshot for the operator UI (non-blocking)."""
 
@@ -88,12 +117,19 @@ class UiBridgeService(BaseService):
         self._cmd_task: asyncio.Task[None] | None = None
         self._zmq_pub: Any = None
         self._zmq_sub: Any = None
+        #: Outcomes of commands that arrived over a transport with no return path
+        #: (ZMQ SUB is one-way). Keyed by `request_id`, surfaced in the snapshot.
+        self._command_acks: dict[str, Any] = {}
         self._last_snapshot: dict[str, Any] = {}
         self._hz = 10.0
         self._equity_curve: deque[float] = deque(maxlen=300)
         self._last_equity: float | None = None
         self._storage_cache: dict[str, Any] = {"ready": False}
         self._storage_cache_tick: int = 0
+        #: Seconds a connected client may take to absorb one snapshot frame.
+        #: Bounded because `StreamWriter.drain()` waits on the peer's TCP
+        #: window and will not return while a client is not reading.
+        self._drain_timeout_sec = float(self.config.get("drain_timeout_sec") or 5.0)
         self._secrets_presence_cache: dict[str, Any] = {"present": {}}
         self._secrets_presence_ts: float = 0.0
 
@@ -107,6 +143,10 @@ class UiBridgeService(BaseService):
             "ws_host": "127.0.0.1",
             "ws_port": 8765,
             "zmq_enabled": True,
+            # Bound on how long one client may stall the broadcast. See
+            # `_broadcast`: an unbounded `drain()` let a single non-reading
+            # client freeze snapshots for everybody.
+            "drain_timeout_sec": 5.0,
         }
 
     async def on_initialize(self) -> None:
@@ -207,6 +247,19 @@ class UiBridgeService(BaseService):
             if runtime and hasattr(runtime, "snapshot")
             else {}
         )
+        # Refresh the Prometheus gauges and ship the exposition with the
+        # snapshot, so the BFF's /metrics endpoint has something to serve.
+        metrics_text = ""
+        if runtime is not None and hasattr(runtime, "publish_metrics"):
+            try:
+                runtime.publish_metrics()
+                obs = getattr(self.core, "operations_observability", None)
+                if obs is not None and hasattr(obs, "prometheus_text"):
+                    metrics_text = str(obs.prometheus_text())
+            except Exception:
+                _log().exception("metrics publication failed")
+        if metrics_text:
+            trading = {**trading, "metrics_text": metrics_text}
         ensemble: dict[str, Any] = {}
         if ens is not None:
             mgr = getattr(ens, "manager", None)
@@ -377,6 +430,10 @@ class UiBridgeService(BaseService):
             "secrets": self._secrets_presence_snapshot(),
             "market": self._market_feed_snapshot(),
             "storage": dict(self._storage_cache),
+            # Outcomes for transports with no return path (ZMQ SUB is one-way,
+            # so a denied command would otherwise be indistinguishable from a
+            # delivered one).
+            "command_acks": dict(self._command_acks),
             "control": self._control_auth_snapshot(),
             "recent": list(self._recent)[:20],
             "recent_notify": list(self._notify_recent)[:30],
@@ -728,6 +785,8 @@ class UiBridgeService(BaseService):
             "SET_ENSEMBLE",
             "SET_PLUGIN",
             "SET_STRATEGY_PARAMS",
+            "SET_RISK",
+            "SET_EXECUTION",
             "SET_TRADING",
             "RESET_PAPER",
             "CLEAR_PAPER",
@@ -769,61 +828,46 @@ class UiBridgeService(BaseService):
         return result
 
     def _authorize_command(self, raw: str, payload: dict[str, Any]) -> None:
-        """Authorize control mutations once; emergency HALT always remains open."""
+        """Authorize control mutations once; emergency HALT always remains open.
+
+        Fails **closed**: if the control authorizer is not installed (safety
+        service disabled, discovery error, start-order race) every privileged
+        command is refused.  The previous behaviour — return early and let the
+        command through — meant that losing one service silently turned the
+        whole control plane into an unauthenticated one.
+        """
+        from engine.control_commands import (
+            classify_control_command,
+            is_live_mode,
+            requires_authorization,
+        )
+
+        name = str(raw or "").strip().upper()
+        if not requires_authorization(name):
+            return
+
+        runtime = getattr(self.core, "trading", None)
+        command = classify_control_command(
+            name,
+            live_mode=is_live_mode(runtime),
+            requested_mode=str(payload.get("mode") or "") if name == "SET_TRADING" else None,
+        )
+        if command is None:
+            return
+
         authorizer = vars(self.core).get("control_authorizer")
         if authorizer is None:
-            # Lightweight unit-test cores do not install the safety service.
-            return
-        from engine.control_auth import ControlCommand
+            # Fail closed — but never at the cost of blocking risk reduction.
+            if command.value == "halt":
+                payload["_authorized_subject"] = "unauthenticated_emergency_halt"
+                return
+            from engine.control_auth import AuthorizationDenied
 
-        if raw in {"KILL", "HALT", "STOP", "EMERGENCY"}:
-            command = ControlCommand.HALT
-        elif raw in {"RESUME", "START"}:
-            command = ControlCommand.RESUME
-        elif raw == "SET_TRADING" and str(payload.get("mode") or "").lower() in {
-            "live",
-            "quik",
-        }:
-            command = ControlCommand.LIVE
-        elif raw in {"PLACE_ORDER", "CLOSE_POSITION", "CLOSE_ALL"}:
-            # Live book mutations require LIVE principal; paper still CONFIG.
-            runtime = getattr(self.core, "trading", None)
-            mode = str(getattr(runtime, "mode", "") or "").lower()
-            command = (
-                ControlCommand.LIVE
-                if mode in {"live", "quik"}
-                else ControlCommand.CONFIG
+            raise AuthorizationDenied(
+                "control authorizer is not installed; refusing "
+                f"{name} (fail-closed)"
             )
-        elif raw in {
-            "SAVE_CONFIG",
-            "SET_UNIVERSE",
-            "SET_TRADING",
-            "SET_ENSEMBLE",
-            "SET_PLUGIN",
-            "SET_STRATEGY_PARAMS",
-            "SET_AI",
-            "SET_SECRETS",
-            "SET_STORAGE",
-            "COST_SAVE_DRAFT",
-            "COST_ACTIVATE",
-            "RESET_PAPER",
-            "CLEAR_PAPER",
-            "RESET_SIM",
-            "PHANTOM_RESET",
-            "PHANTOM_CAPTURE",
-            "PHANTOM_RUN",
-            "PHANTOM_WALK_FORWARD",
-            "PHANTOM_WALK_FORWARD_BATCH",
-            "PHANTOM_APPLY_CHOSEN",
-            "PHANTOM_SYNC_METRICS",
-            "CANCEL_ORDER",
-            "CANCEL_ALL_ORDERS",
-            "RELEASE_EXIT",
-            "RECONCILE_NOW",
-        }:
-            command = ControlCommand.CONFIG
-        else:
-            return
+
         authorization = authorizer.authorize(
             command,
             token=payload.get("auth_token") or payload.get("token"),
@@ -832,6 +876,7 @@ class UiBridgeService(BaseService):
         principal = authorization.principal
         if principal is not None:
             payload["_authorized_subject"] = principal.subject
+            payload["_authorized_roles"] = sorted(r.value for r in principal.roles)
 
     async def _dispatch(
         self, raw: str, payload: dict[str, Any], instance_id: str
@@ -887,6 +932,10 @@ class UiBridgeService(BaseService):
             return await self._cmd_set_plugin(payload)
         if raw == "SET_STRATEGY_PARAMS":
             return await self._cmd_set_strategy_params(payload)
+        if raw == "SET_RISK":
+            return await self._cmd_set_risk(payload)
+        if raw == "SET_EXECUTION":
+            return await self._cmd_set_execution(payload)
         if raw == "ASK":
             return await self._cmd_ask(payload)
         if raw == "SET_AI":
@@ -2006,6 +2055,191 @@ class UiBridgeService(BaseService):
             "needs_restart": False,
         }
 
+    async def _live_lineup_blocker(self, mode_s: str) -> dict[str, Any] | None:
+        """Why live trading cannot be armed, or ``None`` if it can.
+
+        Returns a payload with ``blockers`` naming each strategy and the specific
+        research-gate reasons it is not cleared, so the operator sees *what to fix*
+        rather than a generic refusal.
+        """
+        ens = self.core.service_registry.get("ensemble_service")
+        if ens is None:
+            return {
+                "detail": "ensemble_service is not available, so no lineup can be "
+                "verified as cleared for live trading",
+                "blockers": [],
+            }
+        lineup = [str(x) for x in (ens.lineup_ids() if hasattr(ens, "lineup_ids") else ()) if x]
+        if not lineup:
+            return {
+                "detail": "the live Consilium lineup is empty. Every member was "
+                "demoted by the research gate, or none was configured.",
+                "blockers": [],
+            }
+        try:
+            from engine.research_gate import (
+                LiveReadinessPolicy,
+                evaluate_live_readiness,
+            )
+
+            trading_cfg = dict(await self.core.config.get("trading", {}) or {})
+            policy = LiveReadinessPolicy.from_mapping(trading_cfg.get("live_readiness"))
+        except Exception:
+            # Fail closed: an unreadable gate must not authorise live trading.
+            return {
+                "detail": "the research gate could not be evaluated, so no strategy "
+                "can be confirmed as cleared for live trading",
+                "blockers": [],
+            }
+
+        blockers: list[dict[str, Any]] = []
+        for sid in lineup:
+            try:
+                verdict = evaluate_live_readiness(sid, policy=policy)
+            except Exception as exc:  # noqa: BLE001
+                blockers.append(
+                    {"strategy_id": sid, "reasons": [f"gate_error:{type(exc).__name__}"]}
+                )
+                continue
+            if verdict.get("live_ok"):
+                continue
+            reasons = [
+                str(b.get("reason"))
+                for b in (verdict.get("blockers") or [])
+                if b.get("reason")
+            ] or [f"grade={verdict.get('grade')}"]
+            blockers.append({"strategy_id": sid, "reasons": reasons})
+
+        if blockers:
+            return {
+                "detail": (
+                    f"{len(blockers)} of {len(lineup)} configured live "
+                    f"strateg{'y is' if len(lineup) == 1 else 'ies are'} not "
+                    "cleared for live trading. Run walk_forward with "
+                    "holdout_bars > 0, or set trading.live_readiness.enforce: false "
+                    "to trade unvalidated strategies deliberately."
+                ),
+                "blockers": blockers,
+                "lineup": lineup,
+            }
+        return None
+
+
+
+
+    async def _cmd_set_risk(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Set risk limits and the strength floor without editing YAML.
+
+        Every value is range-checked here. A limit set to a meaningless number
+        (a negative daily loss, a concentration above 1.0) is worse than an
+        unset one, because it reads as a deliberate choice.
+        """
+        raw_cfg = getattr(self.core.config, "raw", None)
+        if not isinstance(raw_cfg, dict):
+            return {"ok": False, "cmd": "SET_RISK", "error": "no_config"}
+
+        applied: dict[str, float] = {}
+        rejected: dict[str, str] = {}
+        for key, (low, high) in _RISK_KNOBS.items():
+            if key not in payload or payload[key] is None:
+                continue
+            try:
+                value = float(payload[key])
+            except (TypeError, ValueError):
+                rejected[key] = "not_a_number"
+                continue
+            if value < low or value > high:
+                rejected[key] = f"out_of_range[{low},{high}]"
+                continue
+            set_path(raw_cfg, f"trading.risk.{key}", value)
+            applied[key] = value
+
+        if not applied and not rejected:
+            return {
+                "ok": False,
+                "cmd": "SET_RISK",
+                "error": "nothing_to_set",
+                "editable": sorted(_RISK_KNOBS),
+            }
+
+        runtime = getattr(self.core, "trading", None)
+        risk = getattr(runtime, "risk", None)
+        if risk is not None:
+            limits = risk.limits_for(None)
+            for key, value in applied.items():
+                if key == "strength_floor":
+                    continue
+                if hasattr(limits, key):
+                    setattr(limits, key, value)
+
+        phantom = self.core.service_registry.get("phantom_service")
+        sizing = getattr(phantom, "sizing", None) if phantom is not None else None
+        if sizing is not None and "strength_floor" in applied:
+            sizing.strength_floor = applied["strength_floor"]
+            if hasattr(phantom, "apply_sizing_config"):
+                phantom.apply_sizing_config()
+
+        if bool(payload.get("persist", True)):
+            await self.core.config.save()
+
+        return {
+            "ok": not rejected,
+            "cmd": "SET_RISK",
+            "applied": applied,
+            "rejected": rejected,
+            "note": (
+                "limits apply to new orders; positions already open are not resized"
+            ),
+        }
+
+    async def _cmd_set_execution(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Set resting-order lifetime and sweep cadence."""
+        raw_cfg = getattr(self.core.config, "raw", None)
+        if not isinstance(raw_cfg, dict):
+            return {"ok": False, "cmd": "SET_EXECUTION", "error": "no_config"}
+
+        applied: dict[str, float] = {}
+        rejected: dict[str, str] = {}
+        for key, (low, high) in _EXECUTION_KNOBS.items():
+            if key not in payload or payload[key] is None:
+                continue
+            try:
+                value = float(payload[key])
+            except (TypeError, ValueError):
+                rejected[key] = "not_a_number"
+                continue
+            if value < low or value > high:
+                rejected[key] = f"out_of_range[{low},{high}]"
+                continue
+            set_path(raw_cfg, f"services.execution_service.{key}", value)
+            applied[key] = value
+
+        post_only = payload.get("post_only")
+        if post_only is not None:
+            set_path(raw_cfg, "services.execution_service.post_only", bool(post_only))
+            applied["post_only"] = bool(post_only)
+
+        if not applied and not rejected:
+            return {
+                "ok": False,
+                "cmd": "SET_EXECUTION",
+                "error": "nothing_to_set",
+                "editable": sorted(_EXECUTION_KNOBS) + ["post_only"],
+            }
+
+        service = self.core.service_registry.get("execution_service")
+        if service is not None:
+            for key, value in applied.items():
+                if key in _EXECUTION_KNOBS:
+                    service.config[key] = value
+                elif key == "post_only" and hasattr(service, "post_only"):
+                    service.post_only = value
+
+        if bool(payload.get("persist", True)):
+            await self.core.config.save()
+        return {"ok": not rejected, "cmd": "SET_EXECUTION", "applied": applied,
+                "rejected": rejected}
+
     async def _cmd_set_trading(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_cfg = getattr(self.core.config, "raw", None)
         if not isinstance(raw_cfg, dict):
@@ -2024,6 +2258,17 @@ class UiBridgeService(BaseService):
                 or "paper"
             ).lower()
             if mode_s in {"live", "quik"} and mode_s != current:
+                # Refuse to arm live when the research gate leaves nothing cleared
+                # to trade. Live mode arming used to succeed with an empty live
+                # Consilium lineup: every preflight gate checks plumbing (operator,
+                # market data, broker, reconciliation) and none of them asks
+                # whether a single strategy is actually cleared for live. The
+                # result was a silent no-op — live armed, zero orders, and nothing
+                # anywhere saying why, which reads exactly like a broker fault.
+                #
+                # Checked *after* `confirm_live_required`: whether the request is
+                # authorised is a question about the operator, which has to be
+                # settled before it makes sense to discuss the lineup.
                 safety_installed = "control_authorizer" in vars(self.core)
                 preflight = vars(self.core).get("live_preflight")
                 if not safety_installed and not bool(payload.get("confirm_live")):
@@ -2032,6 +2277,15 @@ class UiBridgeService(BaseService):
                         "cmd": "SET_TRADING",
                         "error": "confirm_live_required",
                         "mode": mode_s,
+                    }
+                lineup_problem = await self._live_lineup_blocker(mode_s)
+                if lineup_problem is not None:
+                    return {
+                        "ok": False,
+                        "cmd": "SET_TRADING",
+                        "error": "live_lineup_not_tradeable",
+                        "mode": mode_s,
+                        **lineup_problem,
                     }
                 if safety_installed:
                     if preflight is None:
@@ -2139,6 +2393,7 @@ class UiBridgeService(BaseService):
                     # Absolute / advanced caps: 0 means disabled.
                     if k in _OPT_NONE and float(v) <= 0:
                         patched[k] = None
+            _validate_risk_patch(risk, patched)
             deep_merge(risk_cfg, patched)
             for k, v in patched.items():
                 if v is None:
@@ -2214,6 +2469,7 @@ class UiBridgeService(BaseService):
             for sid, block in services.items():
                 if not isinstance(block, dict):
                     continue
+                _guard_service_config_patch(str(sid), block)
                 for k, v in block.items():
                     set_path(raw_cfg, f"services.{sid}.{k}", v)
                 needs_restart = True
@@ -2581,13 +2837,32 @@ class UiBridgeService(BaseService):
             "params": block,
         }
 
+    @staticmethod
+    def _caller_role_for(payload: dict[str, Any]) -> str:
+        """Map the verified principal onto the AI tool role vocabulary.
+
+        Only two outcomes are possible.  A caller holding ADMIN/RISK (a real
+        operator, either signed or the explicit local-dev allow-list) may drive
+        the full toolset.  Everyone else is an ``analyst``: read-only plus
+        ``system_halt``.  That is the invariant documented in
+        ``docs/architecture/operator_ui.md`` — the analyst does not place
+        orders — and it is now enforced instead of assumed.
+        """
+        roles = {str(r).strip().lower() for r in payload.get("_authorized_roles") or ()}
+        if {"admin", "risk"} & roles:
+            return "operator"
+        return "analyst"
+
     async def _cmd_ask(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or payload.get("message") or "").strip()
         if not text:
             return {"ok": False, "cmd": "ASK", "error": "empty_message"}
         use_tools = bool(payload.get("use_tools", True))
         provider_id = payload.get("provider_id")
-        caller_role = str(payload.get("caller_role") or payload.get("role") or "analyst")
+        # The role is derived from the *verified* principal, never from the
+        # request body.  Trusting `payload["caller_role"]` would let any caller
+        # promote itself to "operator" and reach the order-placing tools.
+        caller_role = self._caller_role_for(payload)
         history = payload.get("history")
         if not isinstance(history, list):
             history = None
@@ -3032,6 +3307,13 @@ class UiBridgeService(BaseService):
                 if self._storage_cache_tick >= max(1, int(self._hz)):
                     self._storage_cache_tick = 0
                     await self._refresh_storage_cache()
+                # Keep the Prometheus gauges current. Without this the exporter
+                # had no data and every alert in ops/prometheus/alerts.yml was
+                # unreachable.
+                if not self._storage_cache_tick:
+                    runtime = getattr(self.core, "trading", None)
+                    if runtime is not None and hasattr(runtime, "publish_metrics"):
+                        runtime.publish_metrics()
                 snap = self.build_snapshot()
                 await self._broadcast(snap)
                 self._zmq_publish(snap)
@@ -3047,7 +3329,15 @@ class UiBridgeService(BaseService):
         for w in list(self._writers):
             try:
                 w.write(line)
-                await w.drain()
+                # `drain()` with no timeout blocks forever once a client's TCP
+                # window fills — a sleeping laptop or a throttled browser tab is
+                # enough. Because this runs in the publish loop, one stalled
+                # client froze snapshots for every other client *and* stalled the
+                # command path behind it. A client that cannot absorb a frame
+                # within the budget is disconnected instead.
+                await asyncio.wait_for(w.drain(), timeout=self._drain_timeout_sec)
+            except (asyncio.TimeoutError, TimeoutError):
+                dead.append(w)
             except Exception:
                 dead.append(w)
         for w in dead:
@@ -3176,10 +3466,46 @@ class UiBridgeService(BaseService):
                         data = json.loads(raw)
                     except json.JSONDecodeError:
                         data = raw
-                    await self.handle_command(data)
+                    result = await self.handle_command(data)
+                    # The loop is a one-way pipe: there is nowhere to return the
+                    # ACK to. Discarding it made a *denied* command look exactly
+                    # like a delivered one — a RESUME refused by the authorizer
+                    # produced no error anywhere the caller could observe. Surface
+                    # it keyed by `request_id` in the next snapshot instead.
+                    self._record_command_ack(data, result)
                 except zmq.Again:
                     pass
             await asyncio.sleep(0.05)
+
+    def _record_command_ack(
+        self, cmd: Any, result: dict[str, Any] | None
+    ) -> None:
+        """Keep the outcome of a transport that cannot return an ACK."""
+        payload = cmd if isinstance(cmd, dict) else {}
+        request_id = payload.get("request_id")
+        ok = bool((result or {}).get("ok"))
+        if not ok:
+            _log().warning(
+                "zmq command failed cmd={} rid={} error={}",
+                str(payload.get("cmd") or payload.get("action") or "")[:40],
+                request_id,
+                str((result or {}).get("error") or "")[:200],
+            )
+        if request_id is None:
+            return
+        self._command_acks[str(request_id)] = {
+            "request_id": request_id,
+            "ok": ok,
+            "cmd": str(payload.get("cmd") or payload.get("action") or ""),
+            "result": result or {},
+            "at": time.time(),
+        }
+        if len(self._command_acks) > 64:
+            # Evict in insertion order. Sorting the keys would evict the *newest*
+            # entry for any id that sorts early ("r199" < "r9"), which is the one
+            # a caller is about to ask for.
+            for stale in list(self._command_acks)[: len(self._command_acks) - 64]:
+                self._command_acks.pop(stale, None)
 
     def _close_zmq(self) -> None:
         for sock in (self._zmq_pub, self._zmq_sub):
