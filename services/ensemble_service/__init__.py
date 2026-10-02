@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from microkernel_core import BaseService, KernelEvent
 
+from engine.decision_store import DecisionStore
 from engine.ensemble import EnsembleManager, StrategySignal
 from engine.order import OrderStatus
 from engine.regime import RegimeDetector, apply_regime_bias
@@ -63,6 +64,23 @@ class EnsembleService(BaseService):
         self.regime = RegimeDetector()
         self._last_regime: str = "unknown"
         self._regime_symbol: str = ""
+        #: Why did it trade? `StrategyDecision.metrics` reaches this service in
+        #: `params_snapshot` and used to be dropped on the floor -- kept only as
+        #: the `metrics` blob handed to the UI. Nothing durable survived, so a
+        #: strategy that started bleeding could not be interrogated afterwards,
+        #: and `observe_only` signals left no trace whatsoever because they never
+        #: reach the trade journal. This records the decision and the features
+        #: behind it, and `decision_baseline` is what makes it useful rather than
+        #: merely written.
+        self.decisions_store: DecisionStore = DecisionStore(
+            hold_sample_rate=float(
+                (self.config or {}).get("decision_hold_sample_rate") or 0.05
+            )
+        )
+        #: Validated envelopes, keyed by strategy id. Empty means "no opinion
+        #: yet" and drift checks must not read that as comfort.
+        self._decision_baseline: dict[str, dict[str, dict[str, Any]]] = {}
+        self._last_drift: list[dict[str, Any]] = []
         self._rebalance_paused: bool = False
         self._risk_scale: float = 1.0
         self._last_diagnosis: dict[str, Any] | None = None
@@ -97,11 +115,31 @@ class EnsembleService(BaseService):
             "regime_bias": True,
             "diagnosis_risk_scale": 0.5,
             "diagnosis_neg_weight_mult": 0.25,
+            # Decision provenance. Features were computed every bar, carried one
+            # hop in `params_snapshot`, and dropped here. HOLDs are sampled
+            # because recording every bar of every symbol is a lot of JSONL that
+            # nobody would afford to keep; non-HOLD decisions are always kept.
+            "decision_hold_sample_rate": 0.05,
+            # Empty means in-memory only. Set a path (e.g. data/ops/decisions.jsonl)
+            # to keep provenance across restarts, which is the whole point.
+            "decision_store_path": "",
         }
 
     async def on_initialize(self) -> None:
         trading = await self.core.config.get("trading", {}) or {}
         self._ensemble_cfg = dict(trading.get("ensemble") or {})
+        # Bound after config is available: `__init__` runs before `self.config`
+        # is populated, so a path configured here would be silently ignored and
+        # the store would stay in-memory -- provenance that evaporates on
+        # restart, which is the defect this whole module exists to close.
+        configured = (self.config or {}).get("decision_store_path")
+        if configured:
+            self.decisions_store = DecisionStore(
+                path=str(configured),
+                hold_sample_rate=float(
+                    (self.config or {}).get("decision_hold_sample_rate") or 0.05
+                ),
+            )
         ids = list(self._ensemble_cfg.get("strategies") or [])
         if ids:
             await self.apply_weight_mode(publish=False)
@@ -495,6 +533,52 @@ class EnsembleService(BaseService):
             except asyncio.CancelledError:
                 return
 
+    def freeze_decision_baseline(self, strategy_id: str) -> dict[str, Any]:
+        """Declare the feature envelope this strategy is being run inside.
+
+        Call this at the point where validation was done -- after a walk-forward
+        pass, after a research sweep. Everything recorded afterwards is checked
+        against it. A strategy with no baseline is simply not being checked, and
+        this returns that honestly rather than an empty envelope that would read
+        as "no drift".
+        """
+        sid = str(strategy_id or "")
+        profile = self.decisions_store.freeze_baseline(strategy_id=sid)
+        self._decision_baseline[sid] = profile
+        return {
+            "strategy_id": sid,
+            "features": sorted(profile),
+            "note": "live values outside this envelope are reported as drift",
+        }
+
+    def check_feature_drift(self, strategy_id: str) -> dict[str, Any]:
+        """Live features versus the envelope they were validated on.
+
+        The point of keeping decisions. A strategy whose inputs have moved
+        outside the range it was measured on is being operated on terrain its
+        validation never covered, and the trade journal cannot show that -- it
+        only shows the trades that resulted.
+        """
+        sid = str(strategy_id or "")
+        baseline = self._decision_baseline.get(sid)
+        if not baseline:
+            return {
+                "strategy_id": sid,
+                "checked": False,
+                "reason": "no_baseline",
+                "note": "no opinion, not 'no drift' -- call freeze_decision_baseline",
+            }
+        findings = self.decisions_store.drift_against(baseline, strategy_id=sid)
+        if findings:
+            self._last_drift = findings
+        return {
+            "strategy_id": sid,
+            "checked": True,
+            "features_compared": len(baseline),
+            "drifted": bool(findings),
+            "findings": findings,
+        }
+
     async def get_status(self) -> dict[str, Any]:
         status = await super().get_status()
         status.update(
@@ -512,6 +596,15 @@ class EnsembleService(BaseService):
                 # may be one. This is the number an operator sizing a book
                 # actually needs, and a roster size hides it.
                 "correlation": self.manager.last_correlation(),
+                # Decision provenance, and whether live inputs still sit inside
+                # the envelope they were validated on.
+                "decision_store": self.decisions_store.stats(),
+                "feature_drift": {
+                    sid: self.check_feature_drift(sid)["drifted"]
+                    if self._decision_baseline.get(sid)
+                    else None
+                    for sid in sorted(self._decision_baseline)
+                },
                 "effective_independent_bets": (
                     self.manager.effective_independent_bets()
                 ),
@@ -699,6 +792,20 @@ class EnsembleService(BaseService):
             "observe_only": observe_only,
             "mode": "observe" if observe_only else "live",
         }
+        # Recorded before the observe early-return below: an `observe_only`
+        # signal never becomes a trade, so it never reaches the trade journal,
+        # and it is precisely the evidence we need for a strategy on probation.
+        # Dropping it here would have made probation unmeasurable.
+        self.decisions_store.record(
+            symbol=str(p.get("ticker") or ""),
+            strategy_id=sid,
+            action=action_ui,
+            strength=strength,
+            reason=str(p.get("reason") or ""),
+            features=p.get("params_snapshot") or {},
+            observe_only=observe_only,
+            ts=float(p.get("bar_ts") or time.time()),
+        )
         if observe_only:
             return
         sig = StrategySignal(

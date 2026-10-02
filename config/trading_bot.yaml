@@ -573,6 +573,17 @@ trading:
     strategies:
     - dual_thrust
     weight_mode: equal
+    # Decision provenance. Strategy features are computed every bar and used to
+    # be discarded the moment they reached the ensemble service, so a strategy
+    # that started bleeding could not be interrogated afterwards. Enable the
+    # store to keep them.
+    #
+    # HOLDs are sampled: recording every bar of every symbol is a lot of JSONL
+    # nobody would afford to keep. Non-HOLD decisions are always recorded, and
+    # observe_only signals are recorded too -- they never reach the trade
+    # journal, so they are the entire evidence base for a strategy on probation.
+    decision_hold_sample_rate: 0.05
+    decision_store_path: data/ops/decisions.jsonl
   equity: 100000.0
   instruments:
   - asset_class: crypto

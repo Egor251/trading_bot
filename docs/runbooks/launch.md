@@ -223,6 +223,62 @@ never pruned inside a year — and `system.halt`, `ops.alert` and
 treat the journal as the authority. Free pages are only returned to the
 filesystem by `VACUUM`.
 
+## Why did it trade?
+
+The trade journal (`data/ops/trades.jsonl`) records **fills**: symbol, side,
+price, fee. That is what an accountant needs and it is exactly what is missing
+when a strategy starts bleeding. It cannot answer "what was the input", and it
+never sees the decisions that did not fill — including every `observe_only`
+signal, which is the entire evidence base for a strategy on probation.
+
+Meanwhile `StrategyDecision.metrics` computes the features every bar, carries
+them one hop in `params_snapshot`, and is then discarded by the ensemble
+service, which keeps only quantity/price/class_code/bar_ts. The features were
+computed, briefly existed, and vanished.
+
+`engine/decision_store.py` keeps them. Enabled in config:
+
+```yaml
+trading:
+  ensemble:
+    decision_store_path: data/ops/decisions.jsonl
+    decision_hold_sample_rate: 0.05
+```
+
+Non-HOLD decisions are recorded in full. HOLDs are sampled — recording every bar
+of every symbol is a lot of JSONL nobody would afford to keep — but `recorded`
+and `sampled_away` are counted separately in `get_status`, because a base rate
+computed from recorded rows alone overstates activity.
+
+`observe_only` signals are recorded *before* the observe early-return. They never
+become trades, so they never reach the trade journal; dropping them here would
+have made probation unmeasurable.
+
+### Drift against the validated envelope
+
+Keeping decisions is only worth something if something reads them. Freeze the
+envelope at the point validation was done — after a walk-forward pass, after a
+research sweep:
+
+```python
+svc.freeze_decision_baseline("supertrend")
+svc.check_feature_drift("supertrend")
+```
+
+`check_feature_drift` reports features whose live range has left the range the
+strategy was measured on. That is terrain the validation never covered, and no
+P&L chart shows it — the trade journal only shows the trades that resulted.
+
+A strategy with **no baseline is not being checked**, and the result says
+`checked: false, reason: no_baseline`. That silence must not be read as "no
+drift". In `get_status`, `feature_drift` maps each baselined strategy to
+`true`/`false` and every unbaselined one to `null`, so "not checked" and
+"checked and clean" are distinguishable at a glance.
+
+Retention is an in-memory ring (`max_rows`, default 200k) plus append-only
+JSONL. `dropped_after_cap` is reported in `stats()` rather than silently
+discarding rows.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
