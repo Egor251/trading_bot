@@ -626,6 +626,18 @@ trading:
     target_sharpe: 1.5
     target_win_rate: 0.55
     underperform_days: 3
+    # Per-strategy circuit breaker. The portfolio diagnosis can only scale risk
+    # and cut weights; a member at reduced weight is still trading. This stops a
+    # degraded strategy outright, leaving it observable so evidence keeps
+    # accumulating and the decision stays reversible.
+    # `restore_above` must exceed `quarantine_below`, otherwise a borderline
+    # strategy can never resume. Settable at runtime via SET_QUARANTINE.
+    quarantine:
+      enabled: true
+      quarantine_below: 0.0
+      restore_above: 0.05
+      consecutive_failures: 3
+      min_samples: 20
   position_policy:
     forbid_net_flip: true
   risk:

@@ -17,6 +17,24 @@ from engine.ops_safety import (
     TradeJournal,
 )
 from engine.performance_monitor import PerformanceMonitor, PerformanceTargets
+from engine.strategy_quarantine import QuarantinePolicy, StrategyQuarantine
+
+
+def _quarantine_policy(raw: dict) -> QuarantinePolicy:
+    """Build the breaker policy from config, falling back on nonsense.
+
+    `restore_above` defaults above `quarantine_below` rather than equal to it:
+    an equal pair is a silent permanent lockout, which is the opposite of what
+    a circuit breaker is for.
+    """
+    below = float(raw.get("quarantine_below", 0.0))
+    return QuarantinePolicy(
+        enabled=bool(raw.get("enabled", True)),
+        quarantine_below=below,
+        restore_above=float(raw.get("restore_above", below + 0.05)),
+        consecutive_failures=max(1, int(raw.get("consecutive_failures", 3))),
+        min_samples=max(1, int(raw.get("min_samples", 20))),
+    ).validated()
 from engine.runtime import get_runtime
 from host.events import publish_ops_alert
 from engine.paths import data_dir, data_path
@@ -138,6 +156,13 @@ class OpsMonitorService(BaseService):
                 daily_minimum=float(perf.get("daily_minimum", 100.0)),
                 underperform_days=int(perf.get("underperform_days", 3)),
             )
+        )
+        # Per-strategy circuit breaker. The portfolio diagnosis above can only
+        # cut weights and scale risk; a member at 0.25 weight is still trading.
+        # This is the actuator that can actually take a degraded strategy out of
+        # the live lineup while leaving it observable.
+        self.quarantine = StrategyQuarantine(
+            _quarantine_policy(dict(perf.get("quarantine") or {}))
         )
         setattr(self.core, "ops", self)
 
@@ -475,6 +500,7 @@ class OpsMonitorService(BaseService):
         applied: dict[str, Any] = {}
         if ens is not None and hasattr(ens, "apply_diagnosis"):
             applied = await ens.apply_diagnosis(diagnosis)
+        quarantined = await self._apply_quarantine(ens)
         if self.alerts is not None and diagnosis.kind.value != "healthy":
             alert = self.alerts.emit(
                 "performance_diagnosis",
@@ -489,7 +515,67 @@ class OpsMonitorService(BaseService):
             "phantom_pnl": phantom_pnl,
             "live_pnl": live_pnl,
             "ensemble": applied,
+            "quarantine": quarantined,
         }
+
+    async def _apply_quarantine(self, ens: Any) -> dict[str, Any]:
+        """Judge each live member on its own outcomes and demote the degraded.
+
+        Demotion sets `observe_only`, so the strategy keeps receiving candles
+        and keeps accumulating evidence, and the decision is reversible when its
+        mean recovers past the restore threshold.
+        """
+        if self.quarantine is None or ens is None:
+            return {"skipped": True}
+        manager = getattr(ens, "manager", None)
+        stats = getattr(manager, "stats", None)
+        lineup = list(getattr(ens, "lineup_ids", list)() or [])
+        if not lineup or stats is None:
+            return {"skipped": True}
+
+        try:
+            verdicts = self.quarantine.evaluate(lineup, stats)
+        except Exception as exc:  # noqa: BLE001 - a breaker must never stop the loop
+            return {"error": f"{type(exc).__name__}: {exc}"[:120]}
+
+        changed: list[dict[str, Any]] = []
+        for verdict in verdicts:
+            sid = verdict.strategy_id
+            if verdict.reason in {"degraded", "recovered"}:
+                plugin = self.core.plugin_manager.get(sid) if self.core.plugin_manager else None
+                if plugin is None:
+                    continue
+                config = getattr(plugin, "config", None)
+                if not isinstance(config, dict):
+                    continue
+                if verdict.reason == "degraded":
+                    config["observe_only"] = True
+                elif config.get("observe_only") and self.quarantine.is_quarantined(sid):
+                    continue
+                else:
+                    config["observe_only"] = False
+                changed.append(verdict.to_dict())
+                await self._publish_quarantine_alert(verdict, config["observe_only"])
+        return {
+            "state": self.quarantine.to_dict(),
+            "changed": changed,
+            "verdicts": [v.to_dict() for v in verdicts],
+        }
+
+    async def _publish_quarantine_alert(self, verdict: Any, observe_only: bool) -> None:
+        """A strategy being stopped must never be a silent event."""
+        if self.alerts is None:
+            return
+        alert = self.alerts.emit(
+            "strategy_quarantined" if observe_only else "strategy_restored",
+            (
+                f"{verdict.strategy_id} "
+                + ("stopped trading (degraded)" if observe_only else "resumed trading")
+            ),
+            severity=AlertSeverity.CRITICAL if observe_only else AlertSeverity.INFO,
+            details=verdict.to_dict(),
+        )
+        await self._publish_alert(alert)
 
     async def get_status(self) -> dict[str, Any]:
         status = await super().get_status()

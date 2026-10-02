@@ -58,6 +58,8 @@ CONFIG_COMMANDS = frozenset(
         # than being reachable by a lesser role.
         "SET_RISK",
         "SET_EXECUTION",
+        # Decides when a strategy is stopped from trading on its own results.
+        "SET_QUARANTINE",
         "SET_AI",
         "SET_SECRETS",
         "SET_STORAGE",

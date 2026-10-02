@@ -102,6 +102,17 @@ _EXECUTION_KNOBS: dict[str, tuple[float, float]] = {
     "stale_order_sweep_interval_sec": (1.0, 3600.0),
 }
 
+#: Per-strategy circuit breaker. `restore_above` must exceed
+#: `quarantine_below` or a borderline strategy can never resume -- a permanent
+#: lockout, which is the opposite of what a breaker is for. That relationship is
+#: enforced in the command handler, not merely documented here.
+_QUARANTINE_KNOBS: dict[str, tuple[float, float]] = {
+    "quarantine_below": (-100.0, 100.0),
+    "restore_above": (-100.0, 100.0),
+    "consecutive_failures": (1.0, 30.0),
+    "min_samples": (1.0, 10_000.0),
+}
+
 
 
 class UiBridgeService(BaseService):
@@ -787,6 +798,7 @@ class UiBridgeService(BaseService):
             "SET_STRATEGY_PARAMS",
             "SET_RISK",
             "SET_EXECUTION",
+            "SET_QUARANTINE",
             "SET_TRADING",
             "RESET_PAPER",
             "CLEAR_PAPER",
@@ -936,6 +948,8 @@ class UiBridgeService(BaseService):
             return await self._cmd_set_risk(payload)
         if raw == "SET_EXECUTION":
             return await self._cmd_set_execution(payload)
+        if raw == "SET_QUARANTINE":
+            return await self._cmd_set_quarantine(payload)
         if raw == "ASK":
             return await self._cmd_ask(payload)
         if raw == "SET_AI":
@@ -2239,6 +2253,94 @@ class UiBridgeService(BaseService):
             await self.core.config.save()
         return {"ok": not rejected, "cmd": "SET_EXECUTION", "applied": applied,
                 "rejected": rejected}
+
+    async def _cmd_set_quarantine(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Set the per-strategy circuit breaker's thresholds.
+
+        This decides when a strategy is stopped from trading on its own live
+        results, so the thresholds are an operator policy rather than an
+        implementation detail.
+        """
+        raw_cfg = getattr(self.core.config, "raw", None)
+        if not isinstance(raw_cfg, dict):
+            return {"ok": False, "cmd": "SET_QUARANTINE", "error": "no_config"}
+
+        applied: dict[str, Any] = {}
+        rejected: dict[str, str] = {}
+        for key, (low, high) in _QUARANTINE_KNOBS.items():
+            if key not in payload or payload[key] is None:
+                continue
+            try:
+                value = float(payload[key])
+            except (TypeError, ValueError):
+                rejected[key] = "not_a_number"
+                continue
+            if value < low or value > high:
+                rejected[key] = f"out_of_range[{low},{high}]"
+                continue
+            applied[key] = value
+
+        if "enabled" in payload and payload["enabled"] is not None:
+            applied["enabled"] = bool(payload["enabled"])
+
+        if not applied and not rejected:
+            return {
+                "ok": False,
+                "cmd": "SET_QUARANTINE",
+                "error": "nothing_to_set",
+                "editable": sorted(_QUARANTINE_KNOBS) + ["enabled"],
+            }
+
+        ops = self.core.service_registry.get("ops_monitor_service")
+        current = dict(getattr(ops, "quarantine", None).policy.__dict__) if (
+            getattr(ops, "quarantine", None) is not None
+        ) else {}
+        merged = {**current, **applied}
+
+        # Validate by construction: an unusable policy must never reach the loop.
+        try:
+            from engine.strategy_quarantine import QuarantinePolicy
+
+            QuarantinePolicy(
+                enabled=bool(merged.get("enabled", True)),
+                quarantine_below=float(merged.get("quarantine_below", 0.0)),
+                restore_above=float(merged.get("restore_above", 0.05)),
+                consecutive_failures=max(
+                    1, int(float(merged.get("consecutive_failures", 3)))
+                ),
+                min_samples=max(1, int(float(merged.get("min_samples", 20)))),
+            ).validated()
+        except ValueError as exc:
+            return {"ok": False, "cmd": "SET_QUARANTINE", "error": str(exc)}
+
+        for key, value in applied.items():
+            set_path(raw_cfg, f"trading.performance.quarantine.{key}", value)
+
+        if ops is not None and getattr(ops, "quarantine", None) is not None:
+            from engine.strategy_quarantine import QuarantinePolicy
+
+            ops.quarantine.policy = QuarantinePolicy(
+                enabled=bool(merged.get("enabled", True)),
+                quarantine_below=float(merged.get("quarantine_below", 0.0)),
+                restore_above=float(merged.get("restore_above", 0.05)),
+                consecutive_failures=max(
+                    1, int(float(merged.get("consecutive_failures", 3)))
+                ),
+                min_samples=max(1, int(float(merged.get("min_samples", 20)))),
+            )
+
+        if bool(payload.get("persist", True)):
+            await self.core.config.save()
+        return {
+            "ok": True,
+            "cmd": "SET_QUARANTINE",
+            "applied": applied,
+            "rejected": rejected,
+            "note": (
+                "thresholds apply to the next evaluation; strategies already "
+                "quarantined are re-judged on the new policy"
+            ),
+        }
 
     async def _cmd_set_trading(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_cfg = getattr(self.core.config, "raw", None)

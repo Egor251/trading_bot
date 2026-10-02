@@ -136,6 +136,81 @@ def test_both_commands_require_authorization() -> None:
 
     assert requires_authorization("SET_RISK")
     assert requires_authorization("SET_EXECUTION")
+    assert requires_authorization("SET_QUARANTINE")
+
+
+def test_quarantine_thresholds_are_settable_from_the_ui() -> None:
+    """When a strategy is stopped trading is policy, not an implementation detail."""
+    import tempfile
+
+    from engine.strategy_quarantine import QuarantinePolicy, StrategyQuarantine
+
+    with tempfile.TemporaryDirectory() as raw:
+        svc, core, _phantom = _bridge(Path(raw))
+        ops = MagicMock()
+        ops.quarantine = StrategyQuarantine(
+            QuarantinePolicy(
+                quarantine_below=0.0,
+                restore_above=0.05,
+                consecutive_failures=3,
+                min_samples=20,
+            )
+        )
+        core.service_registry.get = MagicMock(
+            side_effect=lambda n: ops if n == "ops_monitor_service" else None
+        )
+
+        result = asyncio.run(
+            svc._cmd_set_quarantine({"quarantine_below": -0.5, "min_samples": 50})
+        )
+        assert result["ok"], result
+        stored = core.config.raw["trading"]["performance"]["quarantine"]
+        assert stored["quarantine_below"] == -0.5
+        assert stored["min_samples"] == 50
+        assert ops.quarantine.policy.quarantine_below == -0.5, (
+            "the running breaker must follow the UI, not just stored config"
+        )
+
+
+def test_an_unrestorable_quarantine_policy_is_refused() -> None:
+    """restore_above <= quarantine_below is a permanent lockout, not a breaker."""
+    import tempfile
+
+    from engine.strategy_quarantine import QuarantinePolicy, StrategyQuarantine
+
+    with tempfile.TemporaryDirectory() as raw:
+        svc, core, _phantom = _bridge(Path(raw))
+        ops = MagicMock()
+        ops.quarantine = StrategyQuarantine(
+            QuarantinePolicy(
+                quarantine_below=0.0,
+                restore_above=0.05,
+                consecutive_failures=3,
+                min_samples=20,
+            )
+        )
+        core.service_registry.get = MagicMock(
+            side_effect=lambda n: ops if n == "ops_monitor_service" else None
+        )
+
+        result = asyncio.run(
+            svc._cmd_set_quarantine({"quarantine_below": 0.5, "restore_above": 0.1})
+        )
+        assert not result["ok"]
+        assert "restore_above" in result["error"]
+        assert "quarantine" not in core.config.raw.get("trading", {}).get(
+            "performance", {}
+        ), "an invalid policy must not be persisted"
+        assert ops.quarantine.policy.quarantine_below == 0.0, (
+            "a refused policy must not reach the running breaker"
+        )
+
+
+def test_quarantine_knobs_have_a_sane_range() -> None:
+    from services.ui_bridge_service import _QUARANTINE_KNOBS
+
+    for key, (low, high) in _QUARANTINE_KNOBS.items():
+        assert low < high, f"{key} has an empty range"
 
 
 def test_every_editable_knob_has_a_sane_range() -> None:

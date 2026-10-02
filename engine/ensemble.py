@@ -65,6 +65,15 @@ class StrategyStats:
             return 0.0
         return float(self._sum_returns.get(sid, 0.0)) / n
 
+    def count(self, strategy_id: str) -> int:
+        """Outcomes recorded for a strategy.
+
+        Public because a consumer must be able to tell "this member is losing"
+        from "this member has barely traded" -- the two demand opposite
+        responses, and the second is not a failure at all.
+        """
+        return int(self._counts.get(str(strategy_id), 0))
+
     def volatility(self, strategy_id: str) -> float:
         series = list(self._returns.get(str(strategy_id), ()))
         if len(series) < 2:
