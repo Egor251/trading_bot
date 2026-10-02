@@ -30,7 +30,10 @@ from unittest.mock import AsyncMock, MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.decision_store import DecisionStore, FeatureProfile  # noqa: E402
-from services.ensemble_service import EnsembleService  # noqa: E402
+from services.ensemble_service import (  # noqa: E402
+    EnsembleService,
+    _resolve_decision_path,
+)
 
 
 def _store(**kwargs) -> DecisionStore:
@@ -204,7 +207,7 @@ def test_the_envelope_respects_tolerance() -> None:
 # -- end to end through the service --------------------------------------
 
 
-def _service(ticker: str = "BTCUSDT") -> EnsembleService:
+def _service(ticker: str = "BTCUSDT", ensemble_cfg: dict | None = None) -> EnsembleService:
     core = MagicMock()
 
     async def _cfg_get(path, default=None):
@@ -214,6 +217,7 @@ def _service(ticker: str = "BTCUSDT") -> EnsembleService:
                     "enabled": True,
                     "strategies": ["supertrend"],
                     "weight_mode": "equal",
+                    **(ensemble_cfg or {}),
                 }
             }
         if path == "instance.id":
@@ -328,6 +332,109 @@ def test_the_store_path_config_actually_takes_effect() -> None:
             assert svc.decisions_store.stats()["persisted"] is True
             assert path.exists(), "the configured path was ignored"
             assert '"rsi": 55.0' in path.read_text(encoding="utf-8")
+
+    asyncio.run(_run())
+
+
+def test_the_trading_ensemble_config_block_also_binds() -> None:
+    """The knob was shipped under `trading.ensemble` and read from the wrong place.
+
+    Service config lives under `plugins.services.<component_id>`, while
+    `corr_cap` and friends are read from either location. The store path was
+    initially read only from `self.config`, so the shipped YAML entry did
+    nothing at all and no file was ever created -- a knob that configures
+    nothing, which is the recurring defect of this repository.
+    """
+
+    async def _run() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ops" / "decisions.jsonl"
+            svc = _service(ensemble_cfg={"decision_store_path": str(path)})
+            svc.config = dict(svc.default_config())
+            svc.config["rebalance_sec"] = 0
+            svc.config.pop("decision_store_path", None)
+            await svc.on_initialize()
+            assert svc.decisions_store.stats()["persisted"] is True
+            assert svc.decisions_store.path == path
+
+    asyncio.run(_run())
+
+
+def test_a_relative_path_follows_the_data_dir_redirect(tmp_path, monkeypatch) -> None:
+    """A research sweep must not write into the live trading data.
+
+    Research tools redirect `TRADING_DATA_DIR` to a scratch directory. A
+    CWD-relative `data/ops/decisions.jsonl` would ignore that and let a phantom
+    run contaminate the production store, which is the whole reason the redirect
+    exists.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("TRADING_DATA_DIR", str(scratch))
+    # data_dir() is read at call time, so re-import is unnecessary.
+    from engine.paths import data_dir
+
+    assert Path(data_dir()).resolve() == scratch.resolve()
+
+    resolved = _resolve_decision_path("data/ops/decisions.jsonl")
+    assert scratch.resolve() in Path(resolved).resolve().parents
+    assert Path("C:/") not in [str(Path(resolved))[:3]]
+
+
+def test_an_absolute_path_is_left_alone(tmp_path, monkeypatch) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("TRADING_DATA_DIR", str(scratch))
+    target = tmp_path / "elsewhere.jsonl"
+    assert _resolve_decision_path(str(target)) == target
+
+
+def test_the_shipped_config_actually_carries_the_knobs() -> None:
+    """Reads the real `config/trading_bot.yaml`.
+
+    The bug this pins: the knobs were added under `trading.ensemble` but read
+    from the service section `plugins.services.ensemble_service`, so the shipped
+    YAML did nothing. A test using a hand-built config would never notice --
+    every synthetic config had the keys in the right place.
+    """
+    import yaml
+
+    repo = Path(__file__).resolve().parents[1]
+    raw = yaml.safe_load((repo / "config" / "trading_bot.yaml").read_text("utf-8"))
+    ensemble_cfg = raw["trading"]["ensemble"]
+    assert ensemble_cfg.get("decision_store_path"), (
+        "trading.ensemble.decision_store_path is missing from the shipped config"
+    )
+    assert "decision_hold_sample_rate" in ensemble_cfg
+
+    async def _run() -> None:
+        core = MagicMock()
+
+        async def _cfg_get(path, default=None):
+            if path == "trading":
+                return raw["trading"]
+            if path == "instance.id":
+                return "test"
+            return default
+
+        core.config.get = _cfg_get
+        core.event_bus = MagicMock()
+        core.event_bus.publish = AsyncMock()
+        core.event_bus.subscribe = AsyncMock()
+        core.event_bus.unsubscribe = AsyncMock()
+        core.plugin_manager._instances = {}
+        core.rule_engine = None
+
+        svc = EnsembleService(core, "ensemble_service")
+        # The service section from the same file, exactly as the kernel builds it.
+        svc.config = dict(raw["services"]["ensemble_service"])
+        await svc.on_initialize()
+        assert svc.decisions_store.stats()["persisted"] is True, (
+            "the shipped config did not bind the store"
+        )
+        assert svc.decisions_store.hold_sample_rate == float(
+            ensemble_cfg["decision_hold_sample_rate"]
+        )
 
     asyncio.run(_run())
 

@@ -320,6 +320,31 @@ the flag deleted outright. It now asserts the real field, and
 `tests/test_reduce_only_transmission.py` pins the transmission at the boundary,
 on what `create_order` was actually called with.
 
+### Config, and where the knobs actually bind
+
+The store path may be set in **either** place, matching how `corr_cap` is read:
+
+```yaml
+trading:
+  ensemble:
+    decision_store_path: data/ops/decisions.jsonl   # <- read from here
+services:
+  ensemble_service:
+    decision_store_path: data/ops/decisions.jsonl   # <- or here
+```
+
+A **relative** path is anchored at the data directory, not the process CWD.
+Research tools redirect `TRADING_DATA_DIR` to a scratch directory; a CWD-relative
+`data/ops/decisions.jsonl` would let a phantom sweep write into the live trading
+data, which is the contamination that redirect exists to prevent. Absolute paths
+are left alone.
+
+Note that `tools/verify_execution_pipeline.py` deliberately overwrites
+`_ensemble_cfg` with a bare lineup, so it will not pick these up — it is a
+minimal pipeline probe, not a config test. `test_decision_store.py` reads the
+real `config/trading_bot.yaml` for exactly that reason: a test with a
+hand-built config would never notice the knobs sitting in the wrong section.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It

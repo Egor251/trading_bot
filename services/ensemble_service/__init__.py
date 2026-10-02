@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from microkernel_core import BaseService, KernelEvent
 
 from engine.decision_store import DecisionStore
+from engine.paths import data_dir
 from engine.ensemble import EnsembleManager, StrategySignal
 from engine.order import OrderStatus
 from engine.regime import RegimeDetector, apply_regime_bias
@@ -39,6 +41,21 @@ def _coerce_signal_strength(raw: Any) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return 1.0
+
+
+def _resolve_decision_path(configured: str) -> Path:
+    """Resolve the store path, honouring ``TRADING_DATA_DIR``.
+
+    A relative path is anchored at the data directory, not the process CWD. That
+    matters because research tools redirect ``TRADING_DATA_DIR`` to a scratch
+    directory: a CWD-relative `data/ops/decisions.jsonl` would let a phantom
+    sweep write into the live trading data, which is exactly the contamination
+    the redirect exists to prevent.
+    """
+    path = Path(configured)
+    if path.is_absolute():
+        return path
+    return data_dir() / path
 
 
 class EnsembleService(BaseService):
@@ -132,12 +149,18 @@ class EnsembleService(BaseService):
         # is populated, so a path configured here would be silently ignored and
         # the store would stay in-memory -- provenance that evaporates on
         # restart, which is the defect this whole module exists to close.
-        configured = (self.config or {}).get("decision_store_path")
+        configured = (self.config or {}).get("decision_store_path") or (
+            self._ensemble_cfg or {}
+        ).get("decision_store_path")
         if configured:
             self.decisions_store = DecisionStore(
-                path=str(configured),
+                path=_resolve_decision_path(str(configured)),
                 hold_sample_rate=float(
-                    (self.config or {}).get("decision_hold_sample_rate") or 0.05
+                    (self.config or {}).get("decision_hold_sample_rate")
+                    or (self._ensemble_cfg or {}).get(
+                        "decision_hold_sample_rate"
+                    )
+                    or 0.05
                 ),
             )
         ids = list(self._ensemble_cfg.get("strategies") or [])
