@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -47,6 +48,52 @@ def _log():
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
+
+
+def _shares_margin(runtime: Any, open_keys: list[str]) -> list[str]:
+    """Derivative positions whose account collateral is shared, not isolated.
+
+    Cross margin means simultaneous losses anywhere in the account consume the
+    margin a stop was counting on, so a per-slice stop bounds one position only
+    while the rest of the book is calm. `unknown` is treated as sharing: a
+    guarantee nobody verified should not be reported as a guarantee, and the
+    absence of the information is the riskier state to assume away.
+    """
+    registry = getattr(runtime, "instruments", None) or getattr(
+        runtime, "instrument_registry", None
+    )
+    shared: list[str] = []
+    for key in open_keys:
+        symbol = str(key).split(":")[-1]
+        spec = None
+        if registry is not None and hasattr(registry, "get"):
+            try:
+                spec = registry.get(symbol)
+            except Exception:  # noqa: BLE001 - absence is not an error here
+                spec = None
+        if spec is None:
+            spec = _spec_from_instruments_file(symbol)
+        if spec is None:
+            continue
+        model = str(getattr(spec, "margin_model", "") or "").lower()
+        mode = str(getattr(spec, "margin_mode", "") or "unknown").lower()
+        if model == "derivative" and mode != "isolated":
+            shared.append(key)
+    return shared
+
+
+def _spec_from_instruments_file(symbol: str) -> Any | None:
+    """Best-effort lookup so the audit works without a live registry."""
+    from engine.paths import data_dir  # noqa: PLC0415
+
+    try:
+        raw = json.loads((data_dir() / "instruments.json").read_text("utf-8"))
+    except Exception:  # noqa: BLE001 - absence is not an error here
+        return None
+    for row in raw if isinstance(raw, list) else []:
+        if isinstance(row, dict) and str(row.get("symbol") or "") == symbol:
+            return row
+    return None
 
 
 class OpsMonitorService(BaseService):
@@ -577,6 +624,13 @@ class OpsMonitorService(BaseService):
             if open_keys
             else 1.0
         )
+        # Cross margin shares collateral, so a per-slice stop bounds one
+        # position only while the rest of the account is calm. The protection
+        # layer reasons per slice, which quietly overstates the guarantee on a
+        # multi-position derivative book. Surfaced rather than blocked: which
+        # mode an account runs in is the venue's setting and the operator's
+        # choice, and nothing here can change it from inside the bot.
+        shared_margin = _shares_margin(runtime, open_keys)
 
         if unprotected and self.alerts is not None:
             alert = self.alerts.emit(
@@ -616,6 +670,7 @@ class OpsMonitorService(BaseService):
             "coverage": coverage,
             "weak": weak,
             "full_coverage": full_coverage,
+            "shared_margin": shared_margin,
         }
 
     async def _apply_quarantine(self, ens: Any) -> dict[str, Any]:

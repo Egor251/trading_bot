@@ -35,6 +35,12 @@ class InstrumentError(ValueError):
     """Base exception for invalid instrument data or lookup."""
 
 
+#: Cross margin shares collateral across positions; isolated does not. `unknown`
+#: is a real answer rather than a placeholder -- the venue decides how an account
+#: is configured, and a public instrument spec cannot tell us.
+_MARGIN_MODES = {"isolated", "cross", "unknown"}
+
+
 class InstrumentNotFoundError(InstrumentError, LookupError):
     """Raised when an instrument cannot be resolved."""
 
@@ -110,6 +116,11 @@ class InstrumentSpec:
     contract_multiplier: DecimalLike = Decimal("1")
     class_code: str | None = None
     margin_model: str = "cash"
+    #: `isolated` | `cross` | `unknown`. Only meaningful for `derivative`.
+    #: `unknown` is the default because an adapter reading a public instrument
+    #: spec cannot know how the account is configured -- and defaulting to
+    #: `isolated` would quietly claim a guarantee nobody verified.
+    margin_mode: str | None = None
     calendar: str | None = None
     synthetic: bool = False
     source: str | None = None
@@ -124,6 +135,24 @@ class InstrumentSpec:
         currency = _required_text(self.currency, "currency", upper=True)
         class_code = _optional_text(self.class_code, "class_code", upper=True)
         margin_model = _required_text(self.margin_model, "margin_model").lower()
+        # Cross vs isolated was not represented at all, so a perpetual account
+        # running cross margin was indistinguishable from one running isolated.
+        # That distinction decides whether a stop bounds one position or the
+        # whole account: in cross, margin is shared, so simultaneous losses
+        # elsewhere consume the collateral this position's stop was counting on.
+        # Adapters that cannot know the account setting must say so rather than
+        # assert a guarantee; `unknown` is the honest default.
+        margin_mode = _optional_text(self.margin_mode, "margin_mode")
+        margin_mode = (margin_mode or "unknown").lower()
+        if margin_mode not in _MARGIN_MODES:
+            raise InstrumentError(
+                f"margin_mode must be one of {sorted(_MARGIN_MODES)}: {margin_mode}"
+            )
+        if margin_model != "derivative" and margin_mode not in {"isolated", "unknown"}:
+            raise InstrumentError(
+                f"margin_mode={margin_mode} is meaningless for "
+                f"margin_model={margin_model}"
+            )
         calendar = _optional_text(self.calendar, "calendar")
         source = _optional_text(self.source, "source")
         if not isinstance(self.synthetic, bool):
@@ -146,6 +175,7 @@ class InstrumentSpec:
         object.__setattr__(self, "currency", currency)
         object.__setattr__(self, "class_code", class_code)
         object.__setattr__(self, "margin_model", margin_model)
+        object.__setattr__(self, "margin_mode", margin_mode)
         object.__setattr__(self, "calendar", calendar)
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "lot_size", lot_size)
