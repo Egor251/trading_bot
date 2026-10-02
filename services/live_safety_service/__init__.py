@@ -19,7 +19,18 @@ from engine.control_auth import (
 from engine.live_safety import EvidenceAuthority, KillMode, LivePreflight
 
 if TYPE_CHECKING:
-    from microkernel_core import MicrokernelCore
+    from microkernel_core import MicrokernelCore  # noqa: F401 - typing only
+
+
+def _log() -> Any:
+    try:
+        from utils.prod_logging import get_logger
+
+        return get_logger("live_safety")
+    except Exception:  # noqa: BLE001 - logging must never block boot
+        import logging
+
+        return logging.getLogger("live_safety")
 
 
 class UnavailableControlAuthorizer:
@@ -41,10 +52,18 @@ class UnavailableControlAuthorizer:
 
 
 class LocalDevControlAuthorizer:
-    """Paper / same-machine Operator UI when HMAC secret is not installed.
+    """Paper / same-machine Operator UI when no HMAC secret is installed.
 
-    Allows CONFIG + RESUME without a token so desktop/web stay usable.
-    LIVE stays fail-closed until ``TRADING_CONTROL_HMAC_SECRET`` is set.
+    Grants ``CONFIG`` so the desktop/web Operator stays usable on a laptop, and
+    refuses everything that can increase risk:
+
+    * ``RESUME`` — an unauthenticated peer must not be able to re-arm a bot
+      that risk management halted;
+    * ``LIVE``   — real money requires a signed token.
+
+    This mode is opt-in (``allow_unauthenticated_local``) and logs a loud
+    warning at boot, because a laptop default of "everything is authorised"
+    is how an unauthenticated control plane ships to production.
     """
 
     mode = "local_dev"
@@ -64,9 +83,14 @@ class LocalDevControlAuthorizer:
                 "live mode requires TRADING_CONTROL_HMAC_SECRET "
                 "(≥32 bytes) and a signed operator token"
             )
+        if command is ControlCommand.RESUME:
+            raise AuthorizationDenied(
+                "resuming trading requires TRADING_CONTROL_HMAC_SECRET "
+                "(≥32 bytes) and a signed operator token"
+            )
         principal = AuthSession(
             subject="local_operator",
-            roles=frozenset({Role.ADMIN, Role.RISK, Role.OPERATOR}),
+            roles=frozenset({Role.ADMIN, Role.OPERATOR}),
             issued_at=0.0,
             expires_at=0.0,
             session_id="local_dev",
@@ -89,9 +113,10 @@ class LiveSafetyService(BaseService):
             "evidence_secret_env": "TRADING_EVIDENCE_HMAC_SECRET",
             "live_feature_flag_env": "TRADING_LIVE_ENABLED",
             "kill_mode": "halt_only",
-            # When HMAC secret is missing, allow local Operator UI (CONFIG/RESUME).
-            # Set false for fail-closed deploys that must refuse unsigned control.
-            "allow_unauthenticated_local": True,
+            # Fail-closed default: with no HMAC secret installed, only HALT is
+            # accepted.  Set true explicitly to allow an unsigned local Operator
+            # UI (paper / laptop), which grants CONFIG but never RESUME or LIVE.
+            "allow_unauthenticated_local": False,
         }
 
     async def on_initialize(self) -> None:
@@ -106,13 +131,24 @@ class LiveSafetyService(BaseService):
             ),
             "",
         )
-        allow_local = bool(self.config.get("allow_unauthenticated_local", True))
+        allow_local = bool(self.config.get("allow_unauthenticated_local", False))
         if len(auth_secret.encode()) >= 32:
             authorizer: Any = ControlAuthorizer(HMACTokenAuth(auth_secret))
         elif allow_local:
             authorizer = LocalDevControlAuthorizer()
+            _log().critical(
+                "CONTROL AUTH DEGRADED: TRADING_CONTROL_HMAC_SECRET is not set, "
+                "so CONFIG commands are accepted unauthenticated. RESUME and "
+                "LIVE remain refused. Set TRADING_CONTROL_HMAC_SECRET (>=32 bytes) "
+                "before exposing this host beyond the loopback interface."
+            )
         else:
             authorizer = UnavailableControlAuthorizer()
+            _log().critical(
+                "CONTROL AUTH UNAVAILABLE: no TRADING_CONTROL_HMAC_SECRET and "
+                "allow_unauthenticated_local=false. Only HALT is accepted; every "
+                "other control command will be denied until a secret is installed."
+            )
         if len(evidence_secret.encode()) >= 32:
             evidence_authority = EvidenceAuthority(evidence_secret)
             preflight = LivePreflight(

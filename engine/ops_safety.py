@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 
@@ -45,7 +46,15 @@ class OpsAlert:
 
 
 class AlertBus:
-    """In-memory alert fan-out; optional JSONL sink (Telegram hook later)."""
+    """In-memory alert fan-out with de-duplication; optional JSONL sink.
+
+    Unconditional emission produced ~1,430 identical
+    ``performance_diagnosis`` alerts per day for weeks (5.9 MB of
+    ``alerts.jsonl``), which is how a real alert gets lost: anything that fires
+    every minute is noise. Repeats of the same ``(name, severity)`` within
+    ``cooldown_sec`` are counted rather than re-emitted, and the count is folded
+    into the next alert's details so the signal is not silently dropped.
+    """
 
     def __init__(
         self,
@@ -53,11 +62,15 @@ class AlertBus:
         path: str | Path | None = None,
         max_alerts: int = 2_000,
         sink: Callable[[OpsAlert], None] | None = None,
+        cooldown_sec: float = 900.0,
     ) -> None:
         self.path = Path(path) if path is not None else None
         self.sink = sink
+        self.cooldown_sec = float(cooldown_sec)
         self._alerts: deque[OpsAlert] = deque(maxlen=max_alerts)
         self._lock = RLock()
+        self._last_emit: dict[tuple[str, str], float] = {}
+        self._suppressed: dict[tuple[str, str], int] = {}
 
     def emit(
         self,
@@ -66,14 +79,30 @@ class AlertBus:
         *,
         severity: AlertSeverity | str = AlertSeverity.INFO,
         details: Mapping[str, Any] | None = None,
-    ) -> OpsAlert:
+    ) -> OpsAlert | None:
+        """Emit an alert, or return ``None`` when it is a suppressed repeat."""
+        level = (
+            severity if isinstance(severity, AlertSeverity) else AlertSeverity(severity)
+        )
+        key = (str(name), level.value)
+        now = time.time()
+        with self._lock:
+            last = self._last_emit.get(key)
+            if last is not None and (now - last) < self.cooldown_sec:
+                self._suppressed[key] = self._suppressed.get(key, 0) + 1
+                return None
+            suppressed = self._suppressed.pop(key, 0)
+            self._last_emit[key] = now
+        merged = dict(details or {})
+        if suppressed:
+            merged["suppressed_repeats"] = suppressed
         alert = OpsAlert(
             alert_id=uuid4().hex,
             name=str(name),
-            severity=AlertSeverity(severity) if not isinstance(severity, AlertSeverity) else severity,
+            severity=level,
             summary=str(summary),
             timestamp=_iso(),
-            details=dict(details or {}),
+            details=merged,
         )
         with self._lock:
             self._alerts.append(alert)
@@ -87,6 +116,9 @@ class AlertBus:
             except Exception:
                 pass
         return alert
+
+    def suppressed_count(self, name: str, severity: str = "info") -> int:
+        return self._suppressed.get((str(name), str(severity)), 0)
 
     def recent(self, limit: int = 50) -> list[OpsAlert]:
         with self._lock:
@@ -126,12 +158,38 @@ class HeartbeatWatchdog:
 
 @dataclass(slots=True)
 class DataGapDetector:
-    """Detect missing / duplicate candle timestamps for a symbol."""
+    """Detect missing / duplicate / out-of-order candle timestamps per symbol.
+
+    Takes the **exchange** bar timestamp, not the arrival time. The ops monitor
+    used to pass ``time.time()`` because candle payloads carried only
+    ``date``/``time`` strings, so a >90 s hiccup in a 5 s poll loop was reported
+    as a data gap, ``freeze_on_data_anomaly`` halted risk, and nothing ever
+    resumed it. That combination is why the production journal shows a month of
+    ``risk.reject{stage: halted, reason: market_data_gap}`` with zero orders.
+
+    A *stale* feed is a separate condition and is reported as ``stale``: the last
+    bar is older than the tolerance, which is the signal an operator needs, and
+    it does not depend on inter-arrival timing at all.
+    """
 
     expected_interval_sec: float = 60.0
     max_gap_factor: float = 1.5
+    #: Bar age above which the feed counts as stale.
+    stale_after_sec: float = 180.0
+    #: Consecutive stale observations before escalating (a feed recovers).
+    stale_tolerance: int = 3
     _last_ts: dict[str, float] = field(default_factory=dict)
     _last_fingerprint: dict[str, str] = field(default_factory=dict)
+    _stale_streak: dict[str, int] = field(default_factory=dict)
+    _max_seen: dict[str, float] = field(default_factory=dict)
+
+    def feed_age(self, symbol: str, *, now: float | None = None) -> float | None:
+        """Seconds since the newest bar seen for *symbol*."""
+        last = self._max_seen.get(str(symbol))
+        if last is None:
+            return None
+        current = __import__("time").time() if now is None else float(now)
+        return max(0.0, current - last)
 
     def observe(
         self,
@@ -139,21 +197,42 @@ class DataGapDetector:
         timestamp: float,
         *,
         volume: float | None = None,
+        now: float | None = None,
     ) -> list[str]:
-        """Return anomaly codes: gap, duplicate, out_of_order."""
+        """Return anomaly codes: gap, duplicate, out_of_order, stale."""
         issues: list[str] = []
         key = str(symbol)
-        ts = float(timestamp)
+        try:
+            ts = float(timestamp)
+        except (TypeError, ValueError):
+            return ["invalid_timestamp"]
+        current = __import__("time").time() if now is None else float(now)
+        self._max_seen[key] = max(self._max_seen.get(key, ts), ts)
+        age = max(0.0, current - self._max_seen[key])
+        if age > float(self.stale_after_sec):
+            streak = self._stale_streak.get(key, 0) + 1
+            self._stale_streak[key] = streak
+            if streak >= int(self.stale_tolerance):
+                issues.append("stale")
+        else:
+            self._stale_streak[key] = 0
+
         fp = f"{ts}:{volume if volume is not None else ''}"
         prev = self._last_ts.get(key)
         if prev is not None:
             delta = ts - prev
+            # A bar whose *close* time is identical to the previous one is a
+            # duplicate; a bar that moves backwards is out of order. Both are
+            # only reachable with real exchange timestamps, which is why these
+            # two branches used to be dead code.
             if abs(delta) < 1e-9:
                 issues.append("duplicate")
             elif delta > self.expected_interval_sec * self.max_gap_factor:
                 issues.append("gap")
             elif delta < -1e-6:
                 issues.append("out_of_order")
+                # Do not let a late bar rewind the watermark for everyone else.
+                return issues
         self._last_ts[key] = ts
         self._last_fingerprint[key] = fp
         return issues

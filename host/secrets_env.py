@@ -3,6 +3,12 @@
 YAML keeps only ``api_key_env`` names. Values live in table ``operator_secrets``
 inside the same SQLite file as ``cb_storage`` (default ``data/storage/records.db``).
 Optional project ``.env`` still loads first (does not override non-empty env).
+
+Values are stored **encrypted** — see :mod:`host.secret_store` for the backend
+selection. The table previously held cleartext, which meant a single copied
+``.db`` (or its ``-wal`` sidecar) exposed every exchange credential. Cleartext
+rows written by older builds are still readable and are re-encrypted on the next
+write.
 """
 
 from __future__ import annotations
@@ -10,8 +16,16 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
+
+from host.secret_store import (
+    SecretBackendUnavailable,
+    backend_name,
+    decrypt_secret,
+    encrypt_secret,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 DOTENV_PATH = ROOT / ".env"
@@ -28,15 +42,29 @@ CREATE TABLE IF NOT EXISTS operator_secrets (
 """
 
 _sqlite_path_cache: Path | None = None
+_path_hardened: set[Path] = set()
 
 
 def sqlite_path(*, refresh: bool = False) -> Path:
-    """Resolve configured sqlite backend path (same DB as storage records)."""
+    """Resolve configured sqlite backend path (same DB as storage records).
+
+    Honours ``TRADING_DATA_DIR`` so the secret store follows the rest of the
+    runtime state. Previously the path came from the shipped YAML resolved
+    against the repo root, while every other journal resolved against the CWD —
+    so a differently-started process opened a different database than the one
+    the engine was writing to.
+    """
     global _sqlite_path_cache
     if _sqlite_path_cache is not None and not refresh:
         return _sqlite_path_cache
+    from engine.paths import DATA_DIR_ENV, data_path
+
+    override = str(os.environ.get(DATA_DIR_ENV) or "").strip()
+    if override:
+        _sqlite_path_cache = Path(override) / "storage" / "records.db"
+        return _sqlite_path_cache
     cfg = ROOT / "config" / "trading_bot.yaml"
-    resolved = ROOT / "data" / "storage" / "records.db"
+    resolved = data_path("storage", "records.db")
     try:
         import yaml
 
@@ -55,6 +83,18 @@ def sqlite_path(*, refresh: bool = False) -> Path:
     return resolved
 
 
+def _harden_path(db: Path) -> None:
+    """Best-effort 0600 on the DB and its WAL sidecars (no-op on Windows)."""
+    if db in _path_hardened:
+        return
+    for target in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        try:
+            os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+    _path_hardened.add(db)
+
+
 def _connect(
     path: Path | None = None,
     *,
@@ -71,6 +111,7 @@ def _connect(
         pass
     conn.execute(_DDL)
     conn.commit()
+    _harden_path(db)
     return conn
 
 
@@ -105,22 +146,45 @@ def _read_all(path: Path | None = None) -> dict[str, str]:
             rows = conn.execute("SELECT name, value FROM operator_secrets").fetchall()
     except sqlite3.Error:
         return {}
-    return {str(k): str(v) for k, v in rows if k and v is not None}
+    out: dict[str, str] = {}
+    for key, value in rows:
+        if not key or value is None:
+            continue
+        try:
+            out[str(key)] = decrypt_secret(str(value))
+        except SecretBackendUnavailable as exc:
+            _log().error("cannot decrypt secret %s: %s", key, exc)
+    return out
 
 
 def _migrate_legacy_file() -> None:
-    """One-shot: import data/secrets.env into SQLite, then rename the file."""
+    """One-shot: import data/secrets.env into SQLite, then *delete* the file.
+
+    The previous version renamed it to ``.env.migrated``, which left a complete
+    plaintext copy of every credential sitting next to the database it had just
+    migrated away from.
+    """
     if not LEGACY_SECRETS_PATH.is_file():
         return
     legacy = _parse_env_file(LEGACY_SECRETS_PATH)
     if not legacy:
         return
+    migrated = 0
     for key, value in legacy.items():
-        upsert_secret(key, value, _skip_environ=True)
+        try:
+            upsert_secret(key, value, _skip_environ=True)
+            migrated += 1
+        except SecretBackendUnavailable:
+            _log().critical(
+                "refusing to migrate %s: no secret encryption backend", key
+            )
+            return
     try:
-        LEGACY_SECRETS_PATH.replace(LEGACY_SECRETS_PATH.with_suffix(".env.migrated"))
-    except OSError:
-        pass
+        LEGACY_SECRETS_PATH.unlink()
+    except OSError as exc:
+        _log().warning("could not delete legacy secrets file: %s", exc)
+        return
+    _log().info("migrated %d legacy secret(s) and removed the plaintext file", migrated)
 
 
 def load_secrets_into_environ(*, override: bool = False) -> list[str]:
@@ -143,11 +207,16 @@ def load_secrets_into_environ(*, override: bool = False) -> list[str]:
 
 
 def upsert_secret(name: str, value: str, *, _skip_environ: bool = False) -> None:
-    """Write/replace one key in SQLite and (unless skipped) process env."""
+    """Write/replace one key in SQLite (encrypted) and (unless skipped) process env.
+
+    Raises :class:`SecretBackendUnavailable` rather than writing cleartext when
+    no encryption backend is available.
+    """
     key = (name or "").strip()
     val = (value or "").strip()
     if not _KEY_RE.match(key) or not val:
         return
+    stored = encrypt_secret(val)
     if not _skip_environ:
         os.environ[key] = val
     ts = datetime.now(timezone.utc).isoformat()
@@ -160,27 +229,43 @@ def upsert_secret(name: str, value: str, *, _skip_environ: bool = False) -> None
                 value=excluded.value,
                 updated_at=excluded.updated_at
             """,
-            (key, val, ts),
+            (key, stored, ts),
         )
         conn.commit()
 
 
+def secret_store_backend() -> str:
+    return backend_name()
+
+
+def _log():
+    import logging
+
+    return logging.getLogger("secrets")
+
+
 def has_secret(name: str) -> bool:
+    """Presence check. Returns ``True`` when the lookup itself failed.
+
+    A locked or slow DB previously reported "absent", which made the Operator UI
+    tell the operator their credentials were gone and invited a re-entry while
+    the real keys were present and in use.
+    """
     key = (name or "").strip()
     if not key:
         return False
     if str(os.environ.get(key) or "").strip():
         return True
     try:
-        # Presence checks must not stall UI snapshots when the storage DB is busy.
         with _connect(timeout=0.5, busy_timeout_ms=500) as conn:
             row = conn.execute(
                 "SELECT 1 FROM operator_secrets WHERE name=? AND value!='' LIMIT 1",
                 (key,),
             ).fetchone()
         return bool(row)
-    except sqlite3.Error:
-        return False
+    except sqlite3.Error as exc:
+        _log().warning("secret presence lookup failed for %s: %s", key, exc)
+        return True
 
 
 def secrets_present(names: list[str] | tuple[str, ...]) -> dict[str, bool]:
@@ -209,6 +294,9 @@ def secrets_present(names: list[str] | tuple[str, ...]) -> dict[str, bool]:
         found = {str(r[0]) for r in rows if r and r[0]}
         for key in missing:
             present[key] = key in found
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as exc:
+        # Unknown, not absent — see has_secret.
+        _log().warning("batch secret presence lookup failed: %s", exc)
+        for key in missing:
+            present[key] = True
     return present

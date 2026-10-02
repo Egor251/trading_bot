@@ -18,7 +18,7 @@ import math
 import secrets
 import threading
 import time
-from typing import Any, Callable, Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 
 class AuthError(ValueError):
@@ -47,6 +47,9 @@ class RateLimitExceeded(AuthorizationDenied):
 
 class Role(str, Enum):
     VIEWER = "viewer"
+    #: Read-oriented AI surface.  Deliberately granted nothing that increases
+    #: risk: no CONFIG, no RESUME, no LIVE.  The AI may always HALT.
+    ANALYST = "analyst"
     OPERATOR = "operator"
     RISK = "risk"
     ADMIN = "admin"
@@ -59,16 +62,39 @@ class ControlCommand(str, Enum):
     LIVE = "live"
 
 
+#: Commands an ``ANALYST`` principal may execute.  Kept next to
+#: ``ControlCommand`` / ``Role`` so role permissions are one edit, not two.
+ANALYST_COMMANDS = frozenset({ControlCommand.HALT})
+
+
 def _b64encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
 def _b64decode(value: str) -> bytes:
+    """Decode base64url, rejecting non-canonical encodings.
+
+    A 32-byte SHA-256 signature encodes to 43 unpadded base64url characters:
+    43*6 = 258 bits for 256 bits of data, so the final character carries two
+    bits that `urlsafe_b64decode` discards. Four distinct strings therefore
+    decode to the identical signature bytes, and a token whose last character had
+    its low bits altered verified successfully — the HMAC still matched because
+    it never saw the alteration.
+
+    That is a real hole, not just a test artefact: it means one session has four
+    distinct string forms, so anything keyed on the token *string* (a replay
+    cache, an audit log, a revocation list) can be bypassed or forked by editing
+    two ignored bits. Re-encoding and comparing rejects the three non-canonical
+    forms, which is the standard rule for JWT-style segments.
+    """
     try:
         raw = value.encode("ascii")
-        return base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
+        decoded = base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
     except Exception as exc:
         raise InvalidToken("malformed base64 token") from exc
+    if _b64encode(decoded) != value:
+        raise InvalidToken("non-canonical base64url encoding")
+    return decoded
 
 
 def _now(clock: Callable[[], float]) -> float:
@@ -306,6 +332,13 @@ class ControlAuthorizer:
         ControlCommand.LIVE: frozenset({Role.OPERATOR, Role.RISK, Role.ADMIN}),
     }
 
+    #: An ``ANALYST`` may halt (handled before this table) and nothing else.
+    #: Listed explicitly so the intent survives a future refactor of
+    #: ``DEFAULT_ROLES``.
+    ROLE_COMMANDS: dict[Role, frozenset[ControlCommand]] = {
+        Role.ANALYST: ANALYST_COMMANDS,
+    }
+
     def __init__(
         self,
         auth: HMACTokenAuth,
@@ -365,6 +398,7 @@ Command = ControlCommand
 
 
 __all__ = [
+    "ANALYST_COMMANDS",
     "AuthError",
     "AuthSession",
     "AuthorizationDenied",
