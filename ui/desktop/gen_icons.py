@@ -45,7 +45,7 @@ def main() -> None:
     for name, size in (
         ("32x32.png", 32),
         ("128x128.png", 128),
-        ("henry.w@example.net", 256),
+        ("128x128@2x.png", 256),
         ("icon.png", 512),
     ):
         (root / name).write_bytes(solid(size, size, color))

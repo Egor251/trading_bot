@@ -5,11 +5,10 @@
 data/secrets.env
 
 # --- runtime data ---
-data/storage/
-data/ui/
-data/execution/
-data/ops/
-data/phantom/
+# The whole data tree is runtime state. Previously only some subdirectories were
+# ignored, so `data/ohlc_cache` (2 MB of cached OHLCV), `data/cost_schedules` and
+# `data/ai_reports` were one `git add -A` away from being committed.
+data/
 logs/
 *.db
 *.db-*
@@ -24,6 +23,17 @@ __pycache__/
 .venv/
 venv/
 
+# --- build trees ---
+# `ui/desktop` had no .gitignore of its own, so `git add -A` pulled the whole
+# Tauri node_modules and cargo target/ (hundreds of MB) into the index.
+node_modules/
+**/node_modules/
+ui/desktop/src-tauri/target/
+**/target/
+ui/web/.next/
+ui/web/out/
+ui/desktop/gen/schemas/*.json
+
 # --- IDE ---
 .idea/
 .vscode/
@@ -37,19 +47,19 @@ plugins_local/*
 
 # --- Tracked strategies (StrategyPlugin) ---
 # Base class: engine/strategy_plugin.py
-strategies/*
+#
+# All 21 strategies under strategies/ are tracked. The previous allow-list kept
+# only 5, so 16 strategies — including every entry named in
+# `trading.ensemble.observe` and every one the Operator UI lists — existed only
+# on the developer's disk. A fresh clone loaded 5 strategies, the consilium
+# silently degraded, and no strategy fix could ever be committed.
+#
+# Private strategies belong in `strategies_local/` (ignored above), which is what
+# `plugins.installed_paths` reads.
+strategies/*/__pycache__/
 !strategies/__init__.py
 !strategies/README.md
-!strategies/test_strategy/
-!strategies/test_strategy/**
-!strategies/ma_cross_example/
-!strategies/ma_cross_example/**
-!strategies/mean_reversion_example/
-!strategies/mean_reversion_example/**
-!strategies/volatility_breakout_example/
-!strategies/volatility_breakout_example/**
-!strategies/volume_impulse_example/
-!strategies/volume_impulse_example/**
+!strategies/*/
 
 # --- Tracked non-strategy plugins ---
 # order_execution, ai_analyst, market connectors under plugins/market/
@@ -61,3 +71,8 @@ plugins/*
 !plugins/ai_analyst/**
 !plugins/market/
 !plugins/market/**
+# The negations above re-include *everything* under plugins/, bytecode included.
+# Re-ignore compiled artefacts after them so a stray .pyc can never be committed
+# alongside the sources the negations exist to track.
+plugins/**/__pycache__/
+plugins/**/*.py[cod]
