@@ -25,6 +25,12 @@ from .fills import FillRecord
 from .risk import RiskManager
 
 
+def _log():
+    import logging
+
+    return logging.getLogger("order")
+
+
 class OrderSide(str, Enum):
     BUY = "buy"
     SELL = "sell"
@@ -36,6 +42,14 @@ class OrderStatus(str, Enum):
     FILLED = "filled"
     PARTIAL = "partial"
     CANCELLED = "cancelled"
+    #: The broker's answer is not known: the send failed after the request may
+    #: have been transmitted, or the reply could not be parsed. This is
+    #: deliberately distinct from REJECTED (definitely not working) and from
+    #: ACCEPTED (definitely working), because treating it as either one loses
+    #: money — REJECTED frees the EXIT_PENDING reservation on a protective exit
+    #: that may in fact be live, and ACCEPTED invents a fill. An UNKNOWN result
+    #: must hold every reservation and force reconciliation instead.
+    UNKNOWN = "unknown"
 
 
 @dataclass(slots=True)
@@ -157,6 +171,10 @@ class OrderManager:
         self.positions: dict[str, Position] = {}
         self.history: list[OrderResult] = []
         self.fill_ledger: list[FillRecord] = []
+        #: Periodic carry charged against equity (perpetual funding, borrow).
+        #: Deliberately separate from `total_costs`, which is a sum over the
+        #: fill ledger — funding is not a fill and never appears there.
+        self._carry_charged: float = 0.0
         self._broker_applied_qty: dict[str, float] = {}
         self._broker_applied_notional: dict[str, float] = {}
         self.cost_schedule = cost_schedule or self._legacy_cost_schedule(
@@ -169,6 +187,59 @@ class OrderManager:
         self.cash = Decimal(str(equity))
         self.risk_trace: deque[dict[str, Any]] = deque(maxlen=200)
         self._daily_turnover: float = 0.0
+        #: Count of fills whose cost breakdown could not be computed. Surfaced in
+        #: the snapshot so a stale cost schedule is visible instead of silent.
+        self.cost_schedule_errors: int = 0
+        # Day-scoped risk state. Both were previously tied to the *process*
+        # lifetime:
+        #   * daily loss was measured from `starting_equity`, so one 5% unrealized
+        #     dip on an open book halted trading permanently (and, because
+        #     max_daily_loss_pct < max_portfolio_drawdown in the shipped config,
+        #     made the real drawdown gate unreachable);
+        #   * turnover was never reset at all, so once the process had traded
+        #     `max_daily_turnover_pct * equity` of notional *ever*, every
+        #     subsequent order was rejected forever.
+        self._day_key: str = self._current_day_key()
+        self._day_start_equity: float = float(equity)
+
+    def _current_day_key(self) -> str:
+        """Trading-day key in UTC.
+
+        Crypto trades continuously, so the UTC date is the session boundary for
+        the venues this engine defaults to; equity venues can override
+        ``day_key_hook``.
+        """
+        return datetime.now(UTC).date().isoformat()
+
+    def _roll_day_if_needed(self) -> None:
+        """Reset day-scoped counters when the session key changes."""
+        key = self._current_day_key()
+        if key == self._day_key:
+            return
+        _log().info(
+            "risk day rolled %s -> %s (turnover %.2f -> 0)",
+            self._day_key,
+            key,
+            self._daily_turnover,
+        )
+        self._day_key = key
+        self._daily_turnover = 0.0
+        # Day-start equity for the loss gate is the *realised* equity at the
+        # boundary, not the boot capital.
+        self._day_start_equity = float(self.equity_ex_unrealized)
+
+    def note_day_start_equity(self, equity: float) -> None:
+        """Seed the day-start equity used by the daily-loss gate."""
+        try:
+            value = float(equity)
+        except (TypeError, ValueError):
+            return
+        if value > 0:
+            self._day_start_equity = value
+
+    @property
+    def day_key(self) -> str:
+        return self._day_key
 
     def _record_risk_trace(self, row: dict[str, Any]) -> None:
         self.risk_trace.append(dict(row))
@@ -212,6 +283,11 @@ class OrderManager:
         return sum((fill.total_cost for fill in self.fill_ledger), Decimal("0"))
 
     @property
+    def carry_costs(self) -> float:
+        """Net carry charged (positive = paid out, negative = received)."""
+        return float(self._carry_charged)
+
+    @property
     def exposures(self) -> dict[str, float]:
         """Signed marked notionals, retained for snapshot compatibility."""
         return {
@@ -235,7 +311,39 @@ class OrderManager:
     def equity_ex_unrealized(self) -> float:
         """Equity without open MTM — used for daily-loss (avoids leverage noise)."""
         realized = sum(float(p.realized_pnl) for p in self.positions.values())
-        return float(self.starting_equity) + realized - float(self.total_costs)
+        return (
+            float(self.starting_equity)
+            + realized
+            - float(self.total_costs)
+            - float(self.carry_costs)
+        )
+
+    def apply_carry(self, symbol: str, rate: float) -> float | None:
+        """Charge periodic carry (perpetual funding, borrow) against equity.
+
+        A carry charge is not a fill. `total_costs` sums the fill ledger, so
+        funding recorded there — or applied through `Portfolio`, which the live
+        runtime does not use — never reached equity, and risk limits were
+        computed from a base that ignored it. A position that pays funding all
+        day must see equity fall.
+
+        Sign convention matches the venue: a positive rate charges longs and
+        credits shorts. Returns the amount charged (negative = credited), or
+        ``None`` when nothing is held in ``symbol``.
+        """
+        position = self.positions.get(symbol)
+        if position is None or abs(position.quantity) <= 1e-12:
+            return None
+        rate_value = float(rate)
+        if not rate_value:
+            return None
+        mark = float(position.mark_price or position.avg_price or 0.0)
+        if mark <= 0:
+            return None
+        charge = position.quantity * mark * rate_value
+        # Long pays when the rate is positive; a short receives it.
+        self._carry_charged += charge
+        return charge
 
     def mark_to_market(self, symbol: str, price: float) -> float:
         if price <= 0:
@@ -250,6 +358,7 @@ class OrderManager:
             + realized
             + unrealized
             - float(self.total_costs)
+            - float(self.carry_costs)
         )
         self.peak_equity = max(self.peak_equity, self.equity)
         return self.equity
@@ -263,6 +372,8 @@ class OrderManager:
         self.peak_equity = float(equity)
         self.cash = Decimal(str(equity))
         self._daily_turnover = 0.0
+        self._day_key = self._current_day_key()
+        self._day_start_equity = float(equity)
 
     def clear_book(self, *, equity: float | None = None) -> None:
         """Wipe simulated positions/fills and restore cash (paper/phantom only)."""
@@ -277,6 +388,8 @@ class OrderManager:
         self.peak_equity = start
         self.cash = Decimal(str(start))
         self._daily_turnover = 0.0
+        self._day_key = self._current_day_key()
+        self._day_start_equity = start
 
     def clear_symbol(self, symbol_key: str) -> dict[str, Any]:
         """Remove one simulated position and related fills (paper/phantom only)."""
@@ -320,6 +433,19 @@ class OrderManager:
                 continue
             pruned_hist.append(h)
         self.history = pruned_hist
+        removed_fills = [
+            f for f in ledger if f not in set(id(x) for x in kept)
+        ]
+        # `cash` is a Decimal running total of every fill's cash_delta, while
+        # `equity` is recomputed from starting_equity + realised + unrealized -
+        # costs. Dropping fills without returning their cash deltas left
+        # snapshot()["cash"] permanently wrong after a per-symbol reset, and
+        # `test_paper_reset.py` only covered the full-wipe path.
+        for fill in removed_fills:
+            try:
+                self.cash -= fill.cash_delta
+            except AttributeError:  # pragma: no cover - defensive
+                pass
         realized = sum(float(p.realized_pnl) for p in self.positions.values())
         unrealized = sum(float(p.unrealized_pnl) for p in self.positions.values())
         self.equity = (
@@ -330,6 +456,7 @@ class OrderManager:
             "cleared": bool(removed),
             "symbols": removed,
             "equity": float(self.equity),
+            "cash": float(self.cash),
         }
 
     def _instrument_for(self, intent: OrderIntent) -> Any | None:
@@ -343,6 +470,30 @@ class OrderManager:
             )
         except Exception:
             return None
+
+    def _calculate_costs(self, context: Any) -> CostBreakdown:
+        """Cost breakdown that cannot abort a fill.
+
+        ``CostSchedule.calculate`` raises when the schedule is not effective at
+        ``trade_time`` — routine, because ``activate`` never re-checks the window
+        at trade time. Unguarded, that exception propagated out of
+        ``_record_fill`` *after* ``router.place()`` had already executed, so the
+        order was live at the broker while the local book recorded nothing and no
+        protective slice was opened.
+        """
+        if self.cost_schedule is None:
+            return CostBreakdown()
+        try:
+            return self.cost_schedule.calculate(context)
+        except Exception as exc:  # noqa: BLE001
+            _log().error(
+                "cost schedule unusable for %s (%s); recording zero costs and "
+                "alerting. Refresh or reactivate the schedule.",
+                getattr(context, "symbol", "?"),
+                exc,
+            )
+            self.cost_schedule_errors += 1
+            return CostBreakdown()
 
     def _notional_multiplier(self, intent: OrderIntent) -> float:
         """Contract multiplier used for risk notional (must match Position.notional)."""
@@ -405,26 +556,43 @@ class OrderManager:
             tier_value=Decimal(str((raw or {}).get("tier_value") or "0")),
             currency=currency,
         )
-        costs = (
-            self.cost_schedule.calculate(context)
-            if self.cost_schedule is not None
-            else CostBreakdown()
-        )
+        costs = self._calculate_costs(context)
         actual_fee = (raw or {}).get("actual_fee")
         if actual_fee not in (None, ""):
-            costs = CostBreakdown(
-                lines=(
-                    CostLine(
-                        rule_id="broker-actual",
-                        component="actual_fee",
-                        kind=CostKind.FIXED,
-                        amount=Decimal(str(actual_fee)),
-                        priority=-1,
-                    ),
-                ),
-                schedule_version="broker-actual",
-                schedule_hash=str((raw or {}).get("fee_schedule_hash") or ""),
-            )
+            # The broker's real fee is *added* to the modelled lines, not a
+            # replacement for them. Replacing discarded commission and slippage,
+            # so venues that report only an exchange fee booked zero slippage and
+            # realised PnL silently diverged from the model the research gate
+            # validated on. Sign and currency are normalised because a rebate or a
+            # BNB-denominated fee is routine and `CostLine` rejects negatives —
+            # which used to abort `_record_fill` and leave the position
+            # unrecorded even though the broker had filled it.
+            try:
+                broker_fee = abs(Decimal(str(actual_fee)))
+            except Exception:  # noqa: BLE001 - never let a fee break a fill
+                broker_fee = None
+            if broker_fee is not None:
+                try:
+                    costs = CostBreakdown(
+                        lines=(
+                            *costs.lines,
+                            CostLine(
+                                rule_id="broker-actual",
+                                component="actual_fee",
+                                kind=CostKind.FIXED,
+                                amount=broker_fee,
+                                priority=-1,
+                            ),
+                        ),
+                        schedule_version=costs.schedule_version,
+                        schedule_hash=costs.schedule_hash,
+                    )
+                except Exception:  # noqa: BLE001
+                    _log().warning(
+                        "could not attach broker fee %r for %s; using modelled costs",
+                        actual_fee,
+                        intent.exposure_key,
+                    )
         record = FillRecord.from_trade(
             context,
             fill_id=str((raw or {}).get("fill_id") or uuid4().hex),
@@ -480,12 +648,24 @@ class OrderManager:
         key = intent.exposure_key
         if not dry_run:
             self.mark_to_market(key, mark_price)
+            current_exposure = self.exposures.get(key, 0.0)
         else:
-            # Read-only mark for exposure math without rewriting peak/equity path.
+            # Genuinely read-only. This used to write `position.mark_price`,
+            # which changes Position.notional -> gross_exposure -> leverage, and
+            # the next real mark_to_market then recomputes equity and peak from
+            # that preview mark. A hypothetical order could therefore trip or
+            # clear no_leverage_headroom / portfolio_dd for subsequent real
+            # orders — the preview changed the thing it was previewing.
             position = self.positions.get(key)
-            if position is not None and mark_price > 0:
-                position.mark_price = float(mark_price)
-        current_exposure = self.exposures.get(key, 0.0)
+            if position is not None:
+                held = abs(float(position.quantity))
+                current_exposure = (
+                    held * float(mark_price) * float(position.contract_multiplier or 1.0)
+                ) * (1.0 if position.quantity > 0 else -1.0)
+            else:
+                current_exposure = 0.0
+        gross = 0.0 if dry_run else float(self.gross_exposure)
+        current_exposure = float(current_exposure)
         multiplier = self._notional_multiplier(intent)
         unit_notional = abs(float(mark_price) * multiplier)
         notional = abs(float(intent.quantity) * unit_notional)
@@ -494,7 +674,6 @@ class OrderManager:
         reduces_risk = abs(proposed_exposure) <= abs(current_exposure) + 1e-9
         max_lev = float(self.risk.limits.max_leverage or 0.0)
         equity = float(self.equity or 0.0)
-        gross = float(self.gross_exposure)
         current_lev = (gross / equity) if equity > 0 else 0.0
 
         def _reject(reason: str) -> tuple[OrderResult, float]:
@@ -553,6 +732,10 @@ class OrderManager:
         halt_reason = getattr(self.risk, "_halt_reason", "")
         if dry_run:
             self.risk._halted = False  # noqa: SLF001
+        # Roll day-scoped counters *before* reading them, and never let a dry-run
+        # preview mutate them.
+        if not dry_run:
+            self._roll_day_if_needed()
         try:
             decision = self.risk.check_order(
                 equity=equity,
@@ -563,7 +746,12 @@ class OrderManager:
                 current_gross_exposure=gross,
                 reduces_risk=reduces_risk,
                 strategy_id=str(intent.strategy_id or ""),
-                day_start_equity=float(self.starting_equity),
+                dry_run=bool(dry_run),
+                # Day-start equity, not the boot capital. See _roll_day_if_needed.
+                day_start_equity=float(
+                    self._day_start_equity if self._day_start_equity > 0
+                    else self.equity_ex_unrealized
+                ),
                 daily_turnover=float(self._daily_turnover),
             )
         finally:
@@ -573,6 +761,9 @@ class OrderManager:
 
         if not decision.allowed:
             return _reject(decision.reason or "risk_reject")
+        # NOTE: `check_order` → `check_order_rate` records the order in the local
+        # rolling window, so there is deliberately no extra `record_order()` here
+        # (that would double-count every accepted order).
 
         qty = intent.quantity
         if decision.scaled_size is not None and unit_notional > 0:

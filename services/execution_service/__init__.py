@@ -16,6 +16,7 @@ from engine.execution import (
     OrderStore,
     QuikExecutionAdapter,
 )
+from engine.paths import data_path
 from engine.reconciliation import (
     IncidentKind,
     ReconciliationIncident,
@@ -43,17 +44,24 @@ class ExecutionService(BaseService):
         return {
             "enabled": True,
             "auto_start": True,
-            "store_path": "data/execution/orders.json",
+            "store_path": str(data_path("execution", "orders.json")),
             "attach_interval_sec": 2,
             "reconcile_interval_sec": 30,
             "reconcile_retry_sec": 5,
             "reconcile_retry_attempts": 3,
             "unhealthy_alert_sec": 300,
+            # A working order left resting on the venue is live risk: it can fill
+            # long after its signal stopped mattering, and venues that ignore
+            # `time_in_force` never remove it. 0 disables the sweep.
+            "stale_order_ttl_sec": 900,
+            "stale_order_sweep_interval_sec": 60,
             "accounts": {"quik": "default", "alpaca": "default"},
         }
 
     async def on_initialize(self) -> None:
-        path = Path(str(self.config.get("store_path") or "data/execution/orders.json"))
+        path = Path(
+            str(self.config.get("store_path") or data_path("execution", "orders.json"))
+        )
         self.store = OrderStore(path)
         self.router = ExecutionRouter(self.store)
         self.reconciliation = ReconciliationService(
@@ -99,8 +107,33 @@ class ExecutionService(BaseService):
                 await self._reconcile_all()
                 await self._maybe_alert_unhealthy(now)
                 last_reconcile = now
+            await self._sweep_stale_orders(now)
             await asyncio.sleep(
                 max(0.5, float(self.config.get("attach_interval_sec") or 2))
+            )
+
+    async def _sweep_stale_orders(self, now: float) -> None:
+        """Reclaim resting orders that outlived their TTL."""
+        if self.router is None:
+            return
+        ttl = float(self.config.get("stale_order_ttl_sec") or 0)
+        if ttl <= 0:
+            return
+        interval = max(1.0, float(self.config.get("stale_order_sweep_interval_sec") or 60))
+        if now - float(getattr(self, "_last_sweep", 0.0)) < interval:
+            return
+        self._last_sweep = now
+        try:
+            cancelled = await self.router.sweep_stale(ttl)
+        except Exception:  # noqa: BLE001 - a sweep failure must not stop trading
+            return
+        for order in cancelled:
+            self._log().info(
+                "stale order cancelled: %s %s %s ttl=%ss",
+                order.venue,
+                order.symbol,
+                order.client_id,
+                ttl,
             )
 
     async def _attach_available(self) -> None:

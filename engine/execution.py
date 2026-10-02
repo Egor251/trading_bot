@@ -15,11 +15,17 @@ from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
 
 ZERO = Decimal("0")
+
+
+def _log():
+    import logging
+
+    return logging.getLogger("execution")
 
 
 def _decimal(value: Any, default: Decimal | None = ZERO) -> Decimal | None:
@@ -294,15 +300,78 @@ BrokerExecutionPort = ExecutionPort
 
 
 class OrderStore:
-    """Atomic JSON store; every mutation is fsync'ed then atomically replaced."""
+    """Atomic JSON store; every mutation is fsync'ed then atomically replaced.
+
+    A corrupt or truncated file used to raise out of ``__init__``, which killed
+    ``ExecutionService.on_initialize`` and with it *both* reconciliation and the
+    new-risk gate — i.e. the checks that stop trading when state disagrees with
+    the broker. The file is now quarantined and the store starts empty, with a
+    loud error, so the engine boots in a visible fail-safe state instead of a
+    silently unprotected one.
+    """
+
+    #: Terminal order states that may be pruned once they exceed this many.
+    _TERMINAL = frozenset({"filled", "cancelled", "rejected", "expired", "unknown"})
+    #: Keep at most this many terminal orders / fills in memory + on disk.
+    retention_orders: int = 5000
+    retention_fills: int = 20000
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._lock = RLock()
         self._data: dict[str, Any] = {"version": 1, "orders": {}, "fills": {}, "metadata": {}}
+        self._idempotency_index: dict[str, str] = {}
+        self.corrupt: bool = False
         if self.path.exists():
-            loaded = json.loads(self.path.read_text(encoding="utf-8"))
-            self._data.update(loaded)
+            try:
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if not isinstance(loaded, dict):
+                    raise ValueError("order store root is not an object")
+                self._data.update(loaded)
+                self._rebuild_idempotency_index()
+            except (OSError, ValueError) as exc:
+                self.corrupt = True
+                backup = self.path.with_name(f"{self.path.name}.corrupt")
+                try:
+                    os.replace(self.path, backup)
+                except OSError:
+                    pass
+                _log().critical(
+                    "order store at %s is unreadable (%s); quarantined to %s and "
+                    "started EMPTY. Reconciliation and the new-risk gate are the "
+                    "only thing protecting the account — reconcile manually before "
+                    "trading.",
+                    self.path,
+                    exc,
+                    backup,
+                )
+
+    def _prune_locked(self) -> None:
+        """Bound the store so per-order flush cost does not grow without limit."""
+        orders = self._data["orders"]
+        if len(orders) <= self.retention_orders:
+            return
+        terminal = [
+            (str(item.get("updated_at") or item.get("created_at") or ""), cid)
+            for cid, item in orders.items()
+            if str(item.get("state") or "").lower() in self._TERMINAL
+        ]
+        terminal.sort()
+        excess = len(orders) - self.retention_orders
+        for _ts, cid in terminal[:excess]:
+            orders.pop(cid, None)
+            pruned = self._idempotency_index
+            for key, owner in list(pruned.items()):
+                if owner == cid:
+                    pruned.pop(key, None)
+
+        fills = self._data["fills"]
+        if len(fills) > self.retention_fills:
+            ordered = sorted(
+                fills.items(), key=lambda kv: str((kv[1] or {}).get("timestamp") or "")
+            )
+            for key, _value in ordered[: len(fills) - self.retention_fills]:
+                fills.pop(key, None)
 
     def _flush(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -317,7 +386,15 @@ class OrderStore:
         with self._lock:
             if not allow_existing and order.client_id in self._data["orders"]:
                 raise DuplicateClientId(order.client_id)
+            previous = self._data["orders"].get(order.client_id) or {}
+            stale_key = str(previous.get("idempotency_key") or "")
             self._data["orders"][order.client_id] = order.to_dict()
+            key = str(order.idempotency_key or "")
+            if key:
+                self._idempotency_index[key] = order.client_id
+            if stale_key and stale_key != key:
+                self._idempotency_index.pop(stale_key, None)
+            self._prune_locked()
             self._flush()
         return order
 
@@ -331,11 +408,21 @@ class OrderStore:
     get_order = get
 
     def find_idempotency_key(self, key: str) -> BrokerOrder | None:
+        # O(1) via the maintained index. The previous implementation was a linear
+        # scan of every order ever placed, executed on the hot `place()` path.
         with self._lock:
-            for data in self._data["orders"].values():
-                if data.get("idempotency_key") == key:
-                    return BrokerOrder.from_dict(data)
-        return None
+            client_id = self._idempotency_index.get(str(key))
+            if client_id is None:
+                return None
+            data = self._data["orders"].get(client_id)
+            return BrokerOrder.from_dict(data) if data else None
+
+    def _rebuild_idempotency_index(self) -> None:
+        self._idempotency_index = {}
+        for client_id, data in self._data["orders"].items():
+            raw = str(data.get("idempotency_key") or "")
+            if raw:
+                self._idempotency_index[raw] = client_id
 
     def orders(self) -> list[BrokerOrder]:
         with self._lock:
@@ -351,6 +438,45 @@ class OrderStore:
             self._data["fills"][key] = fill.to_dict()
             self._flush()
             return True
+
+    def apply_fill(self, fill: Fill, order: BrokerOrder) -> None:
+        """Record *fill* and update *order* in a single durable write.
+
+        ``add_fill`` followed by ``save`` is not atomic: the fill is fsynced
+        first, and if the cumulative check or the state transition then raises,
+        the order is never updated while the fill is permanently on disk. The
+        broker watermark still advances, so the fill is never re-fetched, and
+        ``_resolve_absent`` then *resolves* the FILL_BREAK that reported it —
+        a real broker fill is dropped from the order state and the incident that
+        flagged it is auto-cleared.
+        """
+        key = f"{fill.venue}:{fill.account}:{fill.fill_id}"
+        with self._lock:
+            existing = self._data["fills"].get(key)
+            if existing is not None:
+                return
+            previous = [
+                Fill.from_dict(item)
+                for item in self._data["fills"].values()
+                if str(Fill.from_dict(item).client_id) == fill.client_id
+            ]
+            cumulative = sum((item.quantity for item in previous), ZERO) + fill.quantity
+            if cumulative > order.quantity:
+                raise ValueError("cumulative fills exceed order quantity")
+            notional = (
+                sum((item.quantity * item.price for item in previous), ZERO)
+                + fill.quantity * fill.price
+            )
+            # Validate the transition *before* touching the store so a late fill
+            # on a terminal order cannot half-apply.
+            target = OrderState.FILLED if cumulative == order.quantity else OrderState.PARTIAL
+            order.transition(target)
+
+            self._data["fills"][key] = fill.to_dict()
+            order.filled_quantity = cumulative
+            order.average_fill_price = notional / cumulative if cumulative else None
+            self._data["orders"][order.client_id] = order.to_dict()
+            self._flush()
 
     def fills(self, *, client_id: str | None = None) -> list[Fill]:
         with self._lock:
@@ -388,7 +514,18 @@ class ExecutionRouter:
         return self.port(venue, account).capabilities
 
     async def place(self, order: BrokerOrder) -> BrokerOrder:
-        lock = self._locks.setdefault(order.client_id, asyncio.Lock())
+        # One lock per order is correct for serialising *the same* order, but the
+        # dict grew one entry per order ever placed and was never pruned. Bound it
+        # by dropping the lock for orders that already reached a terminal state.
+        lock = self._locks.get(order.client_id)
+        if lock is None:
+            if len(self._locks) > 4096:
+                self._locks = {
+                    cid: existing
+                    for cid, existing in self._locks.items()
+                    if not self._is_terminal(cid)
+                }
+            lock = self._locks.setdefault(order.client_id, asyncio.Lock())
         async with lock:
             prior = self.store.get(order.client_id)
             idem = self.store.find_idempotency_key(order.idempotency_key or order.client_id)
@@ -463,20 +600,68 @@ class ExecutionRouter:
         self.store.save(merged)
         return merged
 
+    async def sweep_stale(
+        self,
+        ttl_sec: float,
+        *,
+        now: datetime | None = None,
+        protect_reasons: Sequence[str] = ("protective", "stop", "oco"),
+    ) -> list[BrokerOrder]:
+        """Cancel resting orders that have outlived their TTL.
+
+        A working order left on the venue is live risk nobody is watching: it can
+        fill long after the signal that justified it is irrelevant, and on a
+        venue that ignores ``time_in_force`` nothing else would ever remove it.
+        Previously the only cleanup purged *local* orphans
+        (``runtime.purge_local_orphans``) — records with no broker id — so an
+        order the venue was genuinely holding was never reclaimed.
+
+        Protective orders are exempt by default: a protective stop left resting
+        is the one order whose expiry would remove protection from a live
+        position. Callers can override the exemption via ``protect_reasons``.
+        """
+        ttl = max(0.0, float(ttl_sec))
+        if ttl <= 0:
+            return []
+        reference = _utc(now) if now is not None else _now()
+        cancelled: list[BrokerOrder] = []
+        for order in list(self.store.orders()):
+            if order.state not in {OrderState.ACCEPTED, OrderState.PARTIAL}:
+                continue
+            age = (reference - _utc(order.updated_at)).total_seconds()
+            if age < ttl:
+                continue
+            tags = " ".join(
+                str(v).lower()
+                for v in (
+                    order.symbol,
+                    order.order_type,
+                    str(order.raw.get("reason") or ""),
+                    str(order.raw.get("purpose") or ""),
+                )
+            )
+            if any(tag and tag in tags for tag in protect_reasons):
+                continue
+            try:
+                result = await self.port(order.venue, order.account).cancel(
+                    order, idempotency_key=f"{order.idempotency_key}:ttl:{ttl:.0f}"
+                )
+            except Exception:
+                # A venue we cannot reach leaves the order live; reconciliation
+                # will surface the difference on the next pass rather than us
+                # recording a cancellation that never happened.
+                continue
+            merged = self._merge(order, result)
+            if merged.state not in OrderStore._TERMINAL:
+                merged = merged.transition(OrderState.CANCELLED)
+            self.store.save(merged)
+            cancelled.append(merged)
+        return cancelled
+
     async def record_fill(self, fill: Fill) -> BrokerOrder:
         order = self._required(fill.client_id)
-        if not self.store.add_fill(fill):
-            return order
-        all_fills = self.store.fills(client_id=fill.client_id)
-        cumulative = sum((item.quantity for item in all_fills), ZERO)
-        if cumulative > order.quantity:
-            raise ValueError("cumulative fills exceed order quantity")
-        notional = sum((item.quantity * item.price for item in all_fills), ZERO)
-        order.filled_quantity = cumulative
-        order.average_fill_price = notional / cumulative if cumulative else None
-        target = OrderState.FILLED if cumulative == order.quantity else OrderState.PARTIAL
-        order.transition(target)
-        self.store.save(order)
+        # Atomic: validate, then persist the fill and the order together.
+        self.store.apply_fill(fill, order)
         return order
 
     async def open_orders(self, venue: str, account: str) -> list[BrokerOrder]:
@@ -496,6 +681,17 @@ class ExecutionRouter:
         if order is None:
             raise KeyError(f"unknown order: {client_id}")
         return order
+
+    def _is_terminal(self, client_id: str) -> bool:
+        order = self.store.get(client_id)
+        if order is None:
+            return True
+        return order.state in {
+            OrderState.FILLED,
+            OrderState.CANCELLED,
+            OrderState.REJECTED,
+            OrderState.EXPIRED,
+        }
 
     @staticmethod
     def _same_request(left: BrokerOrder, right: BrokerOrder) -> bool:
@@ -558,16 +754,51 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(vars(value))
 
 
+def _is_post_only(order: "BrokerOrder") -> bool:
+    """Whether this order asks to be maker-only.
+
+    Read from the order's ``time_in_force`` (``post_only``/``GTX``) so the flag
+    travels with the order through idempotency, persistence and replay instead
+    of living in adapter state that a restart would silently drop.
+    """
+    tif = str(getattr(order, "time_in_force", "") or "").strip().lower()
+    if tif in {"post_only", "postonly", "gtx", "maker"}:
+        return True
+    raw = getattr(order, "raw", None)
+    if isinstance(raw, dict) and raw.get("post_only"):
+        return True
+    return False
+
+
 class CcxtExecutionAdapter:
     capabilities = BrokerCapabilities(native_stop=True, native_oco=False, native_replace=False)
+
+    #: Whether this venue should receive post-only requests at all. Set from the
+    #: execution service config so an operator can turn maker fees off for a
+    #: venue that would reject a GTX/post-only order outright.
+    post_only_enabled: bool = True
 
     def __init__(self, client: Any, *, venue: str, account: str) -> None:
         self.client, self.venue, self.account = client, venue, account
 
     async def place(self, order: BrokerOrder) -> BrokerOrder:
-        params = {"clientOrderId": order.idempotency_key}
+        params: dict[str, Any] = {"clientOrderId": order.idempotency_key}
         if order.stop_price is not None:
             params["stopPrice"] = float(order.stop_price)
+        # `time_in_force` and post-only were dropped here, so every order went
+        # out as a plain limit/GTC and the venue charged the taker fee. With
+        # maker at 0-2 bps against taker 5 bps that is the difference between a
+        # strategy that earns and one that does not. Post-only is sent as the
+        # venue flag `postOnly`, with `GTX` as the documented fallback for
+        # venues that spell it that way.
+        tif = str(order.time_in_force or "").strip()
+        if tif and tif.lower() not in {"day", "gtc", "gfd"}:
+            params["timeInForce"] = tif
+        if _is_post_only(order):
+            params["postOnly"] = True
+            # Must be GTX, not the order's own TIF: a post-only request with a
+            # crossing TIF would still take liquidity while claiming not to.
+            params["timeInForce"] = "GTX"
         raw = await _invoke(self.client.create_order, order.symbol, order.order_type, order.side.value, float(order.quantity), float(order.limit_price) if order.limit_price is not None else None, params)
         return self._order(raw, order)
 
