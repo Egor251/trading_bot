@@ -353,6 +353,33 @@ class CcxtMarketDataAdapter:
         stamps = sorted(int(row[0]) for row in rows)
         return [b - a for a, b in zip(stamps, stamps[1:])]
 
+    async def fetch_funding_rate(self, symbol: str) -> float | None:
+        """Current perpetual funding rate, or None when the venue has none.
+
+        Spot venues have no funding, and `fetch_funding_rate` raises there
+        rather than returning a zero rate -- a zero would look like "funding is
+        free" and silently understate equity drift. Callers must distinguish
+        "no funding" from "funding is zero", so absence is returned explicitly.
+        """
+        if self._exchange is None:
+            await self.connect()
+        assert self._exchange is not None
+        market = normalize_ccxt_symbol(symbol, class_code="CRYPTO")
+        fetcher = getattr(self._exchange, "fetch_funding_rate", None)
+        if not callable(fetcher):
+            return None
+        try:
+            rate = await fetcher(market)
+        except Exception:  # noqa: BLE001 - spot, unsupported market, or no auth
+            return None
+        if rate is None:
+            return None
+        try:
+            value = rate.get("fundingRate") if isinstance(rate, dict) else rate
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
     async def fetch_instrument_spec(self, symbol: str) -> InstrumentSpec:
         """Load exchange metadata required by live preflight."""
         if self._exchange is None:

@@ -52,6 +52,18 @@ python -m pytest -q
 The suite is isolated from the live `data/` tree via `TRADING_DATA_DIR`; an
 autouse fixture in `tests/conftest.py` fails any test that writes there.
 
+### Known flaky: test_quik_fake_path_e2e
+
+Fails intermittently (~5% observed, most often inside a full-suite run; 20/20
+clean in isolation and 3/3 clean full-suite runs at the time of writing). It
+does not use `replay`, `phantom` or `historical_data_service`, so the research
+and execution changes in this repo are not in its path.
+
+Its waits are already deadline-based rather than fixed sleeps, and the fill
+assertion carries the received `fills` so a failure is diagnosable. The cause
+has not been isolated; inventing a fix for an unreproducible failure risks
+making it worse. If it appears, the assertion payload is the starting point.
+
 ## Research gate
 
 `trading.live_readiness` is **enforced** at Consilium start-up. Any member of

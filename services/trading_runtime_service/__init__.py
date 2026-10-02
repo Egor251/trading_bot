@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -102,6 +103,7 @@ class TradingRuntimeService(BaseService):
         await self.core.event_bus.subscribe(
             "execution.result", self._on_execution_result
         )
+        self._funding_task = asyncio.create_task(self._funding_loop())
 
     def _attach_broker(self) -> None:
         """Wire QuikBrokerExecution when quik_market_service has a real transport."""
@@ -111,8 +113,74 @@ class TradingRuntimeService(BaseService):
         if broker is not None:
             self.runtime.broker = broker
 
+    async def _funding_loop(self) -> None:
+        """Accrue perpetual funding against equity, if the venue has a rate.
+
+        Inert by construction on venues that do not quote funding (spot): the
+        fetch returns None, nothing is charged, and no error is raised. That
+        matters because a zero rate is indistinguishable from "free carry", and
+        would quietly let equity drift away from the truth that risk limits are
+        computed on.
+        """
+        while self.is_running:
+            try:
+                await asyncio.sleep(max(30.0, float(self.config.get("funding_interval_sec") or 900)))
+                if not self.is_running:
+                    return
+                if self.runtime is None or getattr(self.runtime, "mode", "") != "live":
+                    continue
+                await self._accrue_funding()
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - funding must never stop the loop
+                continue
+
+    async def _accrue_funding(self) -> dict[str, Any]:
+        """Charge or credit carry for every open position, where a rate exists."""
+        mode = str(getattr(self.runtime, "mode", "") or "")
+        if mode != "live":
+            # Charged here as well as in the loop: a simulated book must never
+            # accrue, and a guard that only exists in the scheduling wrapper is
+            # one call path away from being bypassed.
+            return {"skipped": f"mode_{mode or 'unset'}"}
+        orders = getattr(self.runtime, "orders", None)
+        if orders is None or not hasattr(orders, "apply_carry"):
+            return {"skipped": "no_order_manager"}
+        ccxt = self.core.service_registry.get("ccxt_market_service")
+        adapter = getattr(ccxt, "_ccxt", None)
+        fetch = getattr(adapter, "fetch_funding_rate", None)
+        if not callable(fetch):
+            return {"skipped": "venue_has_no_funding"}
+
+        charged: dict[str, float] = {}
+        for symbol in list(getattr(orders, "positions", {}) or {}):
+            try:
+                rate = await fetch(symbol)
+            except Exception:  # noqa: BLE001
+                continue
+            if rate is None:
+                continue
+            try:
+                amount = orders.apply_carry(symbol, rate)
+            except Exception:  # noqa: BLE001
+                continue
+            if amount:
+                charged[symbol] = float(amount)
+        return {"charged": charged}
+
     async def stop(self) -> None:
         self.is_running = False
+        # Cancel the funding loop rather than dropping the reference: the task
+        # sleeps for minutes at a time, so a bare `= None` would leave it
+        # running past shutdown and accruing against a stopped runtime.
+        task = getattr(self, "_funding_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._funding_task = None
         for et, handler in (
             ("market.candle", self._on_candle),
             ("system.halt", self._on_halt),
