@@ -19,6 +19,13 @@ from engine.ops_safety import (
 from engine.performance_monitor import PerformanceMonitor, PerformanceTargets
 from engine.runtime import get_runtime
 from host.events import publish_ops_alert
+from engine.paths import data_dir, data_path
+
+
+def _log():
+    import logging
+
+    return logging.getLogger("ops_monitor")
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
@@ -57,8 +64,8 @@ class OpsMonitorService(BaseService):
             "expected_candle_sec": 60.0,
             "freeze_on_data_anomaly": True,
             "diagnose_every_sec": 60.0,
-            "alerts_path": "data/ops/alerts.jsonl",
-            "journal_path": "data/ops/trades.jsonl",
+            "alerts_path": str(data_path("ops", "alerts.jsonl")),
+            "journal_path": str(data_path("ops", "trades.jsonl")),
             "telegram_enabled": False,
             "telegram_bot_token": "",
             "telegram_chat_id": "",
@@ -66,13 +73,32 @@ class OpsMonitorService(BaseService):
                 "trading_runtime_service",
                 "universe_service",
                 "ui_bridge_service",
+                # The market connectors were missing here, so a dead feed had no
+                # heartbeat at all — `component_dead` could not fire for the one
+                # component whose death matters most.
+                "ccxt_market_service",
+                "quik_market_service",
+                "alpaca_market_service",
+                "mock_market_service",
             ],
+            #: How long a feed may stay quiet before the anomaly is treated as
+            #: real (and before we consider auto-resuming a data freeze).
+            "stale_feed_sec": 180.0,
+            #: Consecutive clean observations required before a data freeze is
+            #: lifted. 0 disables auto-resume entirely (manual resume only).
+            "auto_resume_after_clean_bars": 3,
+            #: Emit `/metrics` from the UI bridge.
+            "prometheus_enabled": True,
         }
 
     async def on_initialize(self) -> None:
         root = Path(__file__).resolve().parents[2]
-        alerts_path = root / str(self.config.get("alerts_path") or "data/ops/alerts.jsonl")
-        journal_path = root / str(self.config.get("journal_path") or "data/ops/trades.jsonl")
+        alerts_path = root / str(
+            self.config.get("alerts_path") or data_path("ops", "alerts.jsonl").relative_to(data_dir())
+        )
+        journal_path = root / str(
+            self.config.get("journal_path") or data_path("ops", "trades.jsonl").relative_to(data_dir())
+        )
         self.alerts = AlertBus(path=alerts_path)
         tg_token = str(self.config.get("telegram_bot_token") or "").strip()
         tg_chat = str(self.config.get("telegram_chat_id") or "").strip()
@@ -89,10 +115,21 @@ class OpsMonitorService(BaseService):
             timeout_sec=float(self.config.get("heartbeat_timeout_sec") or 45)
         )
         self.gaps = DataGapDetector(
-            expected_interval_sec=float(self.config.get("expected_candle_sec") or 60)
+            expected_interval_sec=float(self.config.get("expected_candle_sec") or 60),
+            stale_after_sec=float(self.config.get("stale_feed_sec") or 180),
+            stale_tolerance=max(1, int(self.config.get("stale_tolerance") or 3)),
         )
         self._freeze_on_anomaly = bool(self.config.get("freeze_on_data_anomaly", True))
+        self._auto_resume_bars = int(self.config.get("auto_resume_after_clean_bars") or 0)
+        self._clean_bars = 0
+        self._frozen_for_data = False
         self._diagnose_every_sec = float(self.config.get("diagnose_every_sec") or 60.0)
+        # The Prometheus exporter existed but nothing imported it, so all ten
+        # alerts in ops/prometheus/alerts.yml could never fire.
+        from engine.observability import OperationsObservability
+
+        self.observability = OperationsObservability()
+        setattr(self.core, "operations_observability", self.observability)
         trading = dict(await self.core.config.get("trading", {}) or {})
         perf = dict(trading.get("performance") or {})
         self.performance = PerformanceMonitor(
@@ -160,9 +197,26 @@ class OpsMonitorService(BaseService):
                     await self.evaluate_phantom_vs_live()
                 except Exception:
                     pass
+            # Publish the health state file. This is what the container
+            # HEALTHCHECK reads; without a writer the probe could only check
+            # that PID 1 was still alive.
+            try:
+                from engine.health_state import write_health_state
+
+                write_health_state(
+                    runtime=get_runtime(self.core),
+                    gaps=self.gaps,
+                    now=now,
+                    stale_feed_sec=float(self.config.get("stale_feed_sec") or 180),
+                )
+            except Exception:
+                _log().exception("health state write failed")
             await asyncio.sleep(interval)
 
     async def _publish_alert(self, alert: Any) -> None:
+        """Publish an alert. ``None`` means the bus suppressed a repeat."""
+        if alert is None:
+            return
         try:
             instance_id = str(
                 await self.core.config.get("instance.id", "local") or "local"
@@ -184,20 +238,39 @@ class OpsMonitorService(BaseService):
         symbol = str(payload.get("ticker") or payload.get("symbol") or "")
         if not symbol:
             return
-        ts_raw = payload.get("ts") or payload.get("timestamp") or time.time()
-        try:
-            ts = float(ts_raw)
-            if ts > 1e12:
-                ts = ts / 1000.0
-        except (TypeError, ValueError):
+        # Exchange bar timestamp. `market.candle` now publishes `ts`; without it
+        # this fell back to `time.time()` and the detector measured the polling
+        # loop, not the data.
+        ts_raw = payload.get("ts") or payload.get("timestamp")
+        if ts_raw is None:
             ts = time.time()
+        else:
+            try:
+                ts = float(ts_raw)
+                if ts > 1e12:
+                    ts = ts / 1000.0
+            except (TypeError, ValueError):
+                ts = time.time()
         vol = payload.get("volume")
         try:
             volume = float(vol) if vol is not None else None
         except (TypeError, ValueError):
             volume = None
         issues = self.gaps.observe(symbol, ts, volume=volume)
+        obs = getattr(self, "observability", None)
+        if obs is not None:
+            try:
+                obs.feed_last_seen.set(
+                    float(self.gaps.feed_age(symbol) or 0.0),
+                    {"feed": str(payload.get("source") or "market")},
+                )
+            except Exception:  # noqa: BLE001 - metrics must never break the loop
+                pass
         if not issues:
+            if self._frozen_for_data:
+                self._clean_bars += 1
+                if self._auto_resume_bars and self._clean_bars >= self._auto_resume_bars:
+                    await self._lift_data_freeze("feed_recovered")
             return
         alert = self.alerts.emit(
             "market_data_anomaly",
@@ -206,10 +279,43 @@ class OpsMonitorService(BaseService):
             details={"symbol": symbol, "issues": issues},
         )
         await self._publish_alert(alert)
-        if self._freeze_on_anomaly and "gap" in issues:
+        # Freeze on a *stale* feed, not on an inter-bar gap. A gap between two
+        # exchange bars is normal after a reconnect; a feed whose newest bar is
+        # minutes old is the condition that actually makes trading unsafe.
+        # The old code froze on "gap" and never lifted it, which is how the bot
+        # ended up halted for a month with no alert.
+        if self._freeze_on_anomaly and "stale" in issues:
             runtime = get_runtime(self.core)
             if runtime is not None and not runtime.halted:
                 runtime.halt("market_data_gap")
+                self._frozen_for_data = True
+                self._clean_bars = 0
+                _log().critical(
+                    "froze risk: feed stale for %s (halt_reason=market_data_gap). "
+                    "Auto-resume after %s clean bars.",
+                    symbol,
+                    self._auto_resume_bars or "never (manual resume required)",
+                )
+
+    async def _lift_data_freeze(self, reason: str) -> None:
+        """Release a data-only halt once the feed has proven itself."""
+        self._frozen_for_data = False
+        self._clean_bars = 0
+        runtime = get_runtime(self.core)
+        if runtime is None or not runtime.halted:
+            return
+        if str(getattr(runtime, "_halt_reason", "") or "") != "market_data_gap":
+            # Halted for a different reason (risk, operator) — leave it alone.
+            return
+        runtime.resume()
+        _log().warning("resumed after data feed recovered (%s)", reason)
+        alert = self.alerts.emit(
+            "market_data_recovered",
+            f"feed recovered ({reason}); risk resumed",
+            severity=AlertSeverity.WARNING,
+            details={"reason": reason},
+        )
+        await self._publish_alert(alert)
 
     async def _on_fill(self, event: KernelEvent) -> None:
         payload = event.payload or {}

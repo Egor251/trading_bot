@@ -16,6 +16,22 @@ if CB_STORAGE.is_dir() and str(CB_STORAGE) not in sys.path:
 from cb_storage import StorageKit, StorageQuery  # noqa: E402
 from cb_storage.backends.registry import build_backend_registry  # noqa: E402
 
+from engine.paths import data_dir, data_path  # noqa: E402
+
+
+def _resolve_backend(raw: object) -> str:
+    """Absolute-ise a backend path: ``data/...`` follows the shared data root."""
+    text = str(raw or "").strip()
+    if not text:
+        return text
+    candidate = Path(text)
+    if candidate.is_absolute():
+        return text
+    parts = candidate.parts
+    if parts and parts[0] == "data":
+        return str(data_dir().joinpath(*parts[1:]))
+    return str(ROOT / candidate)
+
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
 
@@ -90,14 +106,14 @@ class StorageService(BaseService):
 
     async def on_initialize(self) -> None:
         storage_cfg = await self.core.config.get("storage", {}) or {}
-        # Resolve relative paths against trading_bot root
+        # Resolve relative paths against the shared data root when they live
+        # under `data/`, else against the repo root. Anchoring everything on
+        # ROOT is what let the storage backend and the secret store disagree
+        # about which database was live.
         backends = dict(storage_cfg.get("backends") or {})
         for _name, bcfg in list(backends.items()):
             if isinstance(bcfg, dict) and bcfg.get("path"):
-                p = Path(str(bcfg["path"]))
-                if not p.is_absolute():
-                    bcfg = {**bcfg, "path": str(ROOT / p)}
-                    backends[_name] = bcfg
+                backends[_name] = {**bcfg, "path": _resolve_backend(bcfg["path"])}
         cfg = {
             **storage_cfg,
             "backends": backends,
@@ -109,7 +125,7 @@ class StorageService(BaseService):
             cfg["backends"] = {
                 "sqlite": {
                     "enabled": True,
-                    "path": str(ROOT / "data" / "storage" / "records.db"),
+                    "path": str(data_path("storage", "records.db")),
                 }
             }
         self.kit = StorageKit(cfg)
@@ -282,9 +298,7 @@ class StorageService(BaseService):
         backends = dict(self.kit.config.get("backends") or {})
         for name, bcfg in list(backends.items()):
             if isinstance(bcfg, dict) and bcfg.get("path"):
-                p = Path(str(bcfg["path"]))
-                if not p.is_absolute():
-                    backends[name] = {**bcfg, "path": str(ROOT / p)}
+                backends[name] = {**bcfg, "path": _resolve_backend(bcfg["path"])}
         self.kit.config["backends"] = backends
         new_reg = build_backend_registry(self.kit.config)
         self.kit.backends = new_reg

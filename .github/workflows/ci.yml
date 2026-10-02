@@ -7,19 +7,86 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install test runner
-        run: python -m pip install --disable-pip-version-check "pytest>=8"
-      - name: Compile production modules
-        run: python -m compileall -q engine/observability.py tools/healthcheck.py scripts/healthcheck.py
-      - name: Run deterministic operations tests
-        run: python -m pytest -q tests/test_observability.py tests/test_healthcheck.py
+      - name: Install dependencies
+        # Previously only `pytest` was installed and two test files were run, so
+        # the suite the README documents never executed and a broken
+        # `tests/test_quik_path_e2e.py` sat on main unnoticed.
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check "pytest>=8" "ruff>=0.6"
+      - name: Check the sibling Code_base tree
+        run: |
+          # The engine imports microkernel_core / plugin_manager / cb_storage /
+          # cb_rule_engine / cb_math / ai_analyst from a sibling checkout. Clone
+          # it next to the repo so `host/bootstrap.py` can find it, exactly as
+          # the documented layout expects.
+          git clone --depth 1 "${CODE_BASE_REPO:-https://github.com/example/trading-cod base.git}" "Code_base" 2>/dev/null || \
+            git clone --depth 1 "${CODE_BASE_REPO}" "Code_base" || \
+            echo "::warning::Code_base unavailable; tests that import microkernel_core will be skipped"
+      - name: Lint
+        run: python -m ruff check engine/ services/ plugins/ strategies/ host/ ui/ tools/ ops/ scripts/
+      - name: Run the full test suite
+        run: python -m pytest -q
+      - name: Verify tests do not touch the production data directory
+        # The suite used to run against the shipped config from the repo root,
+        # appending test halts and test-only fills to the live event journal.
+        # `tests/conftest.py` fails any test that writes under data/; this step
+        # makes the guarantee visible even when the guard is bypassed.
+        run: |
+          if [ -d data ]; then
+            find data -type f -newermt '-10 minutes' -print -quit | grep -q . && \
+              { echo "::error::tests wrote into data/ during CI"; exit 1; } || true
+          fi
+
+  ops-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Alert rules reference metrics the exporter actually serves
+        # Every expr in alerts.yml must name a metric that prometheus_text()
+        # can emit, otherwise the alert is permanently dead — which is exactly
+        # the state the repo was in for the whole life of those rules.
+        run: |
+          python - <<'PY'
+          import re, sys, pathlib
+          sys.path.insert(0, ".")
+          sys.path.insert(0, "../Code_base")
+          from engine.observability import OperationsObservability
+          text = OperationsObservability().prometheus_text()
+          served = {
+              line.split("{")[0].split()[0]
+              for line in text.split("\n")
+              if line and not line.startswith("#")
+          }
+          # A gauge/counter with no sample still counts as served if declared.
+          served |= {
+              line.split()[2]
+              for line in text.split("\n")
+              if line.startswith("# TYPE")
+          }
+          rules = pathlib.Path("ops/prometheus/alerts.yml").read_text(encoding="utf-8")
+          missing = sorted({m for m in re.findall(r"\btrading_[a-z_]+", rules) if m not in served})
+          if missing:
+              print("::error::alerts reference unserved metrics: " + ", ".join(missing))
+              sys.exit(1)
+          print(f"all {len(set(re.findall(r'trading_[a-z_]+', rules)))} alert metrics are served")
+          PY

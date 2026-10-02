@@ -478,10 +478,13 @@ class CostScheduleStore:
         data = _canonical(record.model_dump(mode="json"))
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-        except FileExistsError:
+        except FileExistsError as exc:
             existing = path.read_text(encoding="utf-8")
             if existing != data:
-                raise RuntimeError("immutable draft hash collision")
+                # A truncated file left by a crash mid-write poisons this
+                # content-addressed path permanently: every later save for the
+                # same hash raises. Surface the cause so it is diagnosable.
+                raise RuntimeError("immutable draft hash collision") from exc
         else:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(data)

@@ -7,8 +7,9 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from engine.paths import data_path
 
-DEFAULT_REPORT_ROOT = Path("data") / "ai_reports"
+DEFAULT_REPORT_ROOT = data_path("ai_reports")
 _MAX_BODY_CHARS = 400_000
 _MAX_TITLE_CHARS = 160
 _MAX_ATTACH_BYTES = 8_000_000

@@ -9,7 +9,19 @@ __pycache__
 *.py[cod]
 *.log
 logs
-data/storage
+# Runtime state: `COPY . .` previously baked the whole data tree (3.7 GB of
+# SQLite journal, 38 MB phantom timeline, OHLC caches) into the image.
+data
+# Build trees: node_modules and the cargo target/ dir are large, host-specific
+# and reproducible from package-lock/Cargo.lock.
+**/node_modules
+ui/web/.next
+ui/web/out
+ui/desktop/src-tauri/target
+**/target
+# Private code must never land in an image.
+strategies_local
+plugins_local
 .env
 .env.*
 Dockerfile

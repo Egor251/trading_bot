@@ -30,6 +30,86 @@ DESKTOP_DIR = ROOT / "ui" / "desktop"
 TAURI_DIR = DESKTOP_DIR / "src-tauri"
 
 
+#: Environment variables a UI child process legitimately needs.  Everything
+#: else that looks like a credential (exchange keys, AI provider keys) is
+#: dropped, because the engine already loaded those from the encrypted store and
+#: re-exporting them into the BFF / Next / Tauri would spread live credentials
+#: across three more processes and their descendants.
+_UI_ENV_ALLOWLIST = (
+    "PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONUNBUFFERED",
+    "PYTHONIOENCODING",
+    "VIRTUAL_ENV",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "PATHEXT",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "NODE_PATH",
+    "NPM_CONFIG_CACHE",
+    "NPM_CONFIG_PREFIX",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    # Control-plane + session secrets the UI genuinely must be able to use.
+    "TRADING_CONTROL_HMAC_SECRET",
+    "TRADING_EVIDENCE_HMAC_SECRET",
+    "TRADING_LIVE_ENABLED",
+    "OPERATOR_API_TOKEN",
+    "TRADING_SECRET_STORE_KEY",
+    # Non-secret operator toggles.
+    "OPERATOR_UI",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_WS_URL",
+    "NEXT_PUBLIC_PLATFORM",
+    "NEXT_PUBLIC_USE_ABSOLUTE_API",
+)
+
+
+def _scrubbed_env(env: dict[str, str]) -> dict[str, str]:
+    """Environment for UI child processes: allow-list, plus non-secret pass-through.
+
+    Any variable whose name looks like a credential (``*_KEY``, ``*_SECRET*``,
+    ``*_TOKEN``, ``*_PASSWORD``) is dropped even if it is in the allow-list,
+    except the control-plane names above which are needed to sign commands.
+    """
+    out: dict[str, str] = {}
+    for key, value in env.items():
+        upper = key.upper()
+        if upper in _UI_ENV_ALLOWLIST:
+            out[key] = value
+            continue
+        if any(
+            marker in upper
+            for marker in ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD", "CREDENTIAL")
+        ):
+            continue
+        if upper.startswith(("AWS_", "AZURE_", "GCP_", "OPENAI_")):
+            continue
+        out[key] = value
+    return out
+
+
 def _wait_port(host: str, port: int, timeout: float = 45.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -232,6 +312,13 @@ def main() -> int:
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
     )
 
+    # The engine loads exchange/AI credentials into its own os.environ from the
+    # encrypted secret store. Handing a verbatim os.environ.copy() to the BFF,
+    # the Next dev server and the Tauri child shipped every key into each of
+    # them — and into anything they in turn spawned. The UI processes need only
+    # the control-plane and session secrets, so they get an explicit allow-list.
+    ui_env = _scrubbed_env(env)
+
     ui: subprocess.Popen[bytes] | None = None
     next_proc: subprocess.Popen[bytes] | None = None
     interrupted = False
@@ -261,7 +348,7 @@ def main() -> int:
             str(args.ui_port),
         ]
         print(f"bff: {' '.join(bff_cmd)}", flush=True)
-        ui = subprocess.Popen(bff_cmd, cwd=str(ROOT), env=env)
+        ui = subprocess.Popen(bff_cmd, cwd=str(ROOT), env=ui_env)
 
         if not _wait_port(str(args.ui_host), int(args.ui_port), timeout=30.0):
             print(
@@ -281,7 +368,7 @@ def main() -> int:
                 )
                 return 1
 
-            next_env = env.copy()
+            next_env = ui_env.copy()
             next_env["NEXT_PUBLIC_PLATFORM"] = "web"
             next_env["NEXT_PUBLIC_API_URL"] = f"http://{args.ui_host}:{args.ui_port}"
             next_env["NEXT_PUBLIC_WS_URL"] = f"ws://{args.ui_host}:{args.ui_port}/ws"
@@ -321,7 +408,9 @@ def main() -> int:
             return code
         try:
             next_proc = _start_tauri(
-                env, no_tray=bool(args.no_tray), start_in_tray=bool(args.start_in_tray)
+                ui_env,
+                no_tray=bool(args.no_tray),
+                start_in_tray=bool(args.start_in_tray),
             )
         except FileNotFoundError as exc:
             print(f"ERROR: {exc}", file=sys.stderr, flush=True)

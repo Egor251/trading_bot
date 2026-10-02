@@ -68,7 +68,7 @@ class MockMarketDataAdapter:
         # Walk backward then reverse — start far below/near base with a trend + noise
         bars: list[Candle] = []
         t = now - timedelta(minutes=self._seed_bars)
-        for i in range(self._seed_bars):
+        for _ in range(self._seed_bars):
             bar = self._make_bar(symbol, "1m", t, px, rng, class_code="")
             bars.append(bar)
             px = bar.close

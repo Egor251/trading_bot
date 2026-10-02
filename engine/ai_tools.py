@@ -21,6 +21,7 @@ from engine.cost_workflow import (
 )
 from engine.strategy_plugin import StrategyPlugin
 from host.config_patch import operator_config_slice, redact_secrets
+from engine.paths import data_path
 
 # RBAC: unlisted tools need source_plugin so analyst/operator plugin-tool rules apply.
 _SOURCE = "trading_bot"
@@ -54,20 +55,29 @@ def _non_empty_patch(data: dict[str, Any], *, ignore: set[str] | None = None) ->
 
 
 async def _call_bridge(core: Any, cmd: str, **payload: Any) -> dict[str, Any]:
-    """Dispatch a UI-bridge command with Operator auth + normalized result.
+    """Dispatch a UI-bridge command with a *restricted* auth token.
 
     Always returns ``success`` / ``ok`` / ``cmd``. Failures always include ``error``
     so digests cannot collapse into a bare ``ok``.
+
+    The token attached here carries **only** ``Role.ANALYST``.  Previously this
+    helper minted a full ``[ADMIN, RISK, OPERATOR]`` session from the engine's
+    own ``os.environ``, which meant an unauthenticated ``ASK`` request could
+    reach ``close_all`` / ``set_trading`` / ``set_secrets`` end-to-end: the
+    HMAC boundary was never actually crossed, because the token was produced
+    inside the process being protected.  An analyst may read and may always
+    ``system_halt``; anything that increases risk is refused by the authorizer.
     """
     bridge = _bridge(core)
     if bridge is None or not hasattr(bridge, "handle_command"):
         return {"success": False, "ok": False, "error": "ui_bridge_service missing", "cmd": cmd}
     body = {"cmd": cmd, **payload}
-    # Same HMAC/local-dev attachment as the Operator UI bridge client.
     try:
         from ui.control_auth_client import attach_control_auth
 
-        body = attach_control_auth(body)
+        from engine.control_auth import Role
+
+        body = attach_control_auth(body, roles=[Role.ANALYST])
     except Exception:
         pass
     try:
@@ -760,7 +770,7 @@ class ListServicesStatusTool(BaseAITool):
 def _cost_store(core: Any) -> CostScheduleStore:
     raw = getattr(getattr(core, "config", None), "raw", {}) or {}
     configured = ((raw.get("costs") or {}).get("store_path")) if isinstance(raw, dict) else None
-    return CostScheduleStore(Path(configured or "data/cost_schedules"))
+    return CostScheduleStore(Path(configured or data_path("cost_schedules")))
 
 
 class ReadCostScheduleTool(BaseAITool):
@@ -2986,7 +2996,7 @@ class ListWalkForwardReportsTool(BaseAITool):
     source_plugin = _SOURCE
 
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
-        root = Path("data") / "phantom" / "walk_forward"
+        root = data_path("phantom", "walk_forward")
         if not root.exists():
             return {"success": True, "ok": True, "reports": [], "count": 0, "root": str(root)}
         sid = str(kwargs.get("strategy_id") or "").strip().lower()

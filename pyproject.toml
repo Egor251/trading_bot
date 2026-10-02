@@ -50,3 +50,37 @@ exclude = ["tests*", "docs*", "data*", "ops*", "scripts*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# `ui/web/node_modules` and `ui/desktop/src-tauri/target` are build trees.
+extend-exclude = ["ui/web", "ui/desktop", ".venv"]
+
+[tool.ruff.lint]
+# The rules that catch real defects: undefined/unused/redefined names, shadowed
+# bindings, mutable defaults, bare excepts. Deliberately excludes RUF (unicode
+# dashes, `__all__` ordering) — churn, not safety.
+select = ["E4", "E7", "E9", "F", "B", "PLE"]
+ignore = [
+  # `l` as a loop variable in numeric code is idiomatic and pervasive here.
+  "E741",
+  # Test modules legitimately import after `sys.path` setup.
+  "E402",
+  # `except Exception` at async/service boundaries is deliberate: swallowing a
+  # broker or adapter error must not kill the trading loop. 169 sites; making
+  # each one annotate its intent is churn with no safety gain.
+  "BLE001",
+  # `getattr(x, "attr")` / `setattr(x, "attr", v)` with a constant name.
+  "B009", "B010",
+  # `zip()` without strict= — the pairs here are validated by callers.
+  "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "BLE001"]
+"engine/ai_tools.py" = ["B008"]
+# These modules log through loguru (`get_log`), whose placeholders are `{}`.
+# PLE1205 assumes stdlib `%`-style formatting and reports every one of them.
+"host/main.py" = ["PLE1205"]
+"host/logging_setup.py" = ["PLE1205"]

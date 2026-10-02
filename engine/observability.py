@@ -368,6 +368,12 @@ class OperationsObservability:
         self.stop_coverage = self.registry.gauge(
             "trading_stop_coverage_ratio", "Protected open position ratio", ("account",)
         )
+        # Orders whose broker state could not be determined. Non-zero means the
+        # venue's book must be reconciled before any conclusion is drawn about
+        # exposure.
+        self.unknown_orders = self.registry.gauge(
+            "trading_unknown_orders", "Orders with an undetermined broker state", ("account",)
+        )
         self.orders = self.registry.counter(
             "trading_orders_total", "Orders by terminal status", ("broker", "status")
         )

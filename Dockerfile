@@ -20,7 +20,15 @@ VOLUME ["/opt/Code_base"]
 
 USER trading
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "tools/healthcheck.py", "--pid", "1", "--process-pattern", "host/main.py"]
+# Probe the *engine*, not the process table. `--state-file` is written by the
+# ops monitor heartbeat (engine/health_state.py) and covers runtime presence,
+# feed staleness and halt state; the previous command only verified that PID 1
+# was still `host/main.py`, so a halted book or a dead feed stayed "healthy".
+# `--max-age` is ~4x the 10 s heartbeat so a single slow cycle is not a failure.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --reties=3 \
+    CMD ["python", "tools/healthcheck.py", \
+         "--state-file", "data/health.json", \
+         "--max-age", "45", \
+         "--pid", "1", "--process-pattern", "host/main.py"]
 
 CMD ["python", "host/main.py", "--headless"]

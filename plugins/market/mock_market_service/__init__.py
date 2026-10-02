@@ -24,13 +24,15 @@ class MockMarketService(MarketAdapterServiceBase):
             {
                 "enabled": True,
                 "auto_start": True,
-                "interval_sec": 2,
+                # Was declared twice in this dict (2 then 1.5) and the second
+                # silently won, so the effective poll interval was never what the
+                # first line said.
+                "interval_sec": 1.5,
                 "class_code": "TQBR",
                 "tickers": ["SBER"],
                 "follow_universe": True,
                 "base_prices": {"SBER": 285.0, "GAZP": 165.0, "LKOH": 7200.0},
                 "seed_bars": 120,
-                "interval_sec": 1.5,
             }
         )
         return cfg

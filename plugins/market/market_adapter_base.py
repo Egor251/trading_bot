@@ -107,15 +107,33 @@ class MarketAdapterServiceBase(BaseService):
         return f"live:{self.component_id}"
 
     def _disk_cache_enabled(self) -> bool:
+        return bool(self._disk_cache_root())
+
+    def _disk_cache_root(self) -> str:
+        """Resolve the cache root through the shared data root.
+
+        A bare ``data/ohlc_cache`` used to resolve against the process CWD, so the
+        cache followed however the engine happened to be started.
+        """
+        from engine.paths import data_dir
+
         root = str(self.config.get("disk_cache_dir") or "").strip()
-        return bool(root)
+        if not root:
+            return ""
+        candidate = Path(root)
+        if candidate.is_absolute():
+            return root
+        parts = candidate.parts
+        if parts and parts[0] == "data":
+            return str(data_dir().joinpath(*parts[1:]))
+        return root
 
     def _disk_cache_path(
         self, class_code: str, ticker: str, *, timeframe: str, limit: int
     ):
         from engine.ohlc_disk_cache import cache_file_path
 
-        root = str(self.config.get("disk_cache_dir") or "data/ohlc_cache").strip()
+        root = self._disk_cache_root()
         return cache_file_path(
             Path(root),
             provider=self._cache_provider(),
