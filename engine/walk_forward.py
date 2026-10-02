@@ -299,6 +299,90 @@ def config_fingerprint(cfg: Mapping[str, Any] | None) -> str:
     return json.dumps(data, sort_keys=True, default=str)
 
 
+def _optimal_block_length(n: int) -> int:
+    """Block length for a moving-block bootstrap of a short series.
+
+    The standard `n ** (1/3)` rule balances the two ways the method fails: too
+    short and the resample keeps the serial dependence it was meant to break,
+    too long and there are too few blocks to estimate anything. For the handful
+    of folds a walk-forward produces this lands in the low single digits, which
+    is also where resampling conservatively sits.
+    """
+    if n <= 1:
+        return 1
+    return max(1, min(n, int(round(n ** (1.0 / 3.0)))))
+
+
+def block_bootstrap_mean_ci(
+    values: Sequence[float],
+    *,
+    samples: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+    block_length: int | None = None,
+) -> dict[str, float]:
+    """CI for the mean of a serially correlated series.
+
+    The plain bootstrap resamples i.i.d., which is only valid when the samples
+    are independent. Walk-forward folds overlap -- consecutive test windows share
+    bars and the returns inside them are autocorrelated -- so treating them as
+    independent understates the spread. The interval came out narrow, and
+    `ci_excludes_zero` then cleared strategies that a correctly correlated
+    interval would have kept out.
+
+    A moving block bootstrap resamples contiguous runs of the series instead, so
+    the local dependence survives into the resample and the interval widens by
+    roughly the amount the dependence actually contributes.
+    """
+    xs = [float(v) for v in values]
+    n = len(xs)
+    if n == 0:
+        return {
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "ci_level": float(ci),
+            "bootstrap_mean": 0.0,
+            "bootstrap_samples": 0,
+            "block_length": 0,
+        }
+    if n == 1 or samples <= 0:
+        m = float(xs[0])
+        return {
+            "ci_low": m,
+            "ci_high": m,
+            "ci_level": float(ci),
+            "bootstrap_mean": m,
+            "bootstrap_samples": 0,
+            "block_length": 0,
+        }
+
+    block = int(block_length or _optimal_block_length(n))
+    block = max(1, min(block, n))
+    rng = random.Random(int(seed))
+    blocks_needed = -(-n // block)  # ceil
+    starts_max = n - block
+    means: list[float] = []
+    for _ in range(int(samples)):
+        picks: list[float] = []
+        for _ in range(blocks_needed):
+            start = rng.randint(0, starts_max) if starts_max > 0 else 0
+            picks.extend(xs[start : start + block])
+        draw = picks[:n]
+        means.append(sum(draw) / len(draw))
+    means.sort()
+    alpha = 1.0 - float(ci)
+    lo = means[max(0, int((alpha / 2.0) * len(means)))]
+    hi = means[min(len(means) - 1, int(((1.0 - alpha / 2.0) * len(means))) - 1)]
+    return {
+        "ci_low": lo,
+        "ci_high": hi,
+        "ci_level": float(ci),
+        "bootstrap_mean": sum(xs) / n,
+        "bootstrap_samples": len(means),
+        "block_length": block,
+    }
+
+
 def bootstrap_mean_ci(
     values: Sequence[float],
     *,
@@ -430,7 +514,10 @@ def enrich_oos_summary(
     )
     summary["fold_pnl_min"] = float(min(values)) if values else 0.0
     summary["fold_pnl_max"] = float(max(values)) if values else 0.0
-    boot = bootstrap_mean_ci(
+    # Block bootstrap, not i.i.d.: walk-forward folds overlap and their returns
+    # are autocorrelated, so the plain version understates the spread and hands
+    # the research gate a confidence interval that is too narrow to trust.
+    boot = block_bootstrap_mean_ci(
         values,
         samples=cfg.bootstrap_samples,
         ci=cfg.bootstrap_ci,
@@ -724,6 +811,14 @@ def run_walk_forward_offline(
         folds.append(fold_row)
 
     summary = enrich_oos_summary(oos_pnls, cfg=cfg)
+    # How many configurations were tried before one was reported. Picking the
+    # best of N noisy estimates is optimistically biased, and the bias grows
+    # with N -- so the number itself is evidence about how much to trust the
+    # result, and it has to reach the digest or a reader cannot see it.
+    summary["variants_tried_total"] = sum(
+        int(f.get("variants_tried") or 0) for f in folds
+    )
+    summary["folds_evaluated"] = len(folds)
     stable_family = rank_stable_family(
         fold_top_configs,
         fold_oos_by_fp,
