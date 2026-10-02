@@ -243,6 +243,8 @@ class CcxtMarketDataAdapter:
         *,
         limit: int = 200,
         class_code: str = "",
+        start: str | None = None,
+        end: str | None = None,
     ) -> list[Candle]:
         """Fetch ``limit`` bars, walking backwards when the exchange caps a request.
 
@@ -273,7 +275,13 @@ class CcxtMarketDataAdapter:
             await self.connect()
         assert self._exchange is not None
         market = normalize_ccxt_symbol(symbol, class_code=class_code)
-        rows = await self._fetch_ohlcv_paged(market, timeframe, int(limit))
+        rows = await self._fetch_ohlcv_paged(
+            market,
+            timeframe,
+            int(limit),
+            since_ms=_iso_ms(start),
+            until_ms=_iso_ms(end),
+        )
         out: list[Candle] = []
         for row in rows:
             out.append(
@@ -301,13 +309,24 @@ class CcxtMarketDataAdapter:
         return max(1, min(want, cap))
 
     async def _fetch_ohlcv_paged(
-        self, market: str, timeframe: str, limit: int
+        self,
+        market: str,
+        timeframe: str,
+        limit: int,
+        *,
+        since_ms: int | None = None,
+        until_ms: int | None = None,
     ) -> list[list]:
         assert self._exchange is not None
         want = max(1, int(limit))
         page_size = self._page_limit(timeframe, want)
         by_ts: dict[int, list] = {}
-        cursor: int | None = None
+        # Without a range this walked back from "now", so two callers asking for
+        # different date ranges received the same most-recent bars. A window
+        # measured that way is not a window: it is the tail, counted N times.
+        cursor: int | None = (
+            int(until_ms) if until_ms is not None else None
+        )
         mode = "end"  # "end" uses endTime, "since" is the fallback
         for _ in range(self.MAX_PAGES):
             kwargs: dict[str, Any] = {"limit": page_size}
@@ -326,6 +345,11 @@ class CcxtMarketDataAdapter:
             for row in page:
                 by_ts[int(row[0])] = row
             if len(by_ts) >= want:
+                break
+            if since_ms is not None and oldest < int(since_ms):
+                # Walked past the requested start: everything the caller asked
+                # for is already in hand. Anything older is outside the range and
+                # would make the window overlap the next one.
                 break
             if not fresh:
                 # The venue replayed a window we already hold. That is the real
@@ -446,3 +470,16 @@ class CcxtMarketDataAdapter:
             if bars:
                 yield bars[-1]
             await asyncio.sleep(max(1.0, float(poll_sec)))
+
+
+def _iso_ms(value: str | None) -> int | None:
+    """ISO timestamp -> epoch milliseconds, or None when absent/unparseable."""
+    if not value:
+        return None
+    from datetime import datetime as _dt
+
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        return int(_dt.fromisoformat(text).timestamp() * 1000)
+    except ValueError:
+        return None

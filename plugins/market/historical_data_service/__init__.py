@@ -413,6 +413,12 @@ class HistoricalDataService(BaseService):
                 timeframe,
                 limit=limit,
                 class_code=class_code or "CRYPTO",
+                # Previously dropped here: `_fetch_remote` accepted start/end and
+                # the adapter had no parameters for them, so every window was
+                # served the same most-recent tail and "disjoint windows" were
+                # one window counted N times.
+                start=start,
+                end=end,
             )
             for b in bars:
                 b.symbol = ticker

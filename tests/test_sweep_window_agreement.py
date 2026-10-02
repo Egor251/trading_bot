@@ -226,3 +226,38 @@ def test_the_stability_tool_is_importable_without_argv() -> None:
 
     module = importlib.reload(window_stability)
     assert module.BARS > 0 and module.WINDOWS > 0
+
+
+def test_a_disjoint_range_reaches_the_adapter() -> None:
+    """The fetch could not honour a time range at all.
+
+    `CcxtAdapter.fetch_ohlcv` had no `start`/`end` parameters -- only `limit` --
+    so it always walked back from "now". `historical_data_service._fetch_remote`
+    accepted both and passed them to an adapter that had no such parameters, and
+    the call went through anyway. Every window therefore received the same
+    most-recent tail: `adx_di_trend` reported -15.047438940000575 four times, once
+    per "disjoint" window.
+
+    The adapter signature and the paging walk are what make a range honoured, so
+    the test reads the source rather than calling a live exchange.
+    """
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "engine"
+        / "adapters"
+        / "ccxt_adapter.py"
+    ).read_text(encoding="utf-8")
+
+    fetch_sig = src[src.index("async def fetch_ohlcv") : src.index("async def fetch_ohlcv") + 900]
+    assert "start:" in fetch_sig, "fetch_ohlcv cannot express a start bound"
+    assert "end:" in fetch_sig, "fetch_ohlcv cannot express an end bound"
+    assert "_fetch_ohlcv_paged(" in src
+    paged = src[src.index("async def _fetch_ohlcv_paged") :]
+    assert "since_ms" in paged and "until_ms" in paged, (
+        "the paging walk must accept the range it was asked for"
+    )
+    assert "until_ms" in paged.split("cursor:")[1][:200], (
+        "the end bound must seed the walk, or it still starts from now"
+    )
