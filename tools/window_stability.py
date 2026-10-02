@@ -297,6 +297,26 @@ async def main() -> int:
         # as a devastating result and means nothing at all. Identical numbers
         # across disjoint windows are proof of a broken measurement, not a
         # finding about the strategies.
+        # A strategy that did not trade cannot have made money. This is the cheapest
+        # possible truth test on the measurement, and it is the one that was
+        # missing: `volatility_breakout_example` trades zero times over the full
+        # 1000 bars and a full sweep reports net 0.00, yet it showed +229.51
+        # inside a window it never traded in. Nothing in the pipeline complained.
+        untraded = [
+            (sid, nets)
+            for sid, nets, _p, _t in rows
+            if any(abs(v) > 1e-9 for v in nets)
+            and all(v == nets[0] for v in nets)
+        ]
+        if untraded and WINDOWS > 1:
+            print(
+                f"WARNING: {len(untraded)} strategies returned an identical "
+                f"non-zero P&L in every window. If a strategy never trades, its "
+                f"window P&L must be zero -- a non-zero constant means the runs "
+                f"are not isolated from one another."
+            )
+            for sid, nets in untraded[:3]:
+                print(f"  {sid}: {nets}")
         collapsed = [
             (sid, nets)
             for sid, nets, _p, _t in rows

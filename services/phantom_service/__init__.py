@@ -2070,6 +2070,11 @@ class PhantomService(BaseService):
                     provider=provider,
                     limit=limit,
                     timeframe=wf_tf,
+                    # Also window-bounded. This fetch sizes the run, and it was
+                    # reaching for the same recent tail every window regardless
+                    # of the range being measured.
+                    start=start,
+                    end=end,
                 )
                 self._last_ohlc = ohlc_dict_from_candles(
                     bars_hist,
@@ -2088,7 +2093,7 @@ class PhantomService(BaseService):
                     for var in variants:
                         jobs.append(("pattern", dict(var), spec))
 
-            for feed_label, var, spec in jobs:
+            for job_index, (feed_label, var, spec) in enumerate(jobs):
                 rid = uuid.uuid4().hex[:10]
                 self.reset_ledger()
                 if True:
@@ -2099,6 +2104,14 @@ class PhantomService(BaseService):
                 self._bar_index = -1
                 # A fresh run must not inherit the previous run's queued signals.
                 self._pending_fills = []
+                # Nor the previous run's fills. `metrics` is computed from
+                # `self._fills`, so without this reset every run reported the
+                # cumulative P&L of all runs before it -- which is how a
+                # strategy that never traded showed +229.51 inside a window it
+                # never traded in, and why unrelated strategies reported
+                # identical numbers: they were all reading the same ledger.
+                if job_index == 0:
+                    self._fills = []
                 session_cfg = (
                     plugin.isolated_config(var)
                     if hasattr(plugin, "isolated_config")
