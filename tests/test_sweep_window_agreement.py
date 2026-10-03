@@ -329,3 +329,21 @@ def test_the_baseline_declares_no_warmup() -> None:
 
     plugin = RandomBaselinePlugin.__new__(RandomBaselinePlugin)
     assert plugin.warmup_bars() == 0
+
+
+def test_the_percentile_counts_ties_as_half() -> None:
+    """An exactly-median value must not read as a perfect score.
+
+    Ties are common here: with a small null most seeds land on the same net, and
+    a plain `v < value` count would hand a strategy sitting exactly on the
+    median a percentile of 100 -- a strategy that merely matched the null would
+    be reported as the best result in the run.
+    """
+    from tools.window_stability import _percentile
+
+    assert _percentile(5.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 90.0
+    assert _percentile(0.0, [1.0, 2.0, 3.0]) == 0.0
+    assert _percentile(99.0, [1.0, 2.0, 3.0]) == 100.0
+    assert _percentile(1.0, []) == 0.0
+    # Median of an odd-length null sits exactly on one member: half credit.
+    assert _percentile(3.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 50.0
