@@ -292,3 +292,40 @@ def test_a_disabled_strategy_is_not_allowed_to_handle_a_candle() -> None:
     assert "return False" in body, (
         "a disabled plugin must be refused before the research check"
     )
+
+
+def test_the_random_baseline_is_reproducible() -> None:
+    """An unseeded null cannot be re-run, so it settles nothing.
+
+    The schedule is derived from (seed, index) on every call rather than from a
+    Random carried on the instance. That matters more than it looks: a stateful
+    RNG makes the sequence depend on how many times the evaluator happened to be
+    invoked, which differs between the baseline and the strategy it is being
+    compared against -- and then the two P&Ls are not the same quantity.
+    """
+    from engine.strategy_plugin import StrategyDecision
+    from strategies.random_baseline.plugin import RandomBaselinePlugin
+
+    plugin = RandomBaselinePlugin.__new__(RandomBaselinePlugin)
+    cfg = {"seed": 7, "trade_probability": 0.08}
+    first = [
+        plugin.evaluate_at(i, {}, cfg).action for i in range(200)
+    ]
+    second = [
+        plugin.evaluate_at(i, {}, cfg).action for i in range(200)
+    ]
+    assert first == second, "the schedule moved between calls"
+    # And a different seed must actually give a different schedule.
+    other = [
+        plugin.evaluate_at(i, {}, {"seed": 8}).action for i in range(200)
+    ]
+    assert other != first, "the seed is not being used"
+    assert isinstance(plugin.evaluate_at(0, {}, cfg), StrategyDecision)
+
+
+def test_the_baseline_declares_no_warmup() -> None:
+    """Otherwise it gets a different exposure profile to the strategies."""
+    from strategies.random_baseline.plugin import RandomBaselinePlugin
+
+    plugin = RandomBaselinePlugin.__new__(RandomBaselinePlugin)
+    assert plugin.warmup_bars() == 0
