@@ -309,18 +309,18 @@ def test_the_random_baseline_is_reproducible() -> None:
     plugin = RandomBaselinePlugin.__new__(RandomBaselinePlugin)
     cfg = {"seed": 7, "trade_probability": 0.08}
     first = [
-        plugin.evaluate_at(i, {}, cfg).action for i in range(200)
+        plugin.evaluate_at({}, i, cfg).action for i in range(200)
     ]
     second = [
-        plugin.evaluate_at(i, {}, cfg).action for i in range(200)
+        plugin.evaluate_at({}, i, cfg).action for i in range(200)
     ]
     assert first == second, "the schedule moved between calls"
     # And a different seed must actually give a different schedule.
     other = [
-        plugin.evaluate_at(i, {}, {"seed": 8}).action for i in range(200)
+        plugin.evaluate_at({}, i, {"seed": 8}).action for i in range(200)
     ]
     assert other != first, "the seed is not being used"
-    assert isinstance(plugin.evaluate_at(0, {}, cfg), StrategyDecision)
+    assert isinstance(plugin.evaluate_at({}, 0, cfg), StrategyDecision)
 
 
 def test_the_baseline_declares_no_warmup() -> None:
@@ -347,3 +347,48 @@ def test_the_percentile_counts_ties_as_half() -> None:
     assert _percentile(1.0, []) == 0.0
     # Median of an odd-length null sits exactly on one member: half credit.
     assert _percentile(3.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 50.0
+
+
+def test_the_baseline_matches_the_framework_evaluate_at_signature() -> None:
+    """A reversed argument order fails silently, which is worse than loudly.
+
+    `handle_candle` calls `evaluate_at(series, index, config=...)`. The baseline
+    declared `(index, series, config)`, so `len(series.get("close"))` ran on an
+    int, the exception was swallowed into `_last_error`, and the plugin emitted
+    nothing -- while every diagnostic still showed it enabled, subscribed, and
+    drawing its expected ~20 signals per window.
+
+    The zero-trades guard caught it. Nothing else would have: the null came back
+    as a clean distribution of 0.00 and produced a confident "33 of 80 windows
+    beat their own baseline", which is what happens when a broken instrument is
+    trusted.
+    """
+    import inspect
+
+    from strategies.random_baseline.plugin import RandomBaselinePlugin
+
+    params = list(inspect.signature(RandomBaselinePlugin.evaluate_at).parameters)
+    assert params[:3] == ["self", "series", "index"], (
+        f"evaluate_at signature drifted from the framework: {params}"
+    )
+
+    from engine.strategy_plugin import StrategyPlugin
+
+    handler = inspect.getsource(StrategyPlugin.handle_candle)
+    assert "evaluate_at(series, index" in handler, (
+        "the framework calls it positionally; check the order still matches"
+    )
+
+
+def test_the_baseline_subscribes_to_candles() -> None:
+    """No subscription means no schedule, and silence reads as a result."""
+    import inspect
+
+    from strategies.random_baseline.plugin import RandomBaselinePlugin
+
+    assert "on_initialize" in dir(RandomBaselinePlugin)
+    src = inspect.getsource(RandomBaselinePlugin.on_initialize)
+    assert "market.candle" in src
+    assert inspect.iscoroutinefunction(RandomBaselinePlugin._on_candle), (
+        "a sync handler returning a coroutine is never awaited"
+    )

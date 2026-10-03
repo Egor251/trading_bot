@@ -406,6 +406,18 @@ async def main() -> int:
         print(f"measuring the null: {NULL_SEEDS} random-timing seeds per window")
         null_by_window: list[list[float]] = [[] for _ in range(WINDOWS)]
         null_trades: list[list[int]] = [[] for _ in range(WINDOWS)]
+        # phantom's capture source is the ensemble: fills come from ensemble
+        # decisions, so a strategy outside the lineup emits signals that never
+        # reach the book. That is why the baseline produced zero trades while
+        # every real strategy traded -- it was not disabled, it was unheard.
+        ens = core.service_registry.get("ensemble_service")
+        lineup_before = dict(getattr(ens, "_ensemble_cfg", {}) or {})
+        if ens is not None:
+            ens._ensemble_cfg = {  # noqa: SLF001
+                **lineup_before,
+                "enabled": True,
+                "strategies": [BASELINE],
+            }
         base = core.plugin_manager.get(BASELINE)
         for seed in range(NULL_SEEDS):
             for widx, (start, end, count) in enumerate(bounds):

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from microkernel_core import PluginRunMode
+from microkernel_core import KernelEvent, PluginRunMode
 
 from engine.strategy_plugin import StrategyDecision, StrategyPlugin
 
@@ -41,13 +41,38 @@ class RandomBaselinePlugin(StrategyPlugin):
     #: No warmup: this is not an indicator. Holding back the first bars would
     #: give the null a systematically different exposure profile from the
     #: strategies it is compared against.
+    async def on_initialize(self) -> None:
+        # Without this the plugin never sees a candle, never draws a schedule,
+        # and the null measures nothing while looking like a result. It is the
+        # reason the first null came back as all zeros across every window.
+        await self.subscribe_event("market.candle", self._on_candle)
+
+    async def _on_candle(self, event: KernelEvent) -> None:
+        decision = await self.handle_candle(event)
+        if decision is None or decision.action == "HOLD":
+            return
+        payload = event.payload or {}
+        close = float(payload.get("close") or 0)
+        await self.emit_signal(
+            {
+                **decision.as_signal_fields(),
+                "class_code": payload.get(
+                    "class_code", self.config.get("class_code", "CRYPTO")
+                ),
+                "ticker": payload.get("ticker"),
+                "quantity": float(self.config.get("quantity", 0.01)),
+                "order_type": "limit",
+                "price": close,
+            }
+        )
+
     def warmup_bars(self) -> int:
         return 0
 
     def evaluate_at(
         self,
-        index: int,
         series: dict[str, Any],
+        index: int,
         config: dict[str, Any] | None = None,
     ) -> StrategyDecision | None:
         cfg = config or self.isolated_config()
