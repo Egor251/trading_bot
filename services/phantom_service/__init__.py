@@ -2112,6 +2112,20 @@ class PhantomService(BaseService):
                 # identical numbers: they were all reading the same ledger.
                 if job_index == 0:
                     self._fills = []
+                    # The fill ledger was only half the leak. `_metrics` reports
+                    # `trades` from this list but `pnl` from the runtime's
+                    # equity, and the runtime book survived between runs -- so a
+                    # strategy that never traded reported another strategy's
+                    # open position, marked to market. `bollinger_reversion` at
+                    # 4/4 and `cci_reversion` at 4/4 were the two whose own
+                    # positions closed inside their window; everything else was
+                    # reading the same leftover.
+                    if self.runtime is not None:
+                        self.runtime.orders.clear_book(
+                            equity=float(
+                                self.config.get("start_equity") or 10_000.0
+                            )
+                        )
                 session_cfg = (
                     plugin.isolated_config(var)
                     if hasattr(plugin, "isolated_config")

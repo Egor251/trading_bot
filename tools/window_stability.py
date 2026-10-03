@@ -247,12 +247,13 @@ async def main() -> int:
         print(header)
         print("-" * len(header))
 
-        rows: list[tuple[str, list[float], int, int]] = []
+        rows: list[tuple[str, list[float], list[int], int, int]] = []
         for sid in targets:
             inst = core.plugin_manager.get(sid)
             if inst is None:
                 continue
             nets: list[float] = []
+            trades: list[int] = []
             for start, end, count in bounds:
                 inst.config["enabled"] = True
                 inst.config["observe_only"] = False
@@ -275,6 +276,7 @@ async def main() -> int:
                     variants=[{}],
                 )
                 nets.append(_net_of(out))
+                trades.append(int(_row_field(out, "trades") or 0))
                 if os.environ.get("WINDOW_DEBUG"):
                     print(f"    [debug] {sid} w{len(nets)} rows={len(out or [])} "
                           f"first={_first_row(out)}")
@@ -282,7 +284,7 @@ async def main() -> int:
             positives = sum(1 for value in nets if value > 0)
             total = WINDOWS
             consistent = positives / total
-            rows.append((sid, nets, positives, total))
+            rows.append((sid, nets, trades, positives, total))
             print(
                 f"{sid:24} "
                 + " ".join(f"{v:>10.2f}" for v in nets)
@@ -297,29 +299,39 @@ async def main() -> int:
         # as a devastating result and means nothing at all. Identical numbers
         # across disjoint windows are proof of a broken measurement, not a
         # finding about the strategies.
-        # A strategy that did not trade cannot have made money. This is the cheapest
-        # possible truth test on the measurement, and it is the one that was
-        # missing: `volatility_breakout_example` trades zero times over the full
-        # 1000 bars and a full sweep reports net 0.00, yet it showed +229.51
-        # inside a window it never traded in. Nothing in the pipeline complained.
-        untraded = [
-            (sid, nets)
-            for sid, nets, _p, _t in rows
-            if any(abs(v) > 1e-9 for v in nets)
-            and all(v == nets[0] for v in nets)
+        # Zero trades must mean exactly zero P&L. This is the only guard that matters
+        # and the three before it were all too narrow: they looked for repeated
+        # *values*, which is one symptom of state leaking between runs rather
+        # than the thing itself. `volatility_breakout_example` never trades, and
+        # it reported +229.51 in a window it did not trade in -- while the
+        # repeat-detecting guard stayed quiet, because those windows were not
+        # quite identical.
+        #
+        # A strategy that placed no order cannot have earned money under any
+        # leak. Stated in terms of trades rather than values, it catches every
+        # form of contamination at once.
+        impossible = [
+            (sid, nets, trades)
+            for sid, nets, trades, _p, _t in rows
+            if any(t == 0 and abs(v) > 1e-6 for v, t in zip(nets, trades))
         ]
-        if untraded and WINDOWS > 1:
+        if impossible and WINDOWS > 1:
             print(
-                f"WARNING: {len(untraded)} strategies returned an identical "
-                f"non-zero P&L in every window. If a strategy never trades, its "
-                f"window P&L must be zero -- a non-zero constant means the runs "
-                f"are not isolated from one another."
+                f"ABORT: {len(impossible)} strategies report P&L in a window "
+                f"where they placed zero trades."
             )
-            for sid, nets in untraded[:3]:
-                print(f"  {sid}: {nets}")
+            for sid, nets, trades in impossible[:5]:
+                print(f"  {sid}: pnl={nets} trades={trades}")
+            print(
+                "\nThat is impossible under any isolated run, so state is "
+                "leaking between windows. Refusing to print a ranking."
+            )
+            await core.shutdown()
+            return 3
+
         collapsed = [
             (sid, nets)
-            for sid, nets, _p, _t in rows
+            for sid, nets, _tr, _p, _t in rows
             if WINDOWS > 1 and len(set(nets)) < WINDOWS
         ]
         if collapsed:
@@ -370,6 +382,12 @@ def _epoch(value: Any) -> float:
     if text.isdigit():
         return float(text)
     return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+def _row_field(rows: list[dict[str, Any]] | None, name: str) -> Any:
+    if not rows:
+        return None
+    return rows[-1].get(name)
 
 
 def _net_of(rows: list[dict[str, Any]] | None) -> float:
