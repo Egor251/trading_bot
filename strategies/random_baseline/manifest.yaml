@@ -1,0 +1,8 @@
+id: random_baseline
+name: Random Timing Baseline
+version: "1.0.0"
+description: Research null hypothesis - seeded random entry/exit on the same bars
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:RandomBaselinePlugin

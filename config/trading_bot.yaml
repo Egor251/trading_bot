@@ -128,6 +128,22 @@ plugins:
     tickers:
     - BTC/USDT
     - ETH/USDT
+  random_baseline:
+    class_code: CRYPTO
+    # Research scaffolding, never a lineup member. It enters and exits on a
+    # seeded random schedule so a strategy has something to be measured against
+    # other than a coin flip: same bars, same runtime, same costs.
+    #
+    # `enabled: true` because a plugin that is disabled at boot is never
+    # instantiated, and setting the flag later in a run does not bring it back.
+    # It stays out of every lineup, so being enabled cannot put it in a book.
+    enabled: true
+    observe_only: true
+    quantity: 0.01
+    seed: 0
+    trade_probability: 0.08
+    tickers:
+    - BTC/USDT
   ma_cross_example:
     class_code: CRYPTO
     enabled: true
