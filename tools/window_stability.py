@@ -237,6 +237,14 @@ async def main() -> int:
                     continue
                 inst = core.plugin_manager.get(other)
                 if inst is not None:
+                    # Disabled, not parked on a sentinel ticker. Parking only
+                    # stops them trading; the plugin still receives every candle
+                    # and still touches the one shared phantom runtime. Measured
+                    # directly: three strategies run alone gave +12.37 / -17.13 /
+                    # +10.41 with no agreement, and in the full run the same
+                    # three gave -7.45 / -8.48 / -9.01 sharing 232.25 to the
+                    # cent. The contamination was the nineteen bystanders.
+                    inst.config["enabled"] = False
                     inst.config["tickers"] = ["__not_this_symbol__"]
 
         header = (
@@ -256,6 +264,13 @@ async def main() -> int:
             trades: list[int] = []
             for start, end, count in bounds:
                 inst.config["enabled"] = True
+                # Re-enable only the strategy under test; every other plugin
+                # stays off for the whole run.
+                for other in STRATEGIES:
+                    if other != sid:
+                        _other = core.plugin_manager.get(other)
+                        if _other is not None:
+                            _other.config["enabled"] = False
                 inst.config["observe_only"] = False
                 inst.config["tickers"] = [TICKER]
                 inst.config["class_code"] = "CRYPTO"

@@ -261,3 +261,34 @@ def test_a_disjoint_range_reaches_the_adapter() -> None:
     assert "until_ms" in paged.split("cursor:")[1][:200], (
         "the end bound must seed the walk, or it still starts from now"
     )
+
+
+def test_a_disabled_strategy_is_not_allowed_to_handle_a_candle() -> None:
+    """`enabled: False` was meaningless on the research path.
+
+    `candle_allowed` returned True for any plugin not enrolled in the current
+    research run, because "not in research" was treated as "live, and live
+    plugins should trade". A `run_grid` enrolling one strategy therefore left the
+    other nineteen answering True, all consuming every candle against one shared
+    phantom runtime.
+
+    Measured consequence: three strategies run alone gave +12.37 / -17.13 /
+    +10.41; the same three in a full run gave -7.45 / -8.48 / -9.01 and agreed
+    to the cent on a third window. The first strategy in the list was always
+    clean, which is why the contamination looked like strategy behaviour.
+
+    Parking on a sentinel ticker never prevented this: a filter on which symbol
+    to act on is not the same thing as being switched off.
+    """
+    import inspect
+
+    from engine.strategy_plugin import StrategyPlugin
+
+    src = inspect.getsource(StrategyPlugin.candle_allowed)
+    assert '"enabled"' in src, (
+        "candle_allowed must honour the enabled flag, or bystanders run"
+    )
+    body = src.split("enabled")[-1]
+    assert "return False" in body, (
+        "a disabled plugin must be refused before the research check"
+    )

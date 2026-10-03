@@ -195,6 +195,18 @@ class StrategyPlugin(BasePlugin):
             self.end_research()
 
     def candle_allowed(self, event: KernelEvent) -> bool:
+        # Not enrolled in a research run means this plugin is simply *live*, and
+        # live it should stay -- unless it was switched off. That check was
+        # missing, which made `enabled: False` meaningless on this path: a
+        # `run_grid` enrolling one strategy left the other nineteen answering
+        # `True` here, all of them consuming every candle against one shared
+        # runtime. Measured: three strategies run alone gave +12.37 / -17.13 /
+        # +10.41; the same three in a full run gave -7.45 / -8.48 / -9.01 and
+        # agreed to the cent on a third window. The bystanders were the
+        # contamination, and `tickers` never stopped them because a filter on
+        # which symbol to act on is not the same thing as being switched off.
+        if not bool(self.config.get("enabled", True)):
+            return False
         if self._research is None:
             return True
         rid = str((event.payload or {}).get("run_id") or "")
