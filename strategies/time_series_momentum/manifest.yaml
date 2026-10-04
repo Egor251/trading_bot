@@ -1,0 +1,8 @@
+id: time_series_momentum
+name: Time Series Momentum
+version: "1.0.0"
+description: Moskowitz-Ooi-Pedersen 12m trend with volatility scaling, for testing
+kind: business
+run_mode: continuous
+dependencies: []
+entrypoint: plugin:TimeSeriesMomentumPlugin

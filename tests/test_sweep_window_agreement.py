@@ -422,3 +422,19 @@ def test_the_runbook_records_the_measured_verdict() -> None:
     # The honest framing, not just the tables.
     assert "distinguishable from chance" in doc
     assert "Expected overlap" in doc
+
+
+def test_the_hypothesis_is_measured_in_the_same_run_as_everything_else() -> None:
+    """A hypothesis tested in its own kinder configuration is not a test.
+
+    `time_series_momentum` is in the shared list so it is judged by the same
+    null, the same windows and the same guards as the other twenty. Giving it a
+    separate run would have been the easiest way to manufacture a result, and
+    the failure mode would have been invisible in the output.
+    """
+    from tools.window_stability import STRATEGIES
+
+    assert "time_series_momentum" in STRATEGIES
+    assert "random_baseline" not in STRATEGIES, (
+        "the null must never be measured against itself"
+    )

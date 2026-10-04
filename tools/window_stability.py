@@ -74,6 +74,10 @@ STRATEGIES = [
     "volume_impulse_example",
     "vwap_reversion",
     "williams_r_reversion",
+    # The hypothesis under test. Kept in the same measurement as everything
+    # else so it is judged by the same null, not by a separate run that might
+    # be configured more kindly.
+    "time_series_momentum",
 ]
 
 def _arg(index: int, default: str) -> str:

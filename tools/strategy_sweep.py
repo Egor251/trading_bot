@@ -49,6 +49,7 @@ STRATEGIES = [
     "volume_impulse_example",
     "vwap_reversion",
     "williams_williams" if False else "williams_r_reversion",
+    "time_series_momentum",
 ]
 
 

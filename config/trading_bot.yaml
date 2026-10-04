@@ -713,3 +713,13 @@ universe:
   - CRYPTO:BTC/USDT
   - CRYPTO:ETH/USDT
   - CRYPTO:SOL/USDT
+  time_series_momentum:
+    class_code: CRYPTO
+    enabled: true
+    lookback: 252
+    observe_only: true
+    quantity: 0.01
+    target_vol: 0.10
+    tickers:
+    - BTC/USDT
+    vol_window: 30
