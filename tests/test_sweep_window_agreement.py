@@ -438,3 +438,34 @@ def test_the_hypothesis_is_measured_in_the_same_run_as_everything_else() -> None
     assert "random_baseline" not in STRATEGIES, (
         "the null must never be measured against itself"
     )
+
+
+def test_window_bounds_use_the_real_bar_interval() -> None:
+    """A 4h series also ends in "h", and it is not an hourly one.
+
+    The step was inferred from the timeframe's last character, so 4h was
+    treated as 3600s instead of 14400s. Window boundaries landed four times
+    too close together and the run claimed ~1998 bars for a 1000-bar window --
+    a number that then became the fetch limit for every window in the slice.
+
+    Found by running it: the printed per-window bar count did not match the
+    number of bars actually fetched, which is the sort of thing a reader has no
+    reason to doubt.
+    """
+    import importlib
+
+    from tools import window_stability
+
+    module = importlib.reload(window_stability)
+    original = module.TIMEFRAME
+    try:
+        for timeframe, seconds in (("1h", 3600), ("4h", 14400), ("1d", 86400)):
+            module.TIMEFRAME = timeframe
+            bars = [{"ts": 1600000000.0 + i * seconds} for i in range(1000)]
+            bounds = module.window_bounds(bars, 2)
+            span = (bars[-1]["ts"] - bars[0]["ts"]) / 2
+            assert bounds[0][2] == int(span // seconds), (
+                f"{timeframe} window claimed {bounds[0][2]} bars"
+            )
+    finally:
+        module.TIMEFRAME = original

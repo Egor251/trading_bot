@@ -156,7 +156,14 @@ def window_bounds(
     for index in range(windows):
         # End the window one interval early so consecutive windows do not both
         # claim the boundary bar.
-        step = 3600.0 if TIMEFRAME.endswith("h") else 86400.0
+        #
+        # The real interval, not "does it end in h". A 4h series also ends in
+        # "h", and treating its step as one hour put the window boundaries four
+        # times too close together and claimed ~1998 bars for a 1000-bar
+        # window -- which then became the fetch limit.
+        from engine.ohlc_timeframe import timeframe_to_seconds  # noqa: PLC0415
+
+        step = float(timeframe_to_seconds(TIMEFRAME) or 3600.0)
         start = datetime.fromtimestamp(first + index * span, tz=timezone.utc)
         end = datetime.fromtimestamp(
             first + (index + 1) * span - step, tz=timezone.utc
