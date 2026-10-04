@@ -392,3 +392,33 @@ def test_the_baseline_subscribes_to_candles() -> None:
     assert inspect.iscoroutinefunction(RandomBaselinePlugin._on_candle), (
         "a sync handler returning a coroutine is never awaited"
     )
+
+
+def test_the_runbook_records_the_measured_verdict() -> None:
+    """A verdict nobody can reproduce is a verdict nobody should act on.
+
+    The tables in the runbook and the methodology behind them are the only
+    durable output of this measurement. They must state the null, the window
+    count and the multiplicity expectation -- otherwise a reader sees
+    "9 of 80 windows cleared p90" and reasonably concludes something was found.
+    """
+    import pathlib
+
+    doc = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "docs"
+        / "runbooks"
+        / "launch.md"
+    ).read_text(encoding="utf-8")
+
+    for needle in (
+        "random_baseline",
+        "window_stability",
+        "expected under noise",
+        "own null",
+    ):
+        assert needle in doc, f"the runbook must record: {needle}"
+
+    # The honest framing, not just the tables.
+    assert "distinguishable from chance" in doc
+    assert "Expected overlap" in doc

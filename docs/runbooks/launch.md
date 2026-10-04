@@ -372,6 +372,80 @@ minimal pipeline probe, not a config test. `test_decision_store.py` reads the
 real `config/trading_bot.yaml` for exactly that reason: a test with a
 hand-built config would never notice the knobs sitting in the wrong section.
 
+## Measured: no strategy here beats random timing
+
+Measured 2026-10-04, BTC/USDT and ETH/USDT, 20 strategies, 4 disjoint windows
+per slice, 20 random-timing nulls per window.
+
+```bash
+python -m tools.window_stability 1h BTC/USDT 1000 4 20
+python -m tools.window_stability 1h ETH/USDT 1000 4 20
+python -m tools.window_stability 1d BTC/USDT 1000 4 20
+```
+
+### Why random timing, and not a coin flip
+
+Sign counts answer "is this plus/minus sequence unusual", which is not the
+question. The question is whether a strategy beats random timing on the same
+bars — and that comparison is only fair if the baseline pays what the strategy
+pays. `strategies/random_baseline` is therefore a *strategy*: seeded, subscribed
+to the same candles, evaluated by the same `run_grid`, so comparability is
+guaranteed by construction rather than by matching two implementations by hand.
+
+Windows are compared against the null **of their own window**. Windows on one
+asset are not interchangeable, and a pooled null would flatter anything in a
+window that simply went up.
+
+### Result
+
+| slice | windows at or above p90 of own null | expected under noise |
+|---|---|---|
+| BTC/USDT 1h | 9 / 80 | 8 |
+| ETH/USDT 1h | 5 / 80 | 8 |
+| BTC/USDT 1d | 10 / 80 | 8 |
+
+Strongest strategies on BTC (1h) and ETH (1h): **one in common**,
+`vwap_reversion`. Expected overlap of two independent rankings: 1.40. Observed: 1.
+
+Against random *hold* rather than random timing, on 2.7 years of daily bars:
+**42 of 80 windows below the null median** (52%). A coin flip gives 40.
+
+**No strategy here is distinguishable from chance.** Every one stays
+`research_only`, and the reason is now a measurement rather than an inference.
+
+### The bars are not the limiting factor
+
+1000 bars is 41 days at 1h and 2.7 years at 1d. The bar budget is fixed; the
+time span is not. The daily run also shows the null's median is *systematically
+positive* (+114.80, +179.88, +2.77, −178.84) while hourly medians sit near zero:
+long horizons contain a strong uptrend that any holder captures and a trader pays
+costs to miss. Absolute P&L over years must not be read as an edge for that
+reason.
+
+### What would change this
+
+More slices, each with its own null — not parameter tuning, which would
+reproduce the best-of-N illusion this measurement exists to prevent. A strategy
+that shows up at p90 on one asset, one timeframe and one window has shown
+nothing: 80 windows at a p90 threshold expect 8 false positives, and 9, 5 and 10
+were observed.
+
+### The instrument has been wrong nine times
+
+Every guard in `window_stability` was written because the measurement was
+already broken when it was added, and every guard except the first was itself
+too narrow. Listed so the next person does not trust it blindly:
+
+1. short fetch → WARN
+2. identical results across windows → ABORT (only in windows that traded)
+3. zero trades → WARN/ABORT (**on the null as well as the strategies**)
+4. ten guards in all, including `run_grid` reporting the timeframe it used
+
+Two of the nine faults were found by an instrument reporting a *confident*
+answer: `bollinger_reversion` at 4/4 and `cci_reversion` at 4/4 were two
+strategies reading one ledger. And the null once came back as a clean
+distribution of 0.00 that 33 of 80 windows "beat".
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
