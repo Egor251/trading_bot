@@ -616,6 +616,110 @@ async def sweep(
     return rows
 
 
+def volatility_structure(returns: list[float]) -> dict[str, float]:
+    """Is the *magnitude* of the next move predictable, if its sign is not?
+
+    Everything negative this tool has reported so far was measured on the sign of
+    the return. That is the wrong question for a breakout or gap strategy, which
+    does not need to know which way the next bar goes -- it needs to know that the
+    next bar is going to be a large one. Those are separate properties, and
+    volatility clustering is one of the most robust regularities in finance, so a
+    sign-based sweep could have returned nothing while the tradable structure sat
+    unmeasured next to it.
+
+    Four readings, from the crude to the formal:
+
+      `rho_abs`     corr(|r_t|, |r_{t+1}|) -- the plain persistence of big moves
+      `arch1`       OLS of r^2_t on r^2_{t-1} -- the ARCH(1) coefficient, the
+                    formal statement that large moves follow large moves
+      `vol_ratio`   E[r^2_{t+1} | r^2_t above median] divided by the same below
+                    -- how much bigger the next move is after a big one, in the
+                    units a position actually cares about
+      `sign_to_size` corr(r_t, |r_{t+1}|) -- does today's *direction* predict
+                    tomorrow's *magnitude*. This is the breakout premise stated as
+                    a single correlation, and it is the one the sign-based work
+                    never looked at.
+    """
+    n = len(returns)
+    out = {"rho_abs": 0.0, "arch1": 0.0, "vol_ratio": 0.0, "sign_to_size": 0.0}
+    if n < 30:
+        return out
+
+    def _corr(xs: list[float], ys: list[float]) -> float:
+        m = len(xs)
+        if m < 3:
+            return 0.0
+        mx, my = sum(xs) / m, sum(ys) / m
+        num = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+        den = (
+            sum((a - mx) ** 2 for a in xs) * sum((b - my) ** 2 for b in ys)
+        ) ** 0.5
+        return (num / den) if den else 0.0
+
+    abs_rets = [abs(r) for r in returns]
+    squares = [r * r for r in returns]
+    out["rho_abs"] = _corr(abs_rets[:-1], abs_rets[1:])
+    out["arch1"] = _corr(squares[:-1], squares[1:])
+    ordered = sorted(squares)
+    median_sq = ordered[len(ordered) // 2]
+    high = [
+        b for a, b in zip(squares[:-1], squares[1:]) if a > median_sq
+    ]
+    low = [
+        b for a, b in zip(squares[:-1], squares[1:]) if a <= median_sq
+    ]
+    if high and low and sum(low) > 0:
+        out["vol_ratio"] = (sum(high) / len(high)) / (sum(low) / len(low))
+    out["sign_to_size"] = _corr(returns[:-1], abs_rets[1:])
+    return out
+
+
+def breakout_expectancy(
+    returns: list[float], *, threshold: float, sigma: float | None = None
+) -> dict[str, float]:
+    """Mean next-bar return after a move of more than `threshold` sigma.
+
+    This is the breakout premise stated as the thing a position actually needs:
+    volatility clustering says the next move will be *large* after a large one,
+    which is necessary but not sufficient -- clustering raises the variance of
+    returns, not their mean, and a strategy with more variance and no mean has no
+    expectancy. What pays the costs is whether the move is *directionally* worth
+    being in, which is this number and nothing else.
+
+    `side` = +1 measures a long breakout (enter after an up bar), -1 a short one.
+    Reported in units of the series' own volatility, so it can be compared against
+    a cost expressed per bar.
+    """
+    out = {"n": 0.0, "mean": 0.0, "t": 0.0, "mean_long": 0.0, "mean_short": 0.0}
+    if sigma is None:
+        if len(returns) < 2:
+            return out
+        sigma = math.sqrt(sum(r * r for r in returns) / len(returns))
+    if sigma <= 0:
+        return out
+    cut = threshold * sigma
+    nxt = returns[1:]
+    lead = returns[:-1]
+    for side, key in ((1.0, "mean_long"), (-1.0, "mean_short")):
+        picks = [
+            side * b
+            for a, b in zip(lead, nxt)
+            if side * a > cut
+        ]
+        if not picks:
+            continue
+        mean = sum(picks) / len(picks)
+        out[key] = mean
+        if key == "mean_long":
+            m = len(picks)
+            var = sum((p - mean) ** 2 for p in picks) / (m - 1) if m > 1 else 0.0
+            se = (var / m) ** 0.5 if var > 0 else 0.0
+            out["n"] = float(m)
+            out["mean"] = mean
+            out["t"] = (mean / se) if se > 0 else 0.0
+    return out
+
+
 def _fmt_ci(est: float, se: float) -> str:
     return f"[{est - 1.96 * se:+.4f}, {est + 1.96 * se:+.4f}]"
 
@@ -738,6 +842,42 @@ async def main() -> int:
                 print(
                     f"  {q:>5} {res['vr']:>16.4f} {res['z']:>+8.2f}   {reading}"
                 )
+
+            vol = volatility_structure(returns)
+            print()
+            print("  VOLATILITY STRUCTURE -- what a breakout or gap strategy lives on.")
+            print("  Sign of the next move is a different question from its size:")
+            print(f"    corr(|r_t|, |r_t+1|)   = {vol['rho_abs']:+.4f}   "
+                  "big moves follow big moves?")
+            print(f"    ARCH(1) on r^2         = {vol['arch1']:+.4f}   "
+                  "the formal version of the same claim")
+            print(f"    vol ratio hi/lo        = {vol['vol_ratio']:.2f}x   "
+                  "how much bigger is the next move after a big one")
+            print(f"    corr(r_t, |r_t+1|)     = {vol['sign_to_size']:+.4f}   "
+                  "does today's direction predict tomorrow's size")
+            print("    (this is the breakout premise; the sign sweeps above never")
+            print("     asked it, and a negative result there said nothing here)")
+            print()
+            print("  BREAKOUT EXPECTANCY -- mean next-bar return after a big move,")
+            print("  in units of the next bar's own volatility:")
+            print(f"    {'cut':>6} {'n':>6} {'long/short':>12} {'t':>7}   reading")
+            for k in (1.0, 1.5, 2.0, 3.0):
+                be = breakout_expectancy(returns, threshold=k)
+                if be["n"] < 30:
+                    print(f"    {k:>5.1f}s {int(be['n']):>6} {'-':>12} {'-':>7}"
+                          "   too few events")
+                    continue
+                verdict = (
+                    "LONGS pay"
+                    if be["t"] > 2.0
+                    else "shorts pay" if be["t"] < -2.0 else "neither"
+                )
+                print(
+                    f"    {k:>5.1f}s {int(be['n']):>6} {be['mean']:>12.5f} "
+                    f"{be['t']:>+7.2f}   {verdict}"
+                )
+            print("    A t beyond +-2 is the first thing that would make a breakout")
+            print("    strategy's expectancy positive rather than merely volatile.")
 
             print()
             print(

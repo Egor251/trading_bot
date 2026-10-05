@@ -719,6 +719,100 @@ def test_the_traded_rule_follows_the_sign_of_the_dependence_it_is_given() -> Non
     )
 
 
+def _garch_series(n: int = 6000, seed: int = 1) -> list[float]:
+    """Returns with strong volatility clustering and *no* return autocorrelation.
+
+    Two things this has to get right, and a naive construction gets both wrong.
+
+    An AR(1) on returns with phi = 0.9 looks like clustering and is not: it is a
+    trending series, and its magnitude persistence comes partly from return
+    persistence. And an EWMA without a persistence term is not GARCH either -- it
+    has no memory beyond the last shock and clusters by about 1.0x, which is how
+    the first attempt at this test failed while looking perfectly reasonable.
+
+    So: sign is independent of magnitude, and the conditional variance is a
+    genuine AR(1) with alpha + beta = 0.97.
+    """
+    import math
+    import random
+
+    rng = random.Random(seed)
+    omega, alpha, beta = 0.00005, 0.10, 0.87
+    var = omega / (1.0 - alpha - beta)
+    out: list[float] = []
+    for _ in range(n):
+        out.append(math.sqrt(var) * rng.gauss(0.0, 1.0))
+        var = omega + alpha * out[-1] ** 2 + beta * var
+    return out
+
+
+def test_volatility_structure_detects_clustering_that_a_sign_sweep_cannot() -> None:
+    """The gap that made six negative results read broader than they were.
+
+    Every sign-based measurement in this project was about whether the next bar goes
+    up or down. A breakout strategy does not ask that -- it asks whether the next bar
+    is a *big* one. Those are separate properties, and this is the instrument for the
+    second, pinned against a series built to have clustering and one that has none.
+    """
+    import random
+
+    from tools.edge_ceiling import volatility_structure
+
+    clustered = _garch_series(4000)
+    rng = random.Random(1)
+    white = [rng.gauss(0, 0.02) for _ in range(4000)]
+
+    hot = volatility_structure(clustered)
+    cold = volatility_structure(white)
+    assert hot["rho_abs"] > 0.1, (
+        f"persistence of magnitude must be found where it exists: {hot}"
+    )
+    assert hot["arch1"] > 0.1, "and formally, as an ARCH(1) coefficient"
+    assert abs(cold["rho_abs"]) < 0.1, (
+        f"and must not be manufactured where there is none: {cold}"
+    )
+    assert hot["rho_abs"] > abs(cold["rho_abs"]) + 0.05, (
+        f"clustering must separate from white noise: {hot['rho_abs']} vs "
+        f"{cold['rho_abs']}"
+    )
+    # The threshold is deliberately modest. Real markets sit around 1.3x -- measured
+    # 1.28 on BTC and 1.54 on ETH -- so an assertion of 2x would be a test of a
+    # fantasy series rather than of the instrument. What matters is that the
+    # clustered series separates from white noise.
+    assert hot["vol_ratio"] > 1.15, hot
+    assert hot["vol_ratio"] > abs(cold["vol_ratio"] - 1.0) + 0.15, (
+        f"clustering must be visible where it exists and absent where it does "
+        f"not: {hot['vol_ratio']} vs {cold['vol_ratio']}"
+    )
+    assert abs(cold["vol_ratio"] - 1.0) < 0.15
+
+
+def test_breakout_expectancy_reports_the_mean_and_not_the_variance() -> None:
+    """Clustering raises variance; only a directional mean is an expectancy.
+
+    A series can be strongly clustered and still have no directional edge after a
+    big move. This pins the difference, because reading vol ratio as an edge is
+    exactly the confusion that would make a breakout strategy look justified before
+    it had earned anything.
+    """
+
+    from tools.edge_ceiling import breakout_expectancy, volatility_structure
+
+    clustered = _garch_series(6000, seed=2)
+    assert volatility_structure(clustered)["vol_ratio"] > 1.15, (
+        "the series must actually cluster, or the rest of the test is vacuous"
+    )
+
+    be = breakout_expectancy(clustered, threshold=1.5)
+    assert be["n"] > 100, "there should be plenty of events"
+    assert abs(be["mean"]) < 0.01, (
+        f"clustering alone must not show a directional edge: {be}"
+    )
+    assert abs(be["t"]) < 2.0, (
+        f"and must not look significant in either direction: {be}"
+    )
+
+
 def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
     """The ceiling measurement is only worth anything if its estimators are honest.
 
