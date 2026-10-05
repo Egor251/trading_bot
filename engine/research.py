@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from engine.indicators import equity_pnl
+from engine.indicators import (
+    equity_pnl,
+    exposure_from_fills,
+    notional_exposure_from_fills,
+)
 
 JOURNAL_STAT_EVENT_TYPES: tuple[str, ...] = (
     "execution.result",
@@ -407,6 +411,7 @@ def buy_hold_oos_metrics(
     ]
     metrics = equity_pnl(fills, start_equity=float(start_equity), mark_price=xs[-1])
     metrics["fills"] = len(fills)
+    metrics["exposure"] = exposure_from_fills(fills, total_bars=len(xs))
     metrics["config"] = {"baseline": "buy_hold"}
     return metrics
 
@@ -461,6 +466,10 @@ def offline_variant_metrics(
         fills, start_equity=float(start_equity), mark_price=mark_price
     )
     metrics["fills"] = len(fills)
+    metrics["exposure"] = exposure_from_fills(fills, total_bars=len(closes))
+    metrics["notional_exposure"] = notional_exposure_from_fills(
+        fills, total_bars=len(closes)
+    )
     metrics["config"] = dict(config or {})
     return metrics
 

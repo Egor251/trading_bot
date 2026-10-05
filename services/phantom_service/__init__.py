@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Any
 from microkernel_core import BaseService, KernelEvent
 
 from engine.costs import TradeContext
-from engine.indicators import equity_pnl, sma
+from engine.indicators import (
+    equity_pnl,
+    exposure_from_fills,
+    notional_exposure_from_fills,
+    sma,
+)
 from engine.market import Candle, candle_to_market_payload
 from engine.order import OrderStatus
 from engine.phantom_patterns import (
@@ -377,7 +382,7 @@ class PhantomService(BaseService):
             return
         self.runtime.reload_active_cost_schedule()
 
-    def _metrics(self) -> dict[str, Any]:
+    def _metrics(self, total_bars: int | None = None) -> dict[str, Any]:
         """Canonical phantom PnL — always from shadow runtime book when present.
 
         ``equity_pnl(self._fills)`` is single-position and invents huge PnL on
@@ -404,9 +409,28 @@ class PhantomService(BaseService):
                 "leverage": (
                     float(snap.get("gross_exposure") or 0) / final if final > 0 else 0.0
                 ),
+                # How long the book was actually in the market, in bars. P&L here
+                # is a level; this is the multiplier that made it. Without it a
+                # run cannot be compared with another run whose holding period
+                # differed, and `trades` is not a substitute -- a single position
+                # held for 700 bars is one order, same as one held for a day.
+                "exposure": exposure_from_fills(
+                    self._fills,
+                    total_bars=int(total_bars or 0),
+                ),
+                "notional_exposure": notional_exposure_from_fills(
+                    self._fills,
+                    total_bars=int(total_bars or 0),
+                ),
                 "source": "runtime",
             }
         metrics = equity_pnl(self._fills, start_equity=start_eq)
+        metrics["exposure"] = exposure_from_fills(
+            self._fills, total_bars=int(total_bars or 0)
+        )
+        metrics["notional_exposure"] = notional_exposure_from_fills(
+            self._fills, total_bars=int(total_bars or 0)
+        )
         metrics["source"] = "fills_fallback"
         return metrics
 
@@ -2209,7 +2233,7 @@ class PhantomService(BaseService):
                     if ens2 and getattr(ens2, "_flush_task", None):
                         await asyncio.sleep(0.1)
 
-                    metrics = self._metrics()
+                    metrics = self._metrics(bars_n)
                     timeline_ui = (
                         self.timeline.export_ui() if self.timeline is not None else None
                     )
@@ -2235,6 +2259,14 @@ class PhantomService(BaseService):
                         "timeframe": history_timeframe,
                         "timeframe_defaulted": bool(wf_tf_defaulted),
                         "fills": len(self._fills),
+                        # How long the book was in the market, in bars. Without
+                        # it a run reports a P&L and a trade count and no way to
+                        # tell holding from deciding, which is the distinction the
+                        # whole research stack is supposed to be making.
+                        "exposure": dict(metrics.get("exposure") or {}),
+                        "notional_exposure": dict(
+                            metrics.get("notional_exposure") or {}
+                        ),
                         "recent_fills": list(self._fills[-80:]),
                         "timeline": timeline_ui,
                         "ohlc": ohlc_snap,

@@ -287,12 +287,18 @@ async def main() -> int:
         print("-" * len(header))
 
         rows: list[tuple[str, list[float], list[int], int, int]] = []
+        costs_by_sid: dict[str, list[float]] = {}
+        exposure_by_sid: dict[str, list[float]] = {}
+        notional_by_sid: dict[str, list[float]] = {}
         for sid in targets:
             inst = core.plugin_manager.get(sid)
             if inst is None:
                 continue
             nets: list[float] = []
             trades: list[int] = []
+            costs: list[float] = []
+            bars_in_market: list[float] = []
+            notional: list[float] = []
             for start, end, count in bounds:
                 inst.config["enabled"] = True
                 # Re-enable only the strategy under test; every other plugin
@@ -323,6 +329,9 @@ async def main() -> int:
                 )
                 nets.append(_net_of(out))
                 trades.append(int(_row_field(out, "trades") or 0))
+                costs.append(_cost_of(out))
+                bars_in_market.append(_bars_in_market_of(out))
+                notional.append(_notional_of(out))
                 if os.environ.get("WINDOW_DEBUG"):
                     print(f"    [debug] {sid} w{len(nets)} rows={len(out or [])} "
                           f"first={_first_row(out)}")
@@ -331,6 +340,9 @@ async def main() -> int:
             total = WINDOWS
             consistent = positives / total
             rows.append((sid, nets, trades, positives, total))
+            costs_by_sid[sid] = costs
+            exposure_by_sid[sid] = bars_in_market
+            notional_by_sid[sid] = notional
             print(
                 f"{sid:24} "
                 + " ".join(f"{v:>10.2f}" for v in nets)
@@ -429,6 +441,9 @@ async def main() -> int:
         print(f"measuring the null: {NULL_SEEDS} random-timing seeds per window")
         null_by_window: list[list[float]] = [[] for _ in range(WINDOWS)]
         null_trades: list[list[int]] = [[] for _ in range(WINDOWS)]
+        null_costs: list[list[float]] = [[] for _ in range(WINDOWS)]
+        null_exposure: list[list[float]] = [[] for _ in range(WINDOWS)]
+        null_notional: list[list[float]] = [[] for _ in range(WINDOWS)]
         # phantom's capture source is the ensemble: fills come from ensemble
         # decisions, so a strategy outside the lineup emits signals that never
         # reach the book. That is why the baseline produced zero trades while
@@ -467,6 +482,9 @@ async def main() -> int:
                 )
                 null_by_window[widx].append(_net_of(out))
                 null_trades[widx].append(int(_row_field(out, "trades") or 0))
+                null_costs[widx].append(_cost_of(out))
+                null_exposure[widx].append(_bars_in_market_of(out))
+                null_notional[widx].append(_notional_of(out))
 
         # A null that never trades produces an all-zero distribution, against which
         # every strategy beats it -- 33 of 80 cleared p90 of a baseline that
@@ -504,6 +522,108 @@ async def main() -> int:
                 f"max={ordered[-1]:9.2f}"
             )
 
+        # The null is meant to be the strategies minus their decisions. Same
+        # machinery -- yes, and that is what the docstring claims guarantees
+        # comparability. Same *turnover* -- never checked, and turnover sets both
+        # the cost bill and the width of the P&L distribution. A null trading
+        # five times as often pays five times the bill and spreads five times as
+        # wide, so the p90 bar it defines says as much about the null's own
+        # trading frequency as about the market. `null_trades` was already
+        # collected for the zero-trade guard and used for nothing else ever.
+        print("\nturnover, exposure and cost drag (what P&L is actually built out of):")
+        print(f"  {'strategy':24} " + " ".join(
+            f"{'w' + str(i + 1):>26}" for i in range(WINDOWS)))
+        for sid, nets, trades, _p, _t in rows:
+            mine = costs_by_sid.get(sid, [])
+            bars = exposure_by_sid.get(sid, [])
+            notional = notional_by_sid.get(sid, [])
+            cells = [
+                f"{trades[widx]:4d}t "
+                f"{(_exposure_of(bars, widx)):5.0f}b "
+                f"{(_notional_of_w(notional, widx)):9.0f}n "
+                f"{(mine[widx] if widx < len(mine) else 0.0):7.2f}c"
+                for widx in range(len(nets))
+            ]
+            print(f"  {sid:24} " + " ".join(f"{c:>26}" for c in cells))
+        for widx in range(WINDOWS):
+            nt, nc, nb = null_trades[widx], null_costs[widx], null_exposure[widx]
+            if not nt:
+                continue
+            print(f"  {'NULL mean':24} w{widx + 1}: {sum(nt) / len(nt):4.1f}t"
+                  f" {sum(nb) / len(nb):5.0f}b {sum(nc) / len(nc):7.2f}c")
+
+        print("\nis the null exchangeable with the strategies it judges?  If it")
+        print("trades far more often than they do, the p90 it defines is mostly a")
+        print("statement about the null's own frequency:")
+        for widx in range(WINDOWS):
+            st = [tr[widx] for _s, _n, tr, *_ in rows if widx < len(tr)]
+            sc = [
+                costs_by_sid[s][widx]
+                for s, _n, _tr, *_ in rows
+                if s in costs_by_sid and widx < len(costs_by_sid[s])
+            ]
+            nt, nc = null_trades[widx], null_costs[widx]
+            if not st or not nt:
+                continue
+            s_tr = sum(st) / len(st)
+            n_tr = sum(nt) / len(nt)
+            s_c = sum(sc) / len(sc) if sc else 0.0
+            n_c = sum(nc) / len(nc)
+            sb = [
+                _exposure_of(exposure_by_sid.get(s, []), widx)
+                for s, _n, _tr, *_ in rows
+            ]
+            nb = null_exposure[widx]
+            s_ba, n_ba = (sum(sb) / len(sb) if sb else 0.0), (
+                sum(nb) / len(nb) if nb else 0.0
+            )
+            ratio = (n_tr / s_tr) if s_tr else float("inf")
+            b_ratio = (n_ba / s_ba) if s_ba else float("inf")
+            flag = "ok" if 0.5 <= ratio <= 2.0 else "MISMATCH"
+            b_flag = "ok" if 0.8 <= b_ratio <= 1.25 else "MISMATCH"
+            print(
+                f"  w{widx + 1}  trades: strategy {s_tr:6.2f}  null {n_tr:6.2f}"
+                f" ({ratio:5.2f}x) {flag}")
+            print(
+                f"        bars in market: strategy {s_ba:6.1f}  null {n_ba:6.1f}"
+                f" ({b_ratio:5.2f}x) {b_flag}"
+                f"   costs: strategy {s_c:8.2f}  null {n_c:8.2f}"
+            )
+
+        # The pre-registered test, kept in the instrument so it is reproducible
+        # and so nobody can quietly change the criterion after seeing the answer.
+        #
+        # Registered before the run: a shared market factor exists and is worth
+        # removing only if P&L actually varies with exposure. If it does not, the
+        # factor is not identifiable from this data and subtracting any scalar
+        # from it is decoration. The threshold was 0.6 in w3.
+        #
+        # Two exposures are tested because they answer different questions.
+        # Time-in-market asks whether holding longer earned more. Notional asks
+        # whether being bigger earned more. The first was measured and failed:
+        # r = 0.04 in w3. This is the second.
+        print("\ndoes P&L vary with exposure?  (pre-registered threshold: r>0.6)")
+        print("  a shared factor is only removable if one of these is high:")
+        for widx in range(WINDOWS):
+            nets = [
+                float(n[widx]) for _s, n, *_ in rows if widx < len(n)
+            ]
+            bars = [
+                _exposure_of(exposure_by_sid.get(s, []), widx)
+                for s, _n, *_ in rows
+            ]
+            notional = [
+                _notional_of_w(notional_by_sid.get(s, []), widx)
+                for s, _n, *_ in rows
+            ]
+            r_bars = _pearson(bars, nets)
+            r_not = _pearson(notional, nets)
+            verdict = "FACTOR IDENTIFIED" if max(r_bars, r_not) > 0.6 else "no factor"
+            print(
+                f"  w{widx + 1}  r(bars, p&l)={r_bars:6.3f}   "
+                f"r(notional, p&l)={r_not:6.3f}   {verdict}"
+            )
+
         print("\neach strategy against the null of its own window:")
         beats: list[tuple[str, int, float, float]] = []
         for sid, nets, _tr, _p, _t in rows:
@@ -528,19 +648,43 @@ async def main() -> int:
         # any reason other than being in the market".
         if os.environ.get("WINDOW_RESIDUAL"):
             print("\nafter removing the per-window market factor:")
-            residuals = _demean(rows, null_by_window)
-            resid_by_window: list[list[float]] = []
+            # The denominator, printed. A residual is unreadable without knowing
+            # what was subtracted, and a factor estimated from nothing is
+            # indistinguishable from a factor estimated from real exposure.
             for widx in range(WINDOWS):
-                pool = (
-                    [
-                        value - _median([n[widx] for _s, n, *_ in residuals
-                                         if widx < len(n)])
-                        for value in null_by_window[widx]
-                    ]
-                    if null_by_window[widx]
-                    else []
+                bars_here = [
+                    _exposure_of(exposure_by_sid.get(s, []), widx)
+                    for s, _n, *_ in rows
+                ]
+                print(
+                    f"  w{widx + 1}  bars in market={sum(bars_here):9.0f}  "
+                    f"net={sum(n[widx] for _s, n, *_ in rows if widx < len(n)):11.2f}"
+                    f"  factor={_market_factor(rows, exposure_by_sid, widx):8.4f}/bar"
                 )
-                resid_by_window.append(pool)
+            residuals = _demean(rows, notional_by_sid)
+            resid_by_window = _residual_pool(
+                null_by_window, null_notional, rows, notional_by_sid
+            )
+            # Pre-registered success criterion, written before this was run:
+            # after the factor is removed, what is left must not still track
+            # exposure. In the two windows where a factor was identified at all
+            # (w2 -0.722, w3 +0.673), the residual's correlation with notional
+            # must fall below 0.2. If it does not, the linear model is still
+            # wrong and subtracting more scalars will not help.
+            print("\n  did it work?  (criterion: |r(notional, residual)| < 0.2)")
+            for widx in range(WINDOWS):
+                net_resid = [
+                    float(r[widx]) for s, r in residuals if widx < len(r)
+                ]
+                weights = [
+                    _notional_of_w(notional_by_sid.get(s, []), widx)
+                    for s, _r in residuals
+                ]
+                after = _pearson(weights, net_resid)
+                print(
+                    f"  w{widx + 1}  r(notional, residual)={after:6.3f}"
+                    f"   {'clean' if abs(after) < 0.2 else 'STILL TRACKS EXPOSURE'}"
+                )
             kept = 0
             for sid, residual in residuals:
                 marks = []
@@ -573,38 +717,193 @@ async def main() -> int:
 
 def _demean(
     rows: list[tuple[str, list[float], list[int], int, int]],
-    null_by_window: list[list[float]],
+    exposure: dict[str, list[float]],
 ) -> list[tuple[str, list[float]]]:
-    """Strip the per-window market factor out of every strategy.
+    """Strip the per-window market factor out of every strategy, by exposure.
 
     Window three on BTC made every strategy look strong at once, with the
     random-timing null's own median positive in the same window. That is one
     market, not twenty discoveries, and measuring raw P&L credits each strategy
-    with the factor it did not earn.
+    with a factor it did not earn. So take the factor out.
 
-    So subtract the median across strategies, per window, from both the strategy
-    and the null it is compared against. The question becomes: does this
-    strategy do anything a randomly-timed position on the same market would not?
+    Take out the right thing, though. The factor is a *market*: it pays whoever
+    holds, in proportion to how much they hold. So the share of it that belongs
+    to a strategy is its own exposure over the total exposure, times the total:
 
-    The property that makes this safe to add is structural -- subtracting a
-    common factor can only *lower* an apparent result. It cannot manufacture a
-    winner, so it cannot be gamed by searching for a filter that happens to
-    flatter one strategy. A denoiser that could only improve the numbers would
-    be twenty-second strategy and another best-of-N draw.
+        residual = net - (exposure_i / sum_exposure) * sum_net
+
+    The previous version subtracted the median across strategies, which silently
+    assumed every strategy was exposed to the market equally -- exposure 1 for all
+    of them. `volatility_breakout_example` places zero trades on this series, so
+    its exposure is 0 and its net is 0, and median subtraction handed it
+    `0 - median`: a market position it never held. Measured on the 3000-bar BTC
+    daily run, that defect gave a strategy with a raw P&L of 0.00 in all four
+    windows residuals of -934.94, +901.76, -5319.45 and +188.87 -- non-zero
+    everywhere, sign following the peer median, and up to 5319 of apparent
+    skill-or-luck attributed to a strategy that never placed an order. It now
+    reads exactly 0.00 in every window. Note what that is and is not: the old
+    numbers were a wrong *level*, not a manufactured winner -- half of them were
+    negative. The bug was never "the denoiser promoted an inactive strategy", it
+    was "the denoiser reported a market position for a strategy that had none",
+    which makes the whole column unreadable rather than flattering.
+
+    The caller passes the weights, and it passes *notional per bar* rather than
+    trade count or bars held. Both earlier choices were measured and rejected.
+    Trade count is not exposure: a strategy holding for two years and one holding
+    for two weeks place the same handful of orders, and weighting by it removed
+    0-5% of the cross-sectional spread. Bars held was better but still wrong --
+    r = 0.103 against P&L in window three, because it counts time and ignores
+    size. Notional per bar correlates 0.673 in that same window. Weights are
+    passed in rather than derived here so that a silent fallback to trade count
+    cannot reappear inside this function.
+
+    What this is *not*, any more, is a common shift. It moves each strategy by a
+    different amount, so both the levels and the ranking can change -- and that is
+    the point, because a common shift cannot tell a strategy that avoided the
+    market from one that simply held less of it by luck. What survives from the
+    old safety argument is the part that was actually load-bearing: this cannot
+    manufacture a winner out of a strategy that never traded. Exposure 0 gives a
+    residual of exactly 0.0 by construction, not approximately, so no search over
+    filters can turn inactivity into a result.
+
+    And the honest limit of the whole thing: this does not work. Registered
+    before it was run, the criterion was that the residual must stop tracking
+    exposure -- |r| < 0.2. It reached -0.067 in window two and 0.165 in window
+    one, but only 0.435 in window three and 0.504 in window four, where it was
+    worse than before the subtraction. One scalar times one exposure cannot
+    represent this structure. The function is kept because the factor it removes
+    is real and now measurable, not because it has been shown to remove it.
     """
     out: list[tuple[str, list[float]]] = []
     for sid, nets, _tr, _p, _t in rows:
+        bars = exposure.get(sid) or []
         residual: list[float] = []
         for widx, value in enumerate(nets):
-            peers = [
-                other[widx]
-                for _s, other, _tr2, _p2, _t2 in rows
-                if widx < len(other)
-            ]
-            centre = _median(peers) if peers else 0.0
-            residual.append(float(value) - centre)
+            residual.append(
+                float(value)
+                - _exposure_of(bars, widx) * _market_factor(rows, exposure, widx)
+            )
         out.append((sid, residual))
     return out
+
+
+def _notional_of(out: list[dict[str, Any]] | None) -> float:
+    """Mean notional held per bar of the window -- exposure with the size in it.
+
+    `bars_in_position` says a book was in the market; this says how big it was
+    while it was there. A percent-of-equity book that tripled its equity has also
+    tripled its size, so the two strategies that differed most in the raw P&L were
+    the two that differed most in size, not in decisions.
+    """
+    if not out:
+        return 0.0
+    try:
+        block = out[-1].get("notional_exposure") or {}
+        return float(block.get("notional_per_bar") or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def _notional_of_w(notional: list[float], widx: int) -> float:
+    """Per-window notional, same never-negative guard as `_exposure_of`."""
+    if widx < 0 or widx >= len(notional):
+        return 0.0
+    return max(0.0, float(notional[widx]))
+
+
+def _pearson(xs: list[float], ys: list[float]) -> float:
+    """Correlation. Zero when either series is flat, which is itself the answer."""
+    n = len(xs)
+    if n < 2 or n != len(ys):
+        return 0.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    den = (
+        sum((x - mx) ** 2 for x in xs) * sum((y - my) ** 2 for y in ys)
+    ) ** 0.5
+    return (num / den) if den else 0.0
+
+
+def _bars_in_market_of(out: list[dict[str, Any]] | None) -> float:
+    """Bars this run spent in the market -- the exposure the denoiser divides by.
+
+    Read from the run's own metrics rather than reconstructed from its fills here:
+    the walk-forward evaluator already knows every bar and the position on it, and
+    re-deriving it in the reporting tool would be a second implementation of the
+    same idea, which is how the last three faults in this file happened.
+    """
+    if not out:
+        return 0.0
+    try:
+        return float((out[-1].get("exposure") or {}).get("bars_in_position") or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def _exposure_of(bars: list[float], widx: int) -> float:
+    """Bars in market for one window, which is that window's exposure.
+
+    Never negative and never negative-by-omission: a window whose exposure is
+    missing counts as no exposure, which is the conservative direction. Exposure
+    zero earns nothing from the market, so nothing is subtracted from it -- and a
+    strategy that never traded therefore reports exactly 0.0 rather than a
+    rounding artefact of whatever its peers did.
+    """
+    if widx < 0 or widx >= len(bars):
+        return 0.0
+    return max(0.0, float(bars[widx]))
+
+
+def _market_factor(
+    rows: list[tuple[str, list[float], list[int], int, int]],
+    exposure: dict[str, list[float]],
+    widx: int,
+) -> float:
+    """The window's own P&L per bar in market: what holding paid.
+
+    Zero when nobody held anything in that window. There is no factor to remove
+    from a window in which no strategy had a position, and inventing one -- as the
+    peer median did -- is how a single trade in a window becomes twenty apparent
+    discoveries.
+    """
+    total_exposure = 0.0
+    total = 0.0
+    for sid, nets, _tr, *_rest in rows:
+        if widx < 0 or widx >= len(nets):
+            continue
+        total_exposure += _exposure_of(exposure.get(sid) or [], widx)
+        total += float(nets[widx])
+    if total_exposure <= 0.0:
+        return 0.0
+    return total / total_exposure
+
+
+def _residual_pool(
+    null_by_window: list[list[float]],
+    null_exposure: list[list[float]],
+    rows: list[tuple[str, list[float], list[int], int, int]],
+    exposure: dict[str, list[float]],
+) -> list[list[float]]:
+    """The null's own residuals, stripped with the factor measured above.
+
+    Comparing a de-meaned strategy against a *raw* null compares two different
+    quantities and flatters whichever side kept the market. Each null run is
+    stripped with its own exposure -- the runs are independent of one another, so
+    each carried its own time in the market -- while the factor itself is the one
+    measured from the strategies in that window. A null run that was never in the
+    market is left untouched, for the same reason a strategy that never was: it
+    held nothing, so it earned nothing from the market to remove.
+    """
+    pools: list[list[float]] = []
+    for widx, values in enumerate(null_by_window):
+        factor = _market_factor(rows, exposure, widx)
+        exposures = null_exposure[widx] if 0 <= widx < len(null_exposure) else []
+        pools.append([
+            float(value) - _exposure_of(exposures, i) * factor
+            for i, value in enumerate(values)
+        ])
+    return pools
 
 
 def _median(values: list[float]) -> float:
@@ -660,6 +959,23 @@ def _net_of(rows: list[dict[str, Any]] | None) -> float:
     row = rows[-1]
     try:
         return float(row.get("pnl") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cost_of(rows: list[dict[str, Any]] | None) -> float:
+    """Total costs paid on a run_grid result.
+
+    The decomposition the tool was missing. Net P&L is one number with three
+    contributions -- the market, the strategy's own decisions, and the bill for
+    making those decisions -- and only the second is worth trading for. Without
+    this, "the strategy lost" cannot be separated from "the broker took it", and
+    the two call for opposite responses.
+    """
+    if not rows:
+        return 0.0
+    try:
+        return float(rows[-1].get("total_costs") or 0.0)
     except (TypeError, ValueError):
         return 0.0
 

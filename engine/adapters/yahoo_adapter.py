@@ -79,7 +79,7 @@ class YahooMarketDataAdapter:
             end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
         if start is None:
             # rough lookback from limit
-            days = max(limit * _interval_days(interval), 7)
+            days = max(limit * _interval_days(interval, class_code), 7)
             start_dt = end_dt - timedelta(days=int(days))
         else:
             start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
@@ -155,11 +155,44 @@ def _yahoo_interval(timeframe: str) -> str:
     return mapping.get(tf, "1d")
 
 
-def _interval_days(interval: str) -> float:
+#: Calendar days per trading day: 365 / 252 sessions. Daily bars arrive on trading
+#: days, so a lookback expressed in trading days must be widened by this much to
+#: cover the same span in calendar time.
+CALENDAR_DAYS_PER_TRADING_DAY = 365.0 / 252.0
+
+#: Hours a Western equity session trades. Crypto trades continuously, so the two
+#: asset classes need different intraday bar-to-calendar conversions and a single
+#: assumption is wrong for one of them.
+EQUITY_SESSION_HOURS = 6.5
+
+
+def _interval_days(interval: str, class_code: str = "") -> float:
+    """Calendar days one bar of this interval occupies.
+
+    Every branch over-requests rather than under-requests, and deliberately so. A
+    request that comes back short is a silent lie: the caller asked for N bars and
+    measures whatever fraction arrived, and the shortfall surfaces later as a
+    narrower sample rather than as an error. This one already did -- `1d` returned
+    1.0, so asking for 300 daily bars fetched 300 *calendar* days and came back
+    with about 206 bars of equity data, and every correlation computed on it was
+    quietly computed on two thirds of the intended sample.
+
+    `bars_per_trading_day` is the only thing that varies by asset class: crypto
+    trades continuously, so it has 24 bars an hour, while a Western equity session
+    is 6.25 hours of continuous trading inside a 6.5 hour session.
+    """
+    crypto = str(class_code).upper().startswith("CRYPTO")
+    session_hours = 24.0 if crypto else EQUITY_SESSION_HOURS
     if interval.endswith("m") and interval[:-1].isdigit():
-        return int(interval[:-1]) / (60 * 24)
-    if interval in {"1h", "60m"}:
-        return 1 / 24
-    if interval in {"1wk", "1w"}:
-        return 7
-    return 1.0
+        bars_per_day = session_hours * 60.0 / float(interval[:-1])
+    elif interval in {"1h", "60m"}:
+        bars_per_day = session_hours
+    elif interval in {"1wk", "1w"}:
+        # One bar per five trading days.
+        return CALENDAR_DAYS_PER_TRADING_DAY / 5.0
+    else:
+        # Daily and anything coarser: one trading day per bar.
+        return CALENDAR_DAYS_PER_TRADING_DAY
+    if bars_per_day <= 0:
+        return CALENDAR_DAYS_PER_TRADING_DAY
+    return CALENDAR_DAYS_PER_TRADING_DAY / bars_per_day

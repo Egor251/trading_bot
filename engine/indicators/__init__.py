@@ -608,6 +608,152 @@ def equity_pnl(
     }
 
 
+def exposure_from_fills(
+    fills: Sequence[dict[str, Any]],
+    *,
+    total_bars: int,
+) -> dict[str, float]:
+    """How long the book was actually in the market, counted in bars.
+
+    Net P&L is not a measure of skill. It is roughly the market's move multiplied
+    by how long the book was exposed to it, plus whatever the decisions added.
+    Nothing in the metrics carried that multiplier, so every comparison in this
+    project -- raw P&L against the random-timing null, the residual table, the
+    ranking that chose a lineup -- has been comparing gross exposure and
+    attributing the difference to a decision.
+
+    The size of that omission was measured rather than argued. On BTC/USDT 1d over
+    3000 bars, twelve strategies returned +5000 to +11000 in one window while the
+    random-timing null's median was +488, on comparable trade counts. The gap is
+    not frequency of trading; it is length of time held.
+
+    Fills carry `bar_index`, so this is recoverable rather than unknowable. A fill
+    at bar b that is next changed at bar c held the market for the bars between
+    them, and a position still open at the end of a window is held to the last
+    bar. Overlapping intervals are merged rather than summed, so scaling in twice
+    counts the stretch once. A `carry` fill -- a position opened to bridge a fold
+    boundary -- is counted like any other: the book was in the market while it was
+    held, and the reason it was opened is not what exposure means.
+
+    Additive on purpose: no existing metric changes value, and every consumer that
+    ignores this dictionary keeps its current behaviour.
+    """
+    if total_bars <= 0:
+        return {"bars_in_position": 0.0, "exposure_ratio": 0.0}
+    ordered = sorted(
+        (f for f in fills if float(f.get("quantity") or 0.0) > 0.0),
+        key=lambda f: int(f.get("bar_index") or 0),
+    )
+    if not ordered:
+        return {"bars_in_position": 0.0, "exposure_ratio": 0.0}
+
+    last_bar = max(int(ordered[-1].get("bar_index") or 0), total_bars - 1)
+    position = 0.0
+    held_from: int | None = None
+    intervals: list[list[int]] = []
+    for f in ordered:
+        index = int(f.get("bar_index") or 0)
+        action = str(f.get("action") or "").upper()
+        delta = float(f.get("quantity") or 0.0)
+        if action in {"BUY", "LONG"}:
+            position += delta
+        elif action in {"SELL", "SHORT", "CLOSE"}:
+            position -= delta
+        else:
+            continue
+        # Everything before this fill was held at the previous position.
+        if held_from is not None and index > held_from:
+            intervals.append([held_from, index - 1])
+            held_from = None
+        if abs(position) > 1e-12 and held_from is None:
+            held_from = index
+
+    if held_from is not None:
+        intervals.append([held_from, last_bar])
+
+    merged: list[list[int]] = []
+    for lo, hi in sorted(intervals):
+        lo = max(0, lo)
+        hi = min(total_bars - 1, hi)
+        if hi < lo:
+            continue
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+
+    bars = float(sum(hi - lo + 1 for lo, hi in merged))
+    return {
+        "bars_in_position": bars,
+        "exposure_ratio": bars / float(total_bars),
+    }
+
+
+def notional_exposure_from_fills(
+    fills: Sequence[dict[str, Any]],
+    *,
+    total_bars: int,
+) -> dict[str, float]:
+    """Bar-weighted notional held: the size multiplier that time alone misses.
+
+    `exposure_from_fills` answers "was the book in the market", and a 10%-of-equity
+    book and a 50%-of-equity book both answer yes. Net P&L is built out of size
+    *and* time, so a comparison that counts only bars treats those two books as the
+    same strategy and then reports the difference as a decision.
+
+    This is the integral of position value over time: each stretch of bars
+    contributes `|qty| * price * bars`. A scale-in closes the stretch at the old
+    quantity and opens a new one at the new quantity, so nothing is double counted
+    and no interval merging is needed -- this accumulates along the position path
+    rather than counting the set of bars a position occupied.
+
+    Valued at the price of the fill that established each stretch, not at every
+    intervening close: the fill ledger carries what was actually traded, and
+    revaluing bar by bar would need a price series the ledger does not carry. For
+    a book that holds rather than flips, entry and exit prices differ by the very
+    move being measured, so this is an approximation. Stated rather than dressed up
+    as exact -- and it is exact in the case that matters for the invariant, a book
+    that is flat, which contributes zero here as it does everywhere else.
+    """
+    empty = {"notional_bars": 0.0, "notional_per_bar": 0.0}
+    if total_bars <= 0:
+        return empty
+    ordered = sorted(
+        (f for f in fills if float(f.get("quantity") or 0.0) > 0.0),
+        key=lambda f: int(f.get("bar_index") or 0),
+    )
+    if not ordered:
+        return empty
+
+    last_bar = max(int(ordered[-1].get("bar_index") or 0), total_bars - 1)
+    position = 0.0
+    price = 0.0
+    held_from: int | None = None
+    notional_bars = 0.0
+    for f in ordered:
+        index = int(f.get("bar_index") or 0)
+        action = str(f.get("action") or "").upper()
+        if action not in {"BUY", "LONG", "SELL", "SHORT", "CLOSE"}:
+            continue
+        # Everything before this fill was held at the *previous* position, valued
+        # at the *previous* fill's price. Accumulating after applying the delta
+        # would charge every closing fill at the quantity it was closing down to,
+        # which is zero, and silently report a held position as no exposure.
+        if held_from is not None and index > held_from:
+            notional_bars += abs(position) * price * (index - held_from)
+        quantity = float(f.get("quantity") or 0.0)
+        position += quantity if action in {"BUY", "LONG"} else -quantity
+        price = float(f.get("price") or 0.0)
+        held_from = index if abs(position) > 1e-12 else None
+    if held_from is not None:
+        notional_bars += abs(position) * price * (last_bar - held_from + 1)
+
+    return {
+        "notional_bars": notional_bars,
+        "notional_per_bar": notional_bars / float(total_bars),
+    }
+
+
 class FormulaSeries:
     """
     Evaluate a SymPy expression over aligned series via cb_math / lambdify.

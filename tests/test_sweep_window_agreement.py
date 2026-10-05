@@ -523,49 +523,436 @@ def test_a_shared_market_factor_inflates_the_false_positive_rate() -> None:
     )
 
 
-def test_denoising_can_only_lower_an_apparent_result() -> None:
-    """The property that makes a denoiser safe to add at all.
+def test_the_contrarian_rule_makes_money_only_where_theres_something_to_exploit() -> None:
+    """A rule tested on series built to have a known answer, both ways.
 
-    A filter that could raise a strategy's number would be a twenty-second
-    strategy with extra steps, and searching for one that flatters a favourite
-    is the best-of-N illusion this project spent thirty commits removing.
-    Subtracting a common factor is monotone by construction: every residual is
-    the raw value minus the same peer median, so a strategy's position relative
-    to its peers is unchanged and its absolute number only falls.
+    The tradability check exists to say something about the real series, and it can
+    only do that if it demonstrably profits on a series that *has* the dependency
+    and demonstrably does not on one that has not. Both directions are pinned, so a
+    bug that inverts the sign -- which is exactly what an off-by-one-bar execution
+    lag produces -- fails here rather than producing a confident wrong answer about
+    Bitcoin.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import lag_rule_pnl
+
+    def _series(phi: float, seed: int = 3, n: int = 3000) -> tuple[list[float], list[float]]:
+        rng = random.Random(seed)
+        opens, closes = [100.0], [100.0]
+        prev = 0.0
+        for _ in range(1, n):
+            prev = phi * prev + rng.gauss(0, 0.02)
+            closes.append(closes[-1] * math.exp(prev))
+            opens.append(closes[-2])
+        return opens, closes
+
+    exploit = lag_rule_pnl(*_series(-0.15), cost_bps=0.0)
+    assert exploit["net"] > 1.0, (
+        f"a known phi of -0.15 must be profitable, got {exploit['net']:.3f}"
+    )
+    flat = lag_rule_pnl(*_series(0.0, seed=11), cost_bps=0.0)
+    assert flat["net"] < 0.0, (
+        "on a random walk the rule must lose -- if it wins on a series with no "
+        "dependency, it is inventing an edge"
+    )
+
+
+def test_out_of_sample_split_carries_the_sign_and_not_the_fit() -> None:
+    """A dependency must pay in a stretch that was not used to find it.
+
+    The in-sample gross is not evidence of anything: the coefficient is fitted on
+    the same bars the rule is run over. Both halves of a series built with a known
+    phi must therefore pay when the sign is carried across, and a random walk must
+    not -- which also catches the failure where the sign of the bar's own move is
+    dropped and the rule degenerates into a permanent short.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import out_of_sample_rule
+
+    def _series(phi: float, seed: int = 3, n: int = 3000):
+        rng = random.Random(seed)
+        opens, closes = [100.0], [100.0]
+        prev = 0.0
+        for _ in range(1, n):
+            prev = phi * prev + rng.gauss(0, 0.02)
+            closes.append(closes[-1] * math.exp(prev))
+            opens.append(closes[-2])
+        return opens, closes
+
+    o, c = _series(-0.15)
+    first = out_of_sample_rule(o, c, cost_bps=10.0)
+    second = out_of_sample_rule(o, c, cost_bps=10.0, reverse=True)
+    assert first["trades"] > 100, (
+        f"the rule must actually trade, got {first['trades']:.0f} position changes"
+    )
+    assert first["gross"] > 0.5 and second["gross"] > 0.5, (
+        f"both halves must pay: {first['gross']:.3f} / {second['gross']:.3f}"
+    )
+
+    o2, c2 = _series(0.0, seed=11)
+    flat = out_of_sample_rule(o2, c2, cost_bps=10.0)
+    assert flat["gross"] < 0.5, (
+        "a random walk must not pay out of sample, or the test measures nothing"
+    )
+
+
+def test_costs_decide_the_contrarian_rule_and_the_breakeven_says_where() -> None:
+    """A free edge that cannot survive costs is not an edge, and the number is
+    worth having rather than assumed.
+
+    The check runs the rule at several cost levels, so it must be monotone in cost:
+    more cost can only make the rule worse. And `breakeven_cost_bps` has to agree
+    with the point where the net crosses zero.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import breakeven_cost_bps, lag_rule_pnl
+
+    rng = random.Random(3)
+    opens, closes = [100.0], [100.0]
+    prev = 0.0
+    for _ in range(2999):
+        prev = -0.15 * prev + rng.gauss(0, 0.02)
+        closes.append(closes[-1] * math.exp(prev))
+        opens.append(closes[-2])
+
+    nets = [lag_rule_pnl(opens, closes, cost_bps=c)["net"] for c in (0.0, 5.0, 25.0)]
+    assert nets[0] > nets[1] > nets[2], f"costs must be monotone: {nets}"
+    assert breakeven_cost_bps(phi=0.07, sigma=0.04) > 0.0
+    assert breakeven_cost_bps(phi=0.0, sigma=0.04) == 0.0, (
+        "no dependency means the rule must be worth exactly nothing"
+    )
+
+
+def test_daily_lookback_is_expressed_in_calendar_days_not_trading_days() -> None:
+    """The defect that silently fed this sweep two thirds of the sample it asked for.
+
+    `_interval_days("1d")` returned 1.0, so a request for 300 daily bars fetched
+    300 *calendar* days and came back with ~206 bars of equity data. Nothing errored;
+    the correlation was simply computed on a smaller sample than the one the caller
+    believed it had. This is the same shape as the nine other measurement faults in
+    this project: a quantity that silently comes back wrong.
+
+    The direction that matters is that every branch must over-request. Coming back
+    short is a lie the caller cannot see; asking for slightly too much costs
+    nothing but a wider range query.
+    """
+    from engine.adapters.yahoo_adapter import (
+        CALENDAR_DAYS_PER_TRADING_DAY,
+        _interval_days,
+    )
+
+    assert abs(CALENDAR_DAYS_PER_TRADING_DAY - 365.0 / 252.0) < 1e-9
+    assert _interval_days("1d") > 1.0, (
+        "a daily bar is one trading day, which is more than one calendar day"
+    )
+    assert abs(_interval_days("1d") - 365.0 / 252.0) < 1e-9
+    # 300 daily bars must span enough calendar days to contain 300 sessions.
+    assert 300 * _interval_days("1d") / CALENDAR_DAYS_PER_TRADING_DAY >= 300
+    # Intraday: crypto trades 24h, equities 6.5h, so crypto needs fewer calendar
+    # days for the same number of bars and must not be asked for more.
+    assert _interval_days("1h", "CRYPTO") < _interval_days("1h", "EQUITY")
+    assert abs(_interval_days("1w") - CALENDAR_DAYS_PER_TRADING_DAY / 5.0) < 1e-9
+
+
+def test_resampling_aggregates_rather_than_samples_and_drops_the_ragged_tail() -> None:
+    """Weekly returns must be five daily bars compounded, not five daily bars picked.
+
+    Sampling every fifth close would manufacture a different series with different
+    autocorrelation and no relation to what a weekly holder would have lived
+    through. And an incomplete final group is not a shorter bar -- treating it as
+    one puts a spurious jump into a return series.
+    """
+    from tools.edge_ceiling import log_returns, resample
+
+    closes = [float(100 + i) for i in range(23)]
+    weekly = resample(closes, 5)
+    assert weekly == [104.0, 109.0, 114.0, 119.0], (
+        "one close per completed group, taken at the LAST daily bar of the group -- "
+        "a weekly bar closes on Friday, not on the next Monday"
+    )
+    assert len(resample(closes, 1)) == len(closes), "group=1 must be identity"
+    assert resample(closes, 5)[-1] != closes[-1], (
+        "the partial tail must be dropped, not reported as a final bar"
+    )
+    assert len(resample(closes, 5)) == 23 // 5, "only complete groups survive"
+    # And the resampled series must still be usable as a price series.
+    assert len(log_returns(weekly)) == len(weekly) - 1
+
+
+def test_the_traded_rule_follows_the_sign_of_the_dependence_it_is_given() -> None:
+    """One rule, both directions, so a positive phi can be tested by the same code.
+
+    A sweep over asset classes is only worth running if the instrument can profit
+    on a series built to have a *positive* dependence. If it only knows how to be
+    contrarian, every positive reading in the sweep is unattributable.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import lag_rule_pnl
+
+    def _series(phi: float, seed: int = 5, n: int = 3000):
+        rng = random.Random(seed)
+        opens, closes = [100.0], [100.0]
+        prev = 0.0
+        for _ in range(1, n):
+            prev = phi * prev + rng.gauss(0, 0.02)
+            closes.append(closes[-1] * math.exp(prev))
+            opens.append(closes[-2])
+        return opens, closes
+
+    o, c = _series(0.15)
+    momentum = lag_rule_pnl(o, c, cost_bps=0.0, lean=1.0)
+    contrarian = lag_rule_pnl(o, c, cost_bps=0.0, lean=-1.0)
+    assert momentum["net"] > 1.0, (
+        f"a positive dependence must be profitable to a momentum rule: "
+        f"{momentum['net']:.3f}"
+    )
+    assert contrarian["net"] < momentum["net"], (
+        "the same rule pointed the other way must not be the better one"
+    )
+
+
+def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
+    """The ceiling measurement is only worth anything if its estimators are honest.
+
+    Three series with known properties, so a broken estimator cannot quietly
+    produce a confident-looking number:
+
+      white noise      -- must read phi ~ 0 and VR ~ 1
+      AR(1) with 0.20  -- must recover the coefficient and report VR > 1
+      drift only       -- a constant mean is not predictability, and an estimator
+                          that confuses the two would call every bull market an edge
+    """
+    import random
+
+    from tools.edge_ceiling import ar1, variance_ratio
+
+    rng = random.Random(7)
+
+    white = [rng.gauss(0, 0.02) for _ in range(4000)]
+    assert abs(ar1(white)["phi"]) < 0.05, "white noise has no autocorrelation"
+    assert abs(ar1(white)["t"]) < 3.0, "and must not look significant anyway"
+    assert abs(variance_ratio(white, 2)["vr"] - 1.0) < 0.10
+
+    ar_series: list[float] = []
+    prev = 0.0
+    for _ in range(4000):
+        prev = 0.20 * prev + rng.gauss(0, 0.02)
+        ar_series.append(prev)
+    recovered = ar1(ar_series)
+    assert abs(recovered["phi"] - 0.20) < 0.05, (
+        f"a known 0.20 must be recovered, got {recovered['phi']:.4f}"
+    )
+    assert recovered["t"] > 5.0
+    assert variance_ratio(ar_series, 2)["vr"] > 1.05, (
+        "positive autocorrelation must show up in the variance ratio too"
+    )
+
+    drift = [0.001 + rng.gauss(0, 0.02) for _ in range(4000)]
+    assert abs(ar1(drift)["phi"]) < 0.05, (
+        "a constant drift is a level, not predictability; calling it an edge "
+        "would make every trending market look like an opportunity"
+    )
+
+
+def test_a_null_result_is_only_as_strong_as_the_sample_allows() -> None:
+    """Why the per-window numbers in that tool cannot be called anything.
+
+    The standard error of an AR(1) coefficient behaves like 1/sqrt(n), so a sample
+    of 749 bars cannot distinguish a true 0.05 from zero -- only 0.072 and above.
+    This is the arithmetic that makes "no signal here" a statement about the
+    sample size before it is a statement about the market, and it is why the
+    pooled figure is the one worth reading.
+    """
+    from tools.edge_ceiling import resolvable_phi
+
+    assert abs(resolvable_phi(3000) - 0.0358) < 0.001
+    assert abs(resolvable_phi(749) - 0.0716) < 0.001
+    assert resolvable_phi(749) > 0.05, (
+        "749 bars cannot resolve the smallest edge the power sweep detects"
+    )
+    assert resolvable_phi(3000) < 0.05, "3000 bars can"
+    assert abs((1.96 / 0.05) ** 2 - 1536.6) < 1.0, (
+        "resolving the smallest detectable edge needs about 1537 bars"
+    )
+
+
+def test_power_harness_reproduces_the_noise_rate_when_there_is_no_edge() -> None:
+    """The injection harness must not change the answer when it injects nothing.
+
+    Every negative result in this project is "nothing cleared p90 above the noise
+    floor". That is only evidence of absence if the instrument would have noticed
+    something real, and nothing here had ever checked. So the check has to be
+    grounded: with `phi=0` the power sweep must land on the same rate the
+    false-positive calibration already reports, and a large real edge must move it
+    a long way. If the injection harness shifted the baseline, every number the
+    sweep produces afterwards would be about the harness rather than the market.
+    """
+    import random
+
+    from tools.null_calibration import _draw
+
+    def _rate(phi: float, trials: int = 40) -> float:
+        rng = random.Random(20261005)
+        cleared = sum(
+            _draw(
+                rng,
+                structure="market",
+                strategies=6,
+                windows=2,
+                per_window=64,
+                phi=phi,
+            )
+            for _ in range(trials)
+        )
+        return cleared / (trials * 6 * 2)
+
+    none = _rate(0.0)
+    strong = _rate(0.80)
+    assert 0.05 < none < 0.35, (
+        f"phi=0 must reproduce the calibrated noise rate, got {none:.3f}"
+    )
+    assert strong > 0.85, (
+        f"a large real edge must be obvious or the instrument is blind: "
+        f"{strong:.3f}"
+    )
+    assert strong > none + 0.4, "detection must respond monotonically to size"
+
+
+def test_edge_maths_is_expressed_in_autocorrelation_not_arbitrary_units() -> None:
+    """The sweep is only meaningful if its axis means something outside this repo.
+
+    `phi` is the share of each bar's move knowable from the previous bar, so a
+    reader can compare it against an estimated autocorrelation on real data. The
+    conversion is exact: E|z| = sqrt(2/pi) for a standard normal, against per-bar
+    noise of sigma, over per_window bars.
+    """
+    import math
+
+    from tools.null_calibration import _edge_per_window, _snr
+
+    assert _edge_per_window(0.0, 64) == 0.0
+    expected_snr = 0.10 * math.sqrt(2.0 / math.pi) * math.sqrt(64)
+    assert abs(_snr(0.10, 64) - expected_snr) < 1e-12
+    # An edge with no noise would be all of the window's return.
+    assert _edge_per_window(1.0, 1) > 0.0
+
+
+def test_denoising_gives_a_strategy_that_never_traded_exactly_zero() -> None:
+    """The defect this replaced, pinned so it cannot come back.
+
+    The denoiser used to subtract the median across strategies, which quietly
+    assumed every strategy was exposed to the market equally -- exposure 1 for all
+    of them. `volatility_breakout_example` places zero trades on this series, so
+    its exposure is 0 and its net is 0, and the median subtraction handed it
+    `0 - median`: a market position it never held. On the 3000-bar BTC daily run
+    that produced residuals of -934.94, +901.76, -5319.45 and +188.87 for a
+    strategy whose raw P&L was 0.00 in all four windows.
+
+    Worth being precise about the severity, because the version of this story that
+    said "it reached p95 in every window" is not what the numbers do. Half of
+    those residuals are negative, because the sign follows the peer median. So the
+    bug did not promote an inactive strategy to a winner -- it gave a strategy
+    with no position a non-zero market exposure in every window, up to 5319 of it,
+    which makes the column unreadable. The fix is exposure weighting, and the
+    guarantee it buys is exact: exposure 0 leaves residual exactly 0.0.
+
+    The peers below are chosen so the median is firmly positive. Under the old
+    formula this strategy would have read -50.0 instead of zero here.
+    """
+    import statistics
+
+    from tools.window_stability import _demean
+
+    rows = [
+        ("quiet", [0.0, 0.0], [0, 0], 0, 2),
+        ("a", [110.0, 10.0], [4, 2], 2, 2),
+        ("b", [50.0, -20.0], [2, 2], 1, 2),
+    ]
+    assert statistics.median([n[0] for _s, n, *_ in rows]) == 50.0, (
+        "the median must be non-zero here, or this test cannot tell the two "
+        "formulas apart"
+    )
+    residuals = dict(_demean(rows, {
+        "quiet": [0.0, 0.0],
+        "a": [300.0, 150.0],
+        "b": [120.0, 200.0],
+    }))
+    assert residuals["quiet"] == [0.0, 0.0], (
+        "a strategy with no exposure earns nothing from the market and so has "
+        "nothing to have it credited"
+    )
+    # Window two has a negative factor, which *raises* residuals -- the old
+    # "can only lower an apparent result" argument does not survive exposure
+    # weighting, and pretending otherwise would be the error this test is for.
+    assert residuals["a"][1] > 10.0
+    # Still not a winner. Exactly zero is the strongest guarantee available: no
+    # filter search can turn inactivity into a result.
+    assert all(v == 0.0 for v in residuals["quiet"])
+
+
+def test_denoising_removes_the_market_share_a_position_actually_carried() -> None:
+    """The definition, spelled out so the formula cannot drift.
+
+    The market factor is the window's total P&L per unit of exposure. A strategy
+    holds a share of the total exposure, so it carries that share of the factor,
+    and what is left is what it did that the market did not do for it.
     """
     from tools.window_stability import _demean
 
     rows = [
-        ("a", [100.0, 10.0], [1, 1], 1, 2),
-        ("b", [50.0, 20.0], [1, 1], 1, 2),
-        ("c", [-20.0, -5.0], [1, 1], 0, 2),
+        ("a", [110.0, 10.0], [4, 2], 2, 2),
+        ("b", [50.0, -20.0], [2, 2], 1, 2),
+        ("c", [-70.0, 5.0], [3, 1], 1, 2),
     ]
-    residuals = dict(_demean(rows, [[], []]))
-    for sid, nets, *_ in rows:
-        centre_before = 0.0
-        for i, raw in enumerate(nets):
-            peers = [r[1][i] for r in rows]
-            import statistics
-
-            centre_before = statistics.median(peers)
-            assert residuals[sid][i] == raw - centre_before, (
-                "the residual must be raw minus the peer median"
+    bars = {"a": [300.0, 150.0], "b": [120.0, 200.0], "c": [80.0, 30.0]}
+    residuals = dict(_demean(rows, bars))
+    for widx in range(2):
+        exposure = sum(bars[s][widx] for s in bars)
+        net = sum(n[widx] for _s, n, *_ in rows)
+        for sid, nets, _tr, *_ in rows:
+            share = bars[sid][widx] / exposure
+            assert residuals[sid][widx] == nets[widx] - share * net, (
+                "the residual must be net minus this strategy's exposure share "
+                "of the window's total P&L"
             )
-        # And the residual cannot exceed the raw value while the median is
-        # non-negative, which is the direction that matters here.
-        for raw, resid in zip(nets, residuals[sid]):
-            assert resid <= raw or True  # documented below, not asserted
 
 
-def test_denoising_ranks_strategies_by_the_same_order() -> None:
-    """Denoising changes levels, not ordering -- which is the point.
+def test_a_lone_trader_is_the_market_and_residual_reads_zero() -> None:
+    """One strategy in a window leaves nothing behind after the factor.
 
-    If it reordered strategies it would be doing something other than removing a
-    common factor, and the interpretation "this strategy does better than its
-    peers" would stop following from it.
+    It is worth stating what the residual can and cannot distinguish. With a
+    single position in the window, that position *is* the market, so its residual
+    is exactly zero: skill and market are not separable there. This is why the
+    null runs the same bars and is compared against, rather than the factor
+    alone being trusted to answer the question.
     """
-    import statistics
+    from tools.window_stability import _demean
 
+    rows = [
+        ("solo", [100.0], [1], 1, 1),
+        ("quiet", [0.0], [0], 0, 1),
+    ]
+    residuals = dict(_demean(rows, {"solo": [700.0], "quiet": [0.0]}))
+    assert residuals["solo"] == [0.0]
+    assert residuals["quiet"] == [0.0]
+
+
+def test_equal_exposure_still_shifts_every_strategy_by_the_same_amount() -> None:
+    """The part of the old safety argument that does survive.
+
+    When every strategy holds the same share of the window, the factor is a
+    common shift and the ranking is untouched -- levels move, order does not. That
+    is the case in which "denoising" cannot flatter anyone. It is no longer the
+    general case, and the test says so by being limited to it.
+    """
     from tools.window_stability import _demean
 
     rows = [
@@ -573,13 +960,46 @@ def test_denoising_ranks_strategies_by_the_same_order() -> None:
         ("b", [-5.0, 20.0], [1, 1], 1, 2),
         ("c", [3.0, -8.0], [1, 1], 0, 2),
     ]
-    residuals = dict(_demean(rows, [[], []]))
+    residuals = dict(_demean(rows, {
+        "a": [100.0, 100.0], "b": [100.0, 100.0], "c": [100.0, 100.0],
+    }))
     for i in range(2):
         raw_order = [s for s, *_ in sorted(rows, key=lambda r: -r[1][i])]
         res_order = [
             s for s, *_ in sorted(rows, key=lambda r: -residuals[r[0]][i])
         ]
         assert raw_order == res_order
-        assert statistics.median(
-            [residuals[s][i] for s in residuals]
-        ) == 0.0, "the median residual must be exactly zero by construction"
+        shifts = {
+            round(nets[i] - residuals[sid][i], 9)
+            for sid, nets, _tr, *_ in rows
+        }
+        assert len(shifts) == 1, "equal exposure must mean an equal shift"
+
+
+def test_the_null_is_stripped_with_the_same_factor() -> None:
+    """Comparing a de-meaned strategy against a raw null compares two different
+    quantities.
+
+    Each null run is stripped with its own exposure, because the runs are
+    independent of one another and each carried its own position size. A run that
+    placed no trades is left alone: it held nothing, so there was nothing for the
+    market to pay it.
+    """
+    from tools.window_stability import _residual_pool
+
+    rows = [
+        ("a", [100.0], [4], 1, 1),
+        ("b", [50.0], [2], 1, 1),
+    ]
+    bars = {"a": [400.0], "b": [200.0]}
+    # total net 150 over total exposure 600 bars -> 0.25 per bar in market
+    pool = _residual_pool(
+        [[40.0, 60.0, -20.0]], [[300.0, 400.0, 0.0]], rows, bars
+    )
+    assert pool == [[-35.0, -40.0, -20.0]], (
+        "each null run loses only the factor its own exposure carried"
+    )
+    assert pool[0][2] == -20.0, (
+        "a null run that was never in the market holds none and must not be "
+        "credited with any"
+    )

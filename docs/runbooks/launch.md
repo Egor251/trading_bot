@@ -497,6 +497,487 @@ no edge by construction, so a strategy that clears p90 against it is a false
 positive *by definition* — the draws cannot find an edge, they can only measure
 whether the measuring works.
 
+### The market factor is stripped by exposure, not by median
+
+`WINDOW_RESIDUAL=1` repeats the comparison after removing what the market paid
+everyone. A market pays whoever holds, in proportion to how much they hold, so
+what belongs to one strategy is its share of the window's total exposure times the
+window's total P&L:
+
+```
+residual = net - (exposure_i / sum_exposure) * sum_net
+```
+
+```bash
+$env:WINDOW_RESIDUAL="1"
+python -m tools.window_stability 1d BTC/USDT 3000 4 20
+```
+
+**The denominator used to be wrong.** Subtracting the median across strategies
+assumed exposure 1 for every strategy. `volatility_breakout_example` places zero
+trades here, so it has exposure 0 and net 0, and median subtraction handed it
+`0 − median`: a market position it never held. Measured on this run, that gave a
+strategy with a raw P&L of **0.00 in all four windows** residuals of **−934.94,
++901.76, −5319.45, +188.87** — non-zero everywhere, sign following the peer median.
+It now reads **exactly 0.00 (p45–p50) in every window**, which is the only honest
+number for a strategy that never placed an order.
+
+Severity stated precisely, because an earlier version of this note claimed it read
+p95 in every window and that is not what the numbers do: half those residuals are
+negative. The bug never promoted an inactive strategy to a winner — it gave a
+strategy with no position a market exposure in every window, up to 5319 of it.
+
+`trades` is the exposure proxy: the same count the zero-trade guard already treats
+as proof that no P&L can exist, so the denominator and the invariant cannot drift
+apart. It assumes P&L scales with trade count rather than with held notional or
+time in position, and a strategy that trades small and often is under-weighted by
+it. The result row carries no notional. Known gap, stated rather than replaced by
+another wrong denominator.
+
+#### Measured: removing the factor does not clear the field
+
+| BTC/USDT 1d, 3000 bars, 4 windows | windows at or above p90 |
+|---|---|
+| raw P&L | **12 / 84** |
+| after removing the market factor (time-weighted) | **11 / 84** |
+| after removing the market factor (notional-weighted) | **14 / 84** |
+
+The raw count reproduces the 12/84 already recorded above. All three counts sit at
+or below the calibrated **16–18 of 84** noise floor for this window structure, so
+**nothing here clears the noise** and all 21 strategies remain `research_only`.
+
+Note the middle column is the honest one: swapping the denominator moved the count
+by three windows. A filter whose own settings change the answer by 11% of the
+sample is not a filter to draw conclusions from. The denominator below was chosen
+on a correlation test registered before the run, not on which count looked better.
+
+### What P&L is actually built out of
+
+Three explanations for why no strategy separates were tested. Two were refuted by
+measurement, one survived, and the survivor only works half way.
+
+**Turnover mismatch** — a null trading more often than the strategies would inflate
+the p90 bar it defines. Refuted: strategies place 6.05–8.05 orders per window and
+the null 5.95–6.50, a ratio of 0.83–1.07x. `forbid_net_flip` runs research
+long/flat, which collapses the null's turnover to match.
+
+**Cost drag** — the bill for making decisions could be crushing everything. Refuted:
+2.51–5.32 per window against P&Ls of ±5000, about 0.05%.
+
+**Exposure** — net P&L is the market's move multiplied by how long and how big the
+book was, so comparing gross P&L compares exposure and calls the difference skill.
+This one is real, and it took two attempts to pin down:
+
+| proxy | r(exposure, P&L) in w3 | verdict |
+|---|---|---|
+| `trades` | not a proxy at all — a strategy holding two years and one holding two weeks both place a handful of orders | rejected |
+| `bars_in_position` | **0.103** | rejected |
+| notional per bar | **0.673** | factor identified |
+
+Across all four windows the notional correlation is 0.210, **−0.722**, 0.673,
+0.278. The two large values are w2 (total P&L −38 409) and w3 (+49 054); the two
+calm windows are w1 (+3 406) and w4 (−4 115). A factor that shows up when the
+market moves and disappears when it doesn't is a market factor.
+
+Both metrics are new and neither existed anywhere in the stack before this:
+`exposure_from_fills` (bars held, merging overlapping stretches so a scale-in
+counts once) and `notional_exposure_from_fills` (the integral of position value
+over time, valued at each stretch's entry fill because the ledger carries no
+per-bar price series). Both are additive: no existing metric changes value.
+
+### The denoiser still does not work, and the criterion that said so was registered first
+
+After removing `notional × (total net / total notional)`, the residual must stop
+tracking exposure. Registered before the run: **|r(notional, residual)| < 0.2**.
+
+| window | before | after | |
+|---|---|---|---|
+| w1 | 0.210 | 0.165 | clean |
+| w2 | −0.722 | −0.067 | clean |
+| w3 | 0.673 | **0.435** | still tracking exposure |
+| w4 | 0.278 | **0.504** | worse than before |
+
+**The criterion failed.** The linear exposure-proportional scalar removes the
+dependence in w2 and most of it in w3, leaves a third of it in w3, and *adds* it
+in w4 — a window where there was no factor to remove in the first place. One
+scalar times one exposure cannot represent this structure, and subtracting more of
+them would only make w4 worse.
+
+So the honest position: the factor is real, it is measurable, it is now instrumented
+end to end, and the denoiser built on it is still an approximation that has failed
+its own test. The raw count is the one to quote.
+
+`time_series_momentum` stays negative after the factor is removed (w1 −3933.81,
+p5) and clears p90 in no window. Its parameters stay at the article's values on
+purpose: tuning them until a plus appears is best-of-N selection, which is the
+illusion this whole measurement exists to catch.
+
+### The binding constraint is arithmetic, not signal
+
+Four windows and twenty strategies cannot express a claim at all. The best p-value
+any strategy can reach by being positive in every window is `P(4/4) = 0.0625`,
+against a Bonferroni threshold of `0.05/20 = 0.0025`. Measured sign consistency
+today: `ma_cross_example` and `mean_reversion_example` at 4/4, expected 1.25 such
+out of 20 by chance, observed 2. Noise.
+
+| windows | best achievable p | reachable |
+|---|---|---|
+| 4 | 0.0625 | no |
+| 8 | 0.0039 | no |
+| **10** | **0.00098** | **yes** |
+| 16 | 0.00002 | yes |
+
+**At least 10 windows, and 16 to be comfortable, before any result can be
+significant — regardless of how good the strategies are.** Adding more strategies
+makes this worse, not better: it divides the threshold further.
+
+The other missing measurement was **power**: `tools/null_calibration.py` measured the
+false-positive rate and nothing had ever checked whether the instrument can see a
+*real* edge. It has now, and the answer reverses the standing worry.
+
+### Power: the instrument works
+
+An edge is injected as predictable next-bar returns. `phi` is the share of each
+bar's move knowable in advance from the previous bar — the fraction of return
+autocorrelation that would have to exist. The conversion is exact
+(`E|z| = sqrt(2/pi)` against per-bar noise `sigma`), so the axis means something
+outside this file.
+
+```bash
+python -m tools.null_calibration
+```
+
+| phi | snr | windows clearing p90 | vs noise |
+|---|---|---|---|
+| 0.00 | 0.00 | 19.6% | — |
+| 0.05 | 0.32 | 26.2% | +6.5 pp |
+| 0.10 | 0.64 | 33.9% | +14.3 pp |
+| 0.20 | 1.28 | 51.6% | +32.0 pp |
+| 0.30 | 1.92 | 68.4% | +48.7 pp |
+| 0.50 | 3.19 | 91.1% | +71.4 pp |
+| 0.80 | 5.11 | 99.6% | +80.0 pp |
+
+`phi = 0` lands on 19.6% against the 19.5% the false-positive calibration already
+reported, which is the harness checking itself: injecting nothing must not move the
+answer, and it does not.
+
+**So the negatives are informative after all.** An edge of `phi = 0.05` — five
+percent of each bar's move predictable — already lifts detection 6.5 pp above the
+noise floor. The observed counts (11–14 of 84) sit at or below that floor, so none
+of these 21 strategies carries a predictable component even at that threshold. The
+worry that "no strategy cleared p90" was equally consistent with "the instrument is
+too blunt to see" is now settled in the other direction.
+
+The honest limit is resolution, not blindness. Going from the noise floor to 50%
+takes `phi ≈ 0.20` — a fifth of every bar's move predictable, which is not a
+market, it is a broken random number generator. So this method cleanly separates
+"nothing" from "a great deal", and has little resolution in between.
+
+**Per-window detection does not improve with more windows** — 70.5% / 68.5% /
+68.7% / 68.5% at 4 / 8 / 16 / 32 windows. It has to be flat: p90 is judged inside
+one window against one null, so the window count is not in that calculation. What
+more windows buy is the ability to make a claim at all, which is the reachability
+table above — exact, `best p = 2^-windows` against `0.05/S`, and unchanged by any
+improvement in data quality. An earlier draft of this tool claimed power rose with
+windows; it does not, and the claim was a family-level statistic under a per-window
+heading.
+
+### The ceiling: how predictable is the market itself?
+
+Every negative result has a second explanation that had never been excluded — the
+*market* may be unpredictable, in which case no strategy could have found anything
+and the measurement was never at fault. That is measurable without running a single
+strategy, because the power axis is an autocorrelation and correlations can be
+estimated on the price series directly.
+
+```bash
+python -m tools.edge_ceiling 1d BTC/USDT,ETH/USDT 3000 4
+```
+
+| series | AR(1) phi | se | t | VR(2) | VR(5) | VR(10) |
+|---|---|---|---|---|---|---|
+| BTC/USDT 1d | **−0.0677** | 0.0299 | −2.26 | 0.933 | 0.965 | 1.005 |
+| ETH/USDT 1d | **−0.0721** | 0.0276 | −2.61 | 0.928 | 0.969 | 1.008 |
+
+Newey-West standard errors, because an i.i.d. one errs in the convenient direction
+on heteroskedastic returns.
+
+Two findings, and the second is the important one.
+
+**There is no positive predictability of any size.** Both series are *below* the
+detection floor of 0.05 in magnitude — so nothing this method could notice exists.
+At longer lags both variance ratios sit on 1.000 and 1.008: consistent with a random
+walk. There is no trend to ride at the daily scale of these assets.
+
+**The one dependency that is there has the wrong sign.** Lag-1 autocorrelation is
+significantly *negative*, −0.07 on both, t = −2.26 and −2.61. Research runs
+long/flat (`forbid_net_flip`), so this lineup can only be long; a long entry after
+an up day is buying into a statistically adverse next bar. A trend-following lineup
+is not failing to find an edge of detectable size — it is on the adverse side of
+the only dependency present. That is the answer to *why it doesn't work here*, and
+it is a property of the price series, not of the strategy list.
+
+Caveat, stated because it is the obvious objection: a negative lag-1 autocorrelation
+at daily scale is frequently microstructure rather than something tradable. Nothing
+here claims it is harvestable — only that it is the wrong sign to be exploited by a
+long-only lineup, and that no positive autocorrelation of any size exists for it to
+exploit.
+
+Per-window `phi` is 0.024 to 0.132 across all eight windows and **none of them is
+significant**, because a 748-bar window cannot resolve less than 0.072
+(`1.96/sqrt(n)`). Only the pooled figure is strong enough to read, which is exactly
+what that arithmetic is for.
+
+### Ten windows: the first design that can express a claim
+
+```bash
+python -m tools.window_stability 1d BTC/USDT 3300 10 20
+```
+
+The daily depth is the binding constraint and it is hard: requesting 12 000 bars
+returns **3 336** — about nine years, and no further. Ten windows therefore means
+**329 bars each**, just under a year.
+
+| | windows at or above p90 | rate |
+|---|---|---|
+| raw P&L | 28 / 210 | 13.3% |
+| after removing the market factor | 30 / 210 | 14.3% |
+
+Both **below** the calibrated ~19.5% noise floor for this window structure.
+
+The registered test was whether any strategy is positive in *all ten* windows, since
+`P(10/10) = 0.00098` is the first outcome that clears Bonferroni at 21 strategies
+(`0.05/21 = 0.00238`). Expected under chance: **0.020 strategies**. Observed:
+**zero**.
+
+The closest miss is `volume_impulse_example` at 9/10 positive, raw and after
+demeaning alike. It does not survive its own test, and the reason is worth keeping:
+`0.5^9 = 0.00195` looks like it clears 0.0025 until you count two things — that
+`0.5^k` is `P(X=k)` and not the one-sided tail `P(X>=k) = 0.01074`, and that twenty
+strategies were measured. The corrected figure is **0.215**. One strategy out of
+twenty reaching 9/10 is expected roughly one time in five by chance alone.
+
+Two further things did not survive contact with more windows. The market factor was
+identified in **1 of 10** windows (r = 0.798 in w4), against 2 of 4 with 749-bar
+windows — fewer bars per window means less signal to estimate a factor from. And the
+denoiser's criterion was met in only **4 of 10** windows, failing badly in w4
+(0.719), w5 (−0.629), w6 (0.549) and w1 (−0.566). Short windows make the linear
+exposure model worse, not better.
+
+So: the design now *can* state a claim, and the claim it states is that none of these
+twenty strategies has an edge. That is a stronger statement than any previous run in
+this project, because it is the first one where the design was capable of expressing
+a negative.
+
+### The negative dependency is not tradable
+
+One lead survived the ceiling measurement: the lag-1 dependence is *negative*, so
+the signal is a short. Research runs long/flat, so it is structurally unreachable —
+which made it worth one direct test rather than an argument.
+
+The rule is fully determined by the measured coefficient and nothing else: short
+after an up bar, long after a down bar, flat otherwise. No parameter, no threshold,
+nothing to tune. Signal from the close of bar *t*, held from the open of *t+1* —
+filling on the signal bar would be lookahead and would just report the coefficient
+back to itself.
+
+| | BTC/USDT | ETH/USDT |
+|---|---|---|
+| phi | −0.0677 (t = −2.26) | −0.0721 (t = −2.61) |
+| daily sigma | 3.26% | 4.36% |
+| **breakeven cost** | **35.3 bps per fill** | **50.2 bps per fill** |
+| in-sample gross | +220.7% | +362.2% |
+| position changes | 3209 over 2999 bars | 3213 over 2999 bars |
+
+**The in-sample gross is worth nothing.** The coefficient was fitted on the same
+bars the rule was then run over. Carrying only the *sign* across a half-sample
+exposes what is left:
+
+| direction | train phi | gross | cost @10bp | net |
+|---|---|---|---|---|
+| BTC first → second | −0.0807 | **−22.3%** | 157.1% | −179.4% |
+| BTC second → first | −0.0344 | +243.0% | 163.9% | +79.1% |
+| ETH first → second | −0.0907 | +87.0% | 159.5% | −72.5% |
+| ETH second → first | −0.0259 | +275.2% | 161.9% | +113.3% |
+
+BTC loses money at *zero cost* in one direction. The gross swings from −22% to +243%
+on nothing but the choice of which half the sign came from — the signature of a
+dependence that is not harvestable.
+
+**The decisive number is the breakeven cost: 35–50 bps per fill**, for a rule that
+changes position 1.07 times per bar, so it pays two fills per bar. Spot taker costs
+on BTC/USDT run roughly 4–10 bps round trip before slippage, funding or error. The
+rule would need costs four to ten times better than the market offers.
+
+So the dependency is real in the statistical sense — |t| > 2 and stable across
+Newey-West lags from 1 to 30, which is not what a fragile estimate looks like — and
+not tradable in the arithmetic sense. Both statements are needed, and the first alone
+would have been the more interesting-sounding one.
+
+**Closing position, on measurements rather than inference:** on daily BTC and ETH, at
+this bar budget, there is no positive predictability of any size to find, and the one
+dependency that is present cannot pay for its own turnover. There is nothing here to
+win, and no configuration of strategies will change that, because the constraint is
+in the price series.
+
+### Another class of assets and horizons — registered, and refuted
+
+The one lead left was the asset class itself. Positive return autocorrelation is not
+expected anywhere on daily crypto, so the a priori case for looking elsewhere is the
+managed-futures result: trend pays at horizons of weeks to months, and it pays across
+asset classes rather than in one. That predicts two things a registered grid can fail:
+**positive phi at weekly horizons, and positive phi outside crypto.**
+
+Registered before the sweep, so a positive reading could not be turned into a
+hypothesis afterwards — 6 series x 2 horizons = 12 tests, and three gates:
+
+1. `phi > 0` with `t > 2.70` (one-sided Bonferroni for 12 tests)
+2. the sign must carry out of sample, both directions
+3. breakeven under 10 bps per fill and under 0.5 flips per bar
+
+```bash
+$env:EDGE_SWEEP="1"
+python -m tools.edge_ceiling 1d BTC/USDT,ETH/USDT 3000 4
+```
+
+| series | 1d phi | 1w phi | class |
+|---|---|---|---|
+| BTC/USDT | −0.0677 (t −2.26) | +0.0033 (t +0.07) | crypto |
+| ETH/USDT | −0.0721 (t −2.61) | +0.0222 (t +0.49) | crypto |
+| ^GSPC | **−0.1261** (t −1.91) | −0.0485 (t −0.74) | US equity index |
+| GC=F | −0.0289 (t −1.28) | **−0.1219** (t −2.27) | gold future |
+| EURUSD=X | +0.0075 (t +0.34) | −0.0840 (t −1.65) | FX |
+| AAPL | −0.0478 (t −1.20) | −0.0525 (t −1.11) | single equity |
+
+**Zero of twelve passed gate 1.** The hypothesis is refuted, and refuted in a specific
+way: **nine of twelve are negative, and weekly is generally *more* negative than
+daily.** Gold at −0.122 weekly and the S&P at −0.049 weekly are the opposite of what
+"trend pays at longer horizons" predicts. The three positive readings are +0.003,
++0.008 and +0.022 — all far inside noise, which is what an expected-value-near-zero
+process looks like.
+
+Notably, the sweep did **not** produce the false positive it was designed to catch. With
+12 independent tests and a t-bar of 2.70, roughly 0.04 passing by chance was the
+prediction; zero passed. That is evidence the correction is doing its job and that the
+absence of positive autocorrelation in these series is real rather than merely unfound.
+
+Two caveats on the instrument, both worth keeping:
+
+- **Gate 3 can never pass for this rule family.** A rule that flips on the sign of the
+  previous bar changes position about once per bar by construction, so its turnover is
+  ~1 and it fails a "< 0.5 flips/bar" test regardless of whether the edge is large.
+  Gate 1 is the gate that carries this result; 2 and 3 never bound.
+- **A gap in the data path was found and fixed on the way.** `yfinance` was missing
+  from the environment though declared in both `pyproject.toml` and `requirements.txt`.
+  More seriously, `yahoo_adapter._interval_days("1d")` returned `1.0`, so a request for
+  300 daily bars fetched 300 *calendar* days and returned about 206 — with no error.
+  Every correlation on that series was quietly computed on two thirds of the intended
+  sample. Fixed to `365/252` calendar days per trading day, with the intraday branches
+  now asset-class aware (crypto 24h, equities 6.5h). This is the tenth instance of one
+  shape in this project: a quantity recorded in one place and interpreted in another.
+
+### Where that leaves the search
+
+The principled search is finished. Widening the grid now — more symbols, more
+timeframes — is precisely the multiple-comparisons trap the sweep above was built to
+detect, and the tool says so itself when it prints `None`.
+
+Anything further has to be a **new hypothesis with an economic reason stated before
+the data is seen**, each with its own registration: a named risk premium (carry, value,
+a defined momentum definition) on a named instrument at a named horizon, judged against
+its own multiplicity. That is a different piece of work from "look harder", and the
+difference is whether the reason for looking was written down first.
+
+### Momentum at registered horizons — not refuted, structurally untestable
+
+Two of the three candidates could not be run honestly at all. **Carry** is the forward
+premium and the interest-rate differential; there is no forward curve or rate feed in
+this project, and substituting a long-run drift measured on one sample is the fit this
+tool exists to refuse. **Value** needs fundamentals — P/E, book value — and there are
+none; a cheap-versus-growth ETF pair is measurable but tests a drift on a single
+sample, which is a well-known way to find nothing and a famous way to fake something.
+
+**Momentum** was run, and the outcome is not a verdict but a wall.
+
+```bash
+$env:EDGE_MOMENTUM="1"
+python -m tools.edge_ceiling 1d BTC/USDT,ETH/USDT 3000 4
+```
+
+7 horizons registered: 1, 5, 10, 21, 63, 126, 252 bars. **Only 4 of them could be
+measured at all.** The daily ceiling is 3 336 bars, so resampled observations are:
+
+| h (bars) | 1 | 5 | 10 | 21 | 63 | 126 | 252 |
+|---|---|---|---|---|---|---|---|
+| observations | 2999 | 599 | 299 | 141 | **47** | **23** | **11** |
+| resolvable phi | 0.036 | 0.080 | 0.113 | 0.165 | 0.286 | 0.409 | 0.592 |
+
+The three long horizons — the ones where time-series momentum is supposed to live —
+produced 47, 23 and 11 observations. Nothing can be concluded from 11 points, and the
+registration of them was my error: I specified horizons the data budget cannot support.
+
+Among the 24 tests that did run, **none passed gate 1**. The strongest reading was
+`BTC/USDT` at h = 21: `phi = +0.1988, t = +2.89`, below the 3.10 bar for 42 tests,
+and barely above what 141 observations can resolve.
+
+**So momentum is neither confirmed nor refuted — it is untestable here**, and the
+reason is arithmetic rather than disappointing:
+
+| target | observations wanted | daily bars needed | years |
+|---|---|---|---|
+| h = 21 | 500 | 10 500 | 29 |
+| h = 63 | 500 | 31 500 | 86 |
+
+Crypto has no 86-year daily history. Daily-bar momentum at a meaningful sample size is
+therefore not measurable in this asset class, at any budget the exchange will serve.
+The only route to more observations is intraday data, which measures *intraday*
+momentum — dominated by microstructure, and precisely where costs bite hardest, as the
+one-bar rows show at −541% for BTC.
+
+Gate 3 did become reachable at longer horizons, as intended: turnover falls from 1.07
+position changes per bar at h = 1 to 0.82 at h = 21, and several long-horizon rules
+did clear 10 bps per fill. That part of the design worked. It simply had nothing to
+qualify.
+
+### The budget was a Binance limit, not a property of the market
+
+Before accepting "untestable", the ceiling itself was checked — and it was the wrong
+ceiling. `BARS = 3000` is not a market fact; it is what Binance serves on daily bars.
+Asked for more, Yahoo returns **24 807 daily bars of S&P 500 back to 1927-12-30**, so
+h = 63 yields 392 observations and h = 252 yields 97.
+
+That is the execution side of the registration being wrong rather than the hypothesis:
+18 of the 42 registered cells had been made impossible by a crypto data limit applied
+to every series. The correction was made **before any momentum result on the long
+history had been seen**, which is what separates it from widening a grid after
+noticing which cells came out positive.
+
+| h (bars) | observations | phi | t | gate 1 |
+|---|---|---|---|---|
+| 1 | 24 806 | −0.0127 | −0.87 | no |
+| 5 | 4 960 | −0.0075 | −0.29 | no |
+| 10 | 2 479 | +0.0376 | +1.07 | no |
+| 21 | 1 180 | −0.0275 | −0.69 | no |
+| 63 | 392 | +0.0414 | +0.55 | no |
+| 126 | 195 | +0.1027 | +1.17 | no |
+| 252 | 97 | −0.0108 | −0.08 | no |
+
+**This is the canonical test of the canonical anomaly, on the canonical dataset, over
+99 years, and it finds nothing.** Time-series momentum was registered with an
+economic reason, measured at seven horizons on 24 806 daily observations, and is
+refuted at every one of them. The strongest reading is +0.103 at h = 126, against a
+bar of 3.10.
+
+Across the whole 42-test grid — crypto, gold, FX, a single equity, and the index —
+**nothing passes gate 1.** Several pass gates 2 and 3, which is what a real effect
+would look like if it were too small to survive multiplicity; none is large enough.
+
+One thing in those numbers must not be misread. The long-horizon `net@10bp` figures
+are large and positive — +362% at h = 252 — while `phi` at that horizon is *negative*.
+The traded rule goes long in an index that rose 4 000-fold over the sample, so it
+collects the index's drift. Drift is not momentum, and a positive net on a rising
+index is the market being paid, not an edge being found.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It

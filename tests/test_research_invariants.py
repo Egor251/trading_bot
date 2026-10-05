@@ -90,6 +90,175 @@ def test_long_flat_sell_exits_without_short() -> None:
     assert abs(m["pnl"] + 10.0) < 1e-9
 
 
+def test_exposure_counts_bars_held_not_orders_placed() -> None:
+    """The multiplier net P&L is actually built out of.
+
+    Two runs can place the same handful of orders and hold for completely
+    different lengths of time, and only the second number decides how much of the
+    market's move each one collected. This is the metric that was missing from
+    every comparison in this project, so it is pinned from both sides.
+    """
+    from engine.indicators import exposure_from_fills
+
+    # Entered on bar 3, closed entering bar 8: bars 3..7 inclusive.
+    held = exposure_from_fills(
+        [
+            {"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 3},
+            {"action": "SELL", "quantity": 1.0, "price": 110.0, "bar_index": 8},
+        ],
+        total_bars=10,
+    )
+    assert held["bars_in_position"] == 5.0
+    assert abs(held["exposure_ratio"] - 0.5) < 1e-12
+
+    # Still long at the end of the window: held to the last bar, not to the last
+    # fill. Marking only at the exit fill is how an open position reads as zero
+    # exposure when it was in the market the whole window.
+    open_end = exposure_from_fills(
+        [{"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 3}],
+        total_bars=10,
+    )
+    assert open_end["bars_in_position"] == 7.0
+
+    # Scaling in twice is one continuous stretch, not two overlapping ones.
+    scaled = exposure_from_fills(
+        [
+            {"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 2},
+            {"action": "BUY", "quantity": 1.0, "price": 101.0, "bar_index": 4},
+            {"action": "SELL", "quantity": 2.0, "price": 110.0, "bar_index": 9},
+        ],
+        total_bars=10,
+    )
+    assert scaled["bars_in_position"] == 7.0, (
+        "overlapping intervals must merge; summing them would inflate exposure "
+        "for any strategy that scales in"
+    )
+
+
+def test_exposure_of_a_partially_closed_position_stays_full() -> None:
+    """Selling half a position is not an exit.
+
+    `equity_pnl` reports `trades` for every BUY and every SELL, so a run can look
+    busy while having been long continuously. This is the case where order count
+    and time in market diverge furthest, which is why the denoiser stopped using
+    order count.
+    """
+    from engine.indicators import exposure_from_fills
+
+    m = exposure_from_fills(
+        [
+            {"action": "BUY", "quantity": 2.0, "price": 100.0, "bar_index": 0},
+            {"action": "SELL", "quantity": 1.0, "price": 110.0, "bar_index": 5},
+        ],
+        total_bars=10,
+    )
+    assert m["exposure_ratio"] == 1.0, (
+        "half the position was closed, but the book was in the market every bar"
+    )
+
+
+def test_exposure_of_an_inactive_run_is_exactly_zero() -> None:
+    """The invariant the denoiser depends on.
+
+    A strategy that placed no order holds nothing, earns nothing from the market,
+    and must report exactly zero exposure -- so its residual is exactly 0.0 rather
+    than a share of whatever its peers did.
+    """
+    from engine.indicators import exposure_from_fills
+
+    assert exposure_from_fills([], total_bars=750) == {
+        "bars_in_position": 0.0,
+        "exposure_ratio": 0.0,
+    }
+    assert exposure_from_fills(
+        [{"action": "BUY", "quantity": 0.0, "price": 100.0, "bar_index": 2}],
+        total_bars=750,
+    )["bars_in_position"] == 0.0
+    assert exposure_from_fills(
+        [{"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 2}],
+        total_bars=0,
+    )["exposure_ratio"] == 0.0
+
+
+def test_notional_exposure_scales_with_size_and_with_time() -> None:
+    """The size multiplier that counting bars throws away.
+
+    Net P&L is size times time times the market's move. `exposure_from_fills`
+    supplies only the middle factor, so a book three times the size looks
+    identical to a small one that held just as long. This is the metric that
+    distinguishes them, and it has to move with both size and duration.
+    """
+    from engine.indicators import notional_exposure_from_fills
+
+    def _held(qty: float, exit_bar: int) -> dict[str, float]:
+        return notional_exposure_from_fills(
+            [
+                {"action": "BUY", "quantity": qty, "price": 100.0, "bar_index": 0},
+                {
+                    "action": "SELL",
+                    "quantity": qty,
+                    "price": 110.0,
+                    "bar_index": exit_bar,
+                },
+            ],
+            total_bars=10,
+        )
+
+    base = _held(1.0, 5)["notional_bars"]
+    assert abs(base - 500.0) < 1e-9, "1 unit at 100 for 5 bars is 500"
+    assert abs(_held(10.0, 5)["notional_bars"] - 10 * base) < 1e-9, (
+        "ten times the size must be ten times the exposure"
+    )
+    assert abs(_held(0.5, 5)["notional_bars"] - base / 2) < 1e-9
+    assert abs(_held(1.0, 9)["notional_bars"] - 900.0) < 1e-9, (
+        "twice the time held must be twice the exposure"
+    )
+
+
+def test_notional_exposure_counts_a_scale_in_as_two_stretches() -> None:
+    """A position that grows is not a position that doubled for free.
+
+    One unit from bar 2, a second unit added at bar 4, flat at bar 9: bars 2-3 at
+    one unit and bars 4-8 at two. Summing the stretches at the final quantity
+    would overstate it; dropping the earlier stretch would understate it.
+    """
+    from engine.indicators import notional_exposure_from_fills
+
+    m = notional_exposure_from_fills(
+        [
+            {"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 2},
+            {"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 4},
+            {"action": "SELL", "quantity": 2.0, "price": 100.0, "bar_index": 9},
+        ],
+        total_bars=10,
+    )
+    assert abs(m["notional_bars"] - 1200.0) < 1e-9
+    assert abs(m["notional_per_bar"] - 120.0) < 1e-9
+
+
+def test_notional_exposure_of_a_flat_book_is_exactly_zero() -> None:
+    """The invariant again, for the size-weighted metric.
+
+    A strategy that never traded holds no notional, so there is no size for the
+    market to have paid it -- in either metric. If this ever reads non-zero for an
+    inactive run, the denoiser is crediting a position that was never opened.
+    """
+    from engine.indicators import notional_exposure_from_fills
+
+    assert notional_exposure_from_fills([], total_bars=750) == {
+        "notional_bars": 0.0,
+        "notional_per_bar": 0.0,
+    }
+    assert notional_exposure_from_fills(
+        [{"action": "BUY", "quantity": 0.0, "price": 100.0, "bar_index": 2}],
+        total_bars=750,
+    )["notional_bars"] == 0.0
+    assert notional_exposure_from_fills(
+        [{"action": "BUY", "quantity": 1.0, "price": 100.0, "bar_index": 2}],
+        total_bars=0,
+    )["notional_per_bar"] == 0.0
+
+
 def test_hold_flat_clears_carry_into_oos() -> None:
     """Mean-reversion style: BUY then HOLD/flat before OOS must not carry inventory."""
     decisions = [_D("BUY"), _D("HOLD", "flat"), _D("HOLD", "flat"), _D("HOLD", "flat")]
