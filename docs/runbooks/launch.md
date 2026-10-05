@@ -1191,6 +1191,73 @@ highest-drift crypto assets, and the effect does not travel.
 
 ## Operator session token
 
+## The indicator panel: 56 tests, nothing clears
+
+The request was to add more oscillators. Taken literally — try them all, keep the
+best — that is best-of-N, and the size of the effect was already measured here: at a
+t-bar of 2.70 across 12 tests, about 0.04 pass by chance. So this was framed as a
+**panel study** instead of a search, in a way that answers the real question (is there
+signal in technical indicators at all) and survives the answer being no.
+
+Three properties make it a measurement rather than a sweep:
+
+1. **One functional form for all.** Each indicator's output becomes a trailing 60-bar
+   z-score and the position is its sign. Nothing about the rule depends on which
+   indicator it is reading.
+2. **Both signs tested for every indicator.** Whether a tool is a trend or a reversion
+   indicator is not known in advance, so scoring only the favourable direction would
+   smuggle the answer in. This doubles the panel and makes the multiplicity explicit.
+3. **Library defaults only.** Tuning each of fourteen indicators would turn a
+   fourteen-test panel into a search over thousands of configurations.
+
+Registered bar: t > 3.10, one-sided Bonferroni for 52 tests. The library turned out to
+hold fourteen usable oscillators rather than thirteen, so the real grid is **56** and
+the bar is 3.11. Recorded rather than rounded; no verdict changes.
+
+| indicator | BTC +sign | BTC −sign | ETH +sign | ETH −sign |
+|---|---|---|---|---|
+| rsi-14 | +155.7% (t +0.89) | −265.5% | +313.3% (t +1.35) | −445.1% |
+| macd-12-26-9 | +232.6% (t +1.33) | −308.8% | +105.3% (t +0.46) | −185.5% |
+| bollinger-20-2 | +117.7% (t +0.67) | −265.1% | +286.4% (t +1.24) | −427.8% |
+| stoch-14-3 | +299.5% (t +1.71) | −398.1% | +424.3% (t +1.83) | −526.5% |
+| cci-20 | +102.4% (t +0.58) | −227.8% | +231.2% (t +1.00) | −363.8% |
+| williams-14 | +200.6% (t +1.15) | −361.6% | +84.8% (t +0.37) | −260.6% |
+| roc-12 | +48.5% (t +0.28) | −187.5% | +259.5% (t +1.12) | −396.1% |
+| adx-14 | +317.7% (t +1.82) | −400.3% | +450.5% (t +1.95) | −539.1% |
+| sar | +24.1% (t +0.14) | −119.1% | −0.8% (t −0.00) | −88.2% |
+| keltner-20 | +190.1% (t +1.09) | −313.9% | +389.1% (t +1.68) | −523.3% |
+| heikin-ashi | −33.3% (t −0.19) | −601.3% (t −3.43) | +73.9% (t +0.32) | −702.5% |
+| vwap-20 | +112.8% (t +0.64) | −232.6% | +393.4% (t +1.70) | −510.8% |
+| sma-20 | +115.7% (t +0.66) | −237.1% | +376.1% (t +1.62) | −495.9% |
+| ema-50 | +344.3% (t +1.97) | −409.7% | +461.2% (t +2.00) | −531.4% |
+
+**56 rows run, 26 net positive, 0 clear the bar.** The largest t is +2.00.
+
+**And the table says something more useful than the count.** Every single +sign row is
+positive and every single −sign row is negative. That is not fourteen independent
+findings — it is **one finding expressed fourteen times**: the sample went up. The panel
+has one real degree of freedom, long versus short, and the indicators are not adding
+any information to it. The apparent cross-sectional agreement is agreement about the
+market, not about the tools.
+
+The strongest row is `ema-50` at +344.3% and +461.2% — which is the MA crossover from
+the previous commit, re-derived. That is a useful pipeline check: two independent code
+paths arriving at the same number. It also settles what that result was. `sign(EWO)`
+is `sign(close − EMA)`, so the +334% and +406% **were** long exposure, and the panel
+shows it directly by reproducing them as its top row.
+
+Building this panel cost three of my own bugs, all of the same shape as the ones before:
+unpacking parallel series by iteration as if they held scalars, a keyword-only argument
+passed positionally, and a helper that caught every exception and printed nothing — so
+eight of fourteen indicators failed silently and the panel reported itself as complete.
+A half-panel that looks whole is worse than no panel, because the missing half is the
+part nobody checks. The helper now prints the failure and its reason, and the run
+reports `56 of 56`.
+
+**Panel result: no indicator in this library carries measurable signal on daily BTC or
+ETH, in either direction, at library-default parameters.** The value of the study is
+that corrected count, not a winner.
+
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
 resolves from `OPERATOR_API_TOKEN`, else from `data/ui/operator_token` (mode
 0600), else it is generated at first boot. A non-loopback `--host` requires

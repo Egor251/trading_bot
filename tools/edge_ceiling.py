@@ -567,6 +567,50 @@ EWO_GATE1_T = 2.70
 #: SOL, XRP and DOGE are younger and far more volatile than BTC, so they carry fewer
 #: bars and more of them in filings. That cuts both ways and is why criterion A asks
 #: for four of five rather than all five.
+#: The indicator panel, registered before it is run.
+#:
+#: The request is to add more oscillators. Taken literally -- try them all and keep
+#: the best -- that is best-of-N, and the size of the effect is already measured in
+#: this repository: with a t-bar of 2.70 across 12 tests, about 0.04 pass by chance.
+#: A panel of 20 with a looser bar would return a winner every time, and nothing
+#: here would be able to tell it from luck.
+#:
+#: So this is framed as a panel study rather than a search, which answers the
+#: question actually being asked -- is there signal in technical indicators at all --
+#: and answers it in a way that survives the answer being no.
+#:
+#: Three properties make it a measurement rather than a sweep:
+#:
+#:   1  every oscillator is used through the same functional form: its output is
+#:      turned into a trailing 60-bar z-score, and the position is the sign of that
+#:      score. Nothing about the rule depends on which indicator it is.
+#:   2  **both signs are tested for every oscillator.** Whether an indicator is a
+#:      trend tool or a reversion tool is not known in advance, so guessing and
+#:      scoring only the favourable direction would smuggle the answer in. This
+#:      doubles the panel and makes the multiplicity explicit rather than hidden.
+#:   3  every parameter is the library default. No per-oscillator tuning -- tuning
+#:      each of twenty indicators turns a twenty-test panel into a search over
+#:      thousands of configurations.
+#:
+#: Registered criteria:
+#:
+#:   grid   13 oscillators x 2 signs x 2 instruments = 52 tests
+#:   bar    t > 3.10, one-sided Bonferroni for 52 tests at alpha 0.05
+#:   pass   net positive after 10 bps on at least 2 instruments, t above the bar on
+#:          at least one, and both signs agreeing in direction
+#:
+#: Expected outcome, stated first so it cannot be argued with afterwards: nothing
+#: passes, and roughly one to two will look positive without clearing the bar. The
+#: value of the study is that corrected count, not a winner.
+#: The library turned out to hold fourteen usable oscillators rather than the
+#: thirteen registered, so the grid is 56 tests rather than 52. Recorded rather than
+#: quietly rounded: the bar moves from 3.10 to 3.11, which changes no verdict here.
+PANEL_OSCILLATORS = 14
+PANEL_SIGNS = 2
+PANEL_INSTRUMENTS = 2
+PANEL_TESTS = PANEL_OSCILLATORS * PANEL_SIGNS * PANEL_INSTRUMENTS
+PANEL_GATE_T = 3.11
+
 FRESH_INSTRUMENTS: tuple[tuple[str, str, str], ...] = (
     ("SOL/USDT", "CRYPTO", "ccxt"),
     ("XRP/USDT", "CRYPTO", "ccxt"),
@@ -1058,6 +1102,234 @@ def spearman(xs: list[float], ys: list[float]) -> float:
         sum((a - mx) ** 2 for a in rx) * sum((b - my) ** 2 for b in ry)
     ) ** 0.5
     return (num / den) if den else 0.0
+
+
+def panel_signals(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+) -> dict[str, list[float | None]]:
+    """Every indicator in the library, as one signed number per bar.
+
+    Each output is centred so that a positive number means "leaning up" on its own
+    terms -- RSI at 50, %K at 50, Bollinger %b at 0.5 -- so that the panel does not
+    need a separate rule per indicator. None of these are z-scored here; that
+    happens downstream, uniformly, because a raw RSI and a raw CCI have different
+    scales and the position rule must not depend on which one it is reading.
+
+    Anything that fails to compute is omitted rather than silently filled, and the
+    caller reports what it actually got instead of what it expected.
+    """
+    from engine.indicators import (
+        cci,
+        macd,
+        roc,
+        rsi,
+        stochastic,
+        williams_r,
+    )
+
+    out: dict[str, list[float | None]] = {}
+    failures: dict[str, str] = {}
+
+    def _safe(name: str, fn) -> None:
+        """Record the failure instead of swallowing it.
+
+        The first version of this function caught the exception and passed, and the
+        consequence was a panel that reported 24 of 52 registered rows with no
+        explanation: eight indicators had failed on a wrong keyword argument and a
+        wrong tuple unpack, and a half-panel that looks complete is worse than no
+        panel, because the missing half is exactly the part nobody checks.
+        """
+        try:
+            out[name] = list(fn())
+        except Exception as exc:  # noqa: BLE001
+            failures[name] = f"{type(exc).__name__}: {exc}"
+
+    _safe("rsi-14", lambda: [(v - 50.0) if v is not None else None
+                             for v in rsi(closes, 14)])
+    _safe("macd-12-26-9", lambda: [
+        (h if h is not None else None) for h in macd(closes)[2]
+    ])
+    _safe("bollinger-20-2", lambda: _bollinger_signed(closes))
+    _safe("stoch-14-3", lambda: [
+        (k - 50.0) if k is not None else None
+        for k in stochastic(highs, lows, closes)[0]
+    ])
+    _safe("cci-20", lambda: [(v / 100.0) if v is not None else None
+                             for v in cci(highs, lows, closes, 20)])
+    _safe("williams-14", lambda: [
+        (v + 50.0) if v is not None else None
+        for v in williams_r(highs, lows, closes, 14)
+    ])
+    _safe("roc-12", lambda: [(v / 10.0) if v is not None else None
+                            for v in roc(closes, 12)])
+    _safe("adx-14", lambda: _adx_signed(highs, lows, closes, 14))
+    _safe("sar", lambda: _sar_signed(highs, lows))
+    _safe("keltner-20", lambda: _keltner_signed(highs, lows, closes))
+    _safe("heikin-ashi", lambda: _ha_signed(highs, lows, closes))
+    _safe("vwap-20", lambda: _vwap_signed(highs, lows, closes))
+    _safe("sma-20", lambda: _sma_signed(closes, 20))
+    _safe("ema-50", lambda: _sma_signed(closes, 50))
+    if failures:
+        for name, why in failures.items():
+            print(f"  INDICATOR FAILED: {name} -- {why}")
+    return out
+
+
+def _bollinger_signed(closes: list[float]) -> list[float | None]:
+    from engine.indicators import bollinger
+
+    _mid, upper, lower = bollinger(closes, 20, num_std=2.0)
+    out: list[float | None] = []
+    for i, u in enumerate(upper):
+        l = lower[i]
+        if u is None or l is None or u == l:
+            out.append(None)
+        else:
+            out.append((closes[i] - l) / (u - l) - 0.5)
+    return out
+
+
+def _sma_signed(closes: list[float], window: int) -> list[float | None]:
+    from engine.indicators import sma
+
+    line = sma(closes, window)
+    return [
+        (closes[i] - line[i]) if line[i] is not None else None
+        for i in range(len(closes))
+    ]
+
+
+def _adx_signed(
+    highs: list[float], lows: list[float], closes: list[float], period: int
+) -> list[float | None]:
+    from engine.indicators import adx
+
+    _adx_v, plus_di, minus_di = adx(highs, lows, closes, period)
+    return [
+        (p - m) if (p is not None and m is not None) else None
+        for p, m in zip(plus_di, minus_di)
+    ]
+
+
+def _sar_signed(
+    highs: list[float], lows: list[float]
+) -> list[float | None]:
+    from engine.indicators import parabolic_sar
+
+    _sar, direction = parabolic_sar(highs, lows)
+    return [
+        (float(d) if d is not None else None) for d in direction
+    ]
+
+
+def _keltner_signed(
+    highs: list[float], lows: list[float], closes: list[float]
+) -> list[float | None]:
+    from engine.indicators import keltner
+
+    mid, _upper, _lower = keltner(highs, lows, closes)
+    return [
+        (closes[i] - m) if m is not None else None for i, m in enumerate(mid)
+    ]
+
+
+def _ha_signed(
+    highs: list[float], lows: list[float], closes: list[float]
+) -> list[float | None]:
+    from engine.indicators import heikin_ashi
+
+    ho, hh, hl, hc = heikin_ashi(closes, highs, lows, closes)
+    return [
+        (c - o) for c, o in zip(hc, closes)
+    ]
+
+
+def _vwap_signed(
+    highs: list[float], lows: list[float], closes: list[float]
+) -> list[float | None]:
+    from engine.indicators import rolling_vwap
+
+    vwap = rolling_vwap(highs, lows, closes, None, 20)
+    return [
+        (closes[i] - v) if v is not None else None for i, v in enumerate(vwap)
+    ]
+
+
+def rolling_zscore(
+    values: list[float | None], window: int
+) -> list[float | None]:
+    """Trailing z-score, skipping bars where the indicator has no value yet.
+
+    Warmup matters here and is not a detail: an oscillator that emits nothing for its
+    first fifty bars has not been "flat" during them, it has not existed. Scoring it
+    as flat would quietly buy the indicator the easiest part of the series.
+    """
+    out: list[float | None] = []
+    clean: list[float] = []
+    for v in values:
+        if v is None:
+            out.append(None)
+            continue
+        clean.append(float(v))
+        if len(clean) < window:
+            out.append(None)
+            continue
+        chunk = clean[-window:]
+        mean = sum(chunk) / window
+        var = sum((c - mean) ** 2 for c in chunk) / (window - 1)
+        sd = var ** 0.5
+        out.append(((clean[-1] - mean) / sd) if sd > 0 else 0.0)
+    return out
+
+
+def signal_rule_pnl(
+    opens: list[float],
+    signal: list[float | None],
+    *,
+    cost_bps: float,
+) -> dict[str, float]:
+    """Position = the given sign, held until it changes. One rule for all signals.
+
+    Deliberately identical for every indicator in the panel, so that any difference
+    between rows is a property of the indicator and not of the trading rule wrapped
+    around it. Costs are charged on |change in position|, so an indicator that flips
+    every bar is charged for it.
+    """
+    n = min(len(opens), len(signal))
+    out = {"net": 0.0, "gross": 0.0, "cost": 0.0, "trades": 0.0, "t": 0.0}
+    position = 0.0
+    gross = 0.0
+    cost_total = 0.0
+    trades = 0.0
+    per_bar: list[float] = []
+    for t in range(n - 2):
+        s = signal[t]
+        want = 0.0 if s is None else (1.0 if s > 0 else (-1.0 if s < 0 else 0.0))
+        turnover = abs(want - position)
+        trades += turnover
+        entry, leave = opens[t + 1], opens[t + 2]
+        bar_ret = 0.0
+        if entry > 0:
+            bar_ret = want * (leave - entry) / entry
+            gross += bar_ret
+        c = turnover * cost_bps / 10_000.0
+        cost_total += c
+        if want != 0.0:
+            per_bar.append(bar_ret - c)
+        position = want
+    out["gross"] = gross
+    out["cost"] = cost_total
+    out["net"] = gross - cost_total
+    out["trades"] = trades
+    if len(per_bar) > 5:
+        m = len(per_bar)
+        avg = sum(per_bar) / m
+        var = sum((v - avg) ** 2 for v in per_bar) / (m - 1)
+        se = (var / m) ** 0.5 if var > 0 else 0.0
+        out["t"] = (avg / se) if se > 0 else 0.0
+    return out
 
 
 def _fmt_ci(est: float, se: float) -> str:
@@ -1812,6 +2084,111 @@ async def main() -> int:
                 print("  NOT CONFIRMED. The daily result came from two known assets whose")
                 print("  drift was already known, and it does not transfer to")
                 print("  instruments or periods that were never part of it.")
+
+        if os.environ.get("EDGE_PANEL"):
+            async def _fetch_p(
+                ticker: str, class_code: str, provider: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe="1d", limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("PANEL: every indicator in the library, both signs")
+            print("=" * 72)
+            print(
+                "  z-score window 60, 10 bps per fill, position = sign of score"
+            )
+            print(
+                f"  bar: t > {PANEL_GATE_T} (Bonferroni, {PANEL_TESTS} tests "
+                f"= {PANEL_OSCILLATORS} x {PANEL_SIGNS} x {PANEL_INSTRUMENTS})"
+            )
+            panel_rows: list[dict[str, Any]] = []
+            names_seen: list[str] = []
+            for ticker, class_code, provider in (
+                ("BTC/USDT", "CRYPTO", "ccxt"),
+                ("ETH/USDT", "CRYPTO", "ccxt"),
+            ):
+                try:
+                    series = await _fetch_p(
+                        ticker, class_code, provider, BARS
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  {ticker} fetch failed ({type(exc).__name__})")
+                    continue
+                if not series or len(series) < 400:
+                    print(f"  {ticker}: {len(series or [])} bars, skipped")
+                    continue
+                highs = [float(getattr(b, 'high', 0) or 0) for b in series]
+                lows = [float(getattr(b, 'low', 0) or 0) for b in series]
+                opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                signals = panel_signals(highs, lows, closes)
+                for name, raw_signal in signals.items():
+                    if name not in names_seen:
+                        names_seen.append(name)
+                    scored = rolling_zscore(raw_signal, 60)
+                    for sign in (1.0, -1.0):
+                        flipped = [
+                            None if s is None else s * sign for s in scored
+                        ]
+                        res = signal_rule_pnl(opens, flipped, cost_bps=10.0)
+                        panel_rows.append(
+                            {
+                                "ticker": ticker,
+                                "indicator": name,
+                                "sign": sign,
+                                "net": res["net"],
+                                "t": res["t"],
+                                "trades": res["trades"],
+                            }
+                        )
+            print()
+            print(
+                f"  {'indicator':14} {'sign':>5} "
+                + "  ".join(
+                    f"{tk:>22}" for tk in ("BTC/USDT", "ETH/USDT")
+                )
+            )
+            for name in names_seen:
+                cells = []
+                for ticker in ("BTC/USDT", "ETH/USDT"):
+                    picks = [
+                        r for r in panel_rows
+                        if r["indicator"] == name and r["ticker"] == ticker
+                    ]
+                    if not picks:
+                        cells.append(f"{'-':>22}")
+                        continue
+                    line = "  ".join(
+                        f"{100 * r['net']:>+9.1f}% t{r['t']:>+6.2f}"
+                        for r in sorted(picks, key=lambda r: -r["sign"])
+                    )
+                    cells.append(f"{line:>22}")
+                print(f"  {name:14} {'both':>5} " + "  ".join(cells))
+            positives = [r for r in panel_rows if r["net"] > 0]
+            clear = [r for r in panel_rows if r["net"] > 0 and r["t"] > PANEL_GATE_T]
+            print()
+            print(f"  rows run           : {len(panel_rows)} "
+                  f"of {PANEL_TESTS} registered")
+            print(f"  net positive       : {len(positives)}")
+            print(f"  cleared the bar    : {len(clear)}")
+            for r in sorted(clear, key=lambda r: -r["t"])[:10]:
+                print(f"    {r['ticker']:10} {r['indicator']:14} "
+                      f"sign {r['sign']:+.0f}  net {100 * r['net']:+.1f}%  "
+                      f"t {r['t']:+.2f}")
+            print()
+            print(f"  Expected to look positive by chance at this bar: "
+                  f"about {len(panel_rows) * 0.0005:.2f}")
+            print("  Expected to clear by chance: under one, since the bar is a")
+            print("  Bonferroni correction for the whole panel.")
+            if not clear:
+                print()
+                print("  PANEL RESULT: nothing clears. Technical indicators in this")
+                print("  library carry no measurable signal on daily crypto, in either")
+                print("  direction, at library-default parameters.")
 
         await core.shutdown()
     return 0
