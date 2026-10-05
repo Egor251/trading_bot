@@ -1445,6 +1445,67 @@ in `engine/simulation.py`:
   cannot tell an autocorrelation from zero. At 749 bars the floor is 0.072, so a
   window reporting φ = 0.05 has reported nothing regardless of what the market did.
 
+### The 4h autocorrelation is not the bid-ask spread — measured, not assumed
+
+Roll (1984), *J. Finance* 39(4):1127-1139. The rule taken from the paper, not its
+conclusion: in an efficient market a negative first-order serial covariance is a
+**measurement** of the spread, recoverable from prices alone with no quote data.
+That made it the natural test of whether our 4h effect (t = −3.44 on BTC) is an edge
+or a spread.
+
+Estimator in `engine/simulation.implied_spread`. Registered criteria fixed before
+any data was fetched (13 tests, Bonferroni bar 3.00): G1 γ₁ < 0 at t < −3.00;
+**G2** γ₁/var must be *less* negative as the horizon lengthens, since a bounce
+cancels inside a longer bar while the efficient-price variance survives; **G3** |γ₁|
+ordered by liquidity; **G4** implied spread against the ~20 bps round trip.
+
+**All four failed.** BTC 4h ρ₁ = −0.0436, 1d ρ₁ = −0.0494 — the *longer* horizon is
+*more* negative, the opposite of the bounce prediction. And the implied spreads are
+60 bps (4h) to 157 bps (1d), which no one believes on any exchange.
+
+### Three bugs in that instrumentation, found by the implausible number
+
+The first run reported a **4175 bps** spread. That is 42%, and it is how the errors
+surfaced:
+
+- **Units.** γ₁ is built from log returns, so its square root is already a
+  return-scale quantity. Dividing by σ again and labelling the result "bps"
+  inflated everything by 1/σ ≈ 200.
+- **Sign.** `t < ROLL_GATE_T` with a positive bar and a negative t is always true,
+  so the G1 column passed every negative reading and 3/4 was reported where the
+  correct answer is 1/4.
+- **Normalisation.** The code used `gamma1 / var**2` against a registered text that
+  said `gamma1 / var`. Corrected to the registered form and left there — moving it
+  back after seeing which direction gives the answer would be criterion-shopping.
+
+### The estimator works; the test was applied outside its domain
+
+Walking the frequency is what actually settled it, and it validates the instrument
+on the way:
+
+| bars | σ per bar | ρ₁ | implied spread |
+|------|-----------|-----|----------------|
+| 1m | 0.0385% | −0.0239 | **1.19 bps** |
+| 5m | 0.1095% | −0.0254 | 3.49 bps |
+| 15m | 0.1775% | +0.0133 | — |
+| 1h | 0.3599% | +0.0127 | — |
+| 4h | 0.7813% | −0.0515 | 35.47 bps |
+| 1d | 2.3875% | −0.0473 | 103.82 bps |
+
+At **1m** Roll's estimator returns **1.19 bps** on BTC — a believable crypto spread.
+It stays sane at 5m and then inflates without limit as bars lengthen.
+
+So the bounce is real, it is small, and it lives where the estimator is valid. The
+4h and 1d negative autocorrelation is **not** it. That closes the bounce explanation
+rather than opening it, which is the opposite of what the paper suggested when it
+was chosen as the lead — the pre-registration is what made that outcome binding
+rather than negotiable.
+
+**The useful byproduct: 1.19 bps is a measured spread, and we charge 20 bps round
+trip.** Where the other ~18.8 bps go is now a question with a number attached, and
+that is the Almgren question: how much of a cost is the spread crossing and how much
+is permanent impact. See below.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as

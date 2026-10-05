@@ -685,6 +685,85 @@ def variance_ratio(values: Sequence[float], lag: int) -> dict[str, float]:
     }
 
 
+def implied_spread(values: Sequence[float]) -> dict[str, float]:
+    """Roll (1984): the effective bid-ask spread implied by a price series.
+
+    Negative first-order autocorrelation in an *efficient* market is not
+    predictability, it is the bid-ask bounce -- an observation that alternates
+    between bid and ask produces price changes that mean-revert mechanically. Roll
+    showed the bounce is not merely an explanation but a measurement: the spread can
+    be read back out of the price series itself, with no quote data at all.
+
+    That is why this matters here rather than being a curiosity. A -3.44 t-statistic
+    on 4h autocorrelation is exactly what a spread looks like, and the two have to be
+    told apart before the autocorrelation is called an edge. The registered test
+    lives in ``tools/edge_ceiling.py``; this is only the estimator.
+
+    ``gamma1`` is the *unnormalized* first-order serial covariance
+    ``E(d_t * d_{t+1})``, in the same units as ``values``. Keeping it raw matters:
+    the spread is a square root of it, so every downstream comparison should be made
+    on ``gamma1`` and the ordering conclusions do not depend on the constant below.
+
+    The constant is reported in two forms on purpose. ``spread`` uses Roll's
+    ``2*sqrt(-gamma1)``; ``spread_alt`` uses the ``sqrt(-2*gamma1)`` that appears in
+    several restatements of the paper. The two differ by a factor of ``sqrt(2)``, and
+    which one is canonical depends on whether ``gamma1`` was defined as a covariance
+    or a correlation in the source being followed. Rather than pick one from memory
+    and have an absolute comparison to a real cost inherit the error, both are
+    returned and any claim that turns on the absolute level has to survive either.
+
+    Returns ``spread = 0.0`` when ``gamma1 >= 0``: there is no negative covariance,
+    so there is nothing for this estimator to explain. That is "not applicable", not
+    "zero cost", and callers must not read it as the latter.
+    """
+    xs = [float(v) for v in values]
+    n = len(xs)
+    if n < 3:
+        return {
+            "gamma1": 0.0, "spread": 0.0, "spread_alt": 0.0,
+            "t": 0.0, "n": float(n),
+        }
+    lead, lag_ = xs[:-1], xs[1:]
+    m = len(lead)
+    gamma1 = sum(a * b for a, b in zip(lead, lag_)) / (m - 1)
+
+    # Newey-West on the products z_t = d_t * d_{t+1}: same reasoning as `ar1`, and
+    # the same error direction if omitted. `gamma1` is itself autocorrelated in the
+    # squared series even when `d_t` is not, so an i.i.d. error here would
+    # understate and manufacture significance -- precisely for the statistic being
+    # used to decide whether a real effect exists.
+    mean_z = gamma1
+    z = [a * b for a, b in zip(lead, lag_)]
+    dev_z = [v - mean_z for v in z]
+    bands = max(1, int(math.ceil(4.0 * (m / 100.0) ** (2.0 / 9.0))))
+    long_run = sum(v * v for v in dev_z)
+    for offset in range(1, bands + 1):
+        weight = 1.0 - offset / (bands + 1.0)
+        long_run += weight * 2.0 * sum(
+            dev_z[i] * dev_z[i - offset] for i in range(offset, m - 1)
+        )
+    variance = long_run / ((m - 1) * (m - 1)) if m > 1 else 0.0
+    se = math.sqrt(variance) if variance > 0.0 else 0.0
+    t = gamma1 / se if se > 0 else 0.0
+
+    if gamma1 >= 0.0:
+        return {
+            "gamma1": gamma1,
+            "spread": 0.0,
+            "spread_alt": 0.0,
+            "t": t,
+            "n": float(m),
+        }
+    neg = -gamma1
+    return {
+        "gamma1": gamma1,
+        "spread": 2.0 * math.sqrt(neg),
+        "spread_alt": math.sqrt(2.0 * neg),
+        "t": t,
+        "n": float(m),
+    }
+
+
 def resolvable_phi(n: int, *, confidence: float = 1.96) -> float:
     """Smallest autocorrelation this sample size could tell apart from zero.
 
@@ -792,6 +871,7 @@ __all__ = [
     "adjust_pvalues",
     "ar1",
     "bootstrap_stress",
+    "implied_spread",
     "monte_carlo_stress",
     "multiple_testing_correction",
     "plateau_score",

@@ -57,7 +57,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # not in a script that happens to run one experiment. Re-exported rather than
 # imported directly so the ~2200 call sites in this file, and the other research
 # tools that import from here, keep working unchanged.
-from engine.simulation import ar1, resolvable_phi, variance_ratio  # noqa: E402
+from engine.simulation import (  # noqa: E402
+    ar1,
+    implied_spread,
+    resolvable_phi,
+    variance_ratio,
+)
 
 #: The smallest injected edge the power sweep detected above the noise floor,
 #: registered there before it was run: phi = 0.05, snr 0.32.
@@ -612,6 +617,15 @@ SEVERITY_K: tuple[float, ...] = (2.0, 2.5, 3.0)
 SEVERITY_HOLDS: tuple[int, ...] = (2, 5)
 SEVERITY_GATE_T = 3.00
 BOUNCE_RATIO_MIN = 1.30
+
+#: EDGE_ROLL, registered before any data was fetched.
+#:
+#: Thirteen tests total: 4 assets x 2 horizons at G1, 4 at G2, 1 ordering at G3.
+#: Bonferroni two-sided bar at alpha 0.05 for n = 13 is 3.00. The G2 and G3 criteria
+#: are ordinal comparisons rather than significance tests and are not counted here,
+#: but they are the ones that decide the verdict, and they cannot be passed by
+#: luck in the way G1 can.
+ROLL_GATE_T = 3.00
 
 PANEL_OSCILLATORS = 14
 PANEL_SIGNS = 2
@@ -2550,6 +2564,197 @@ async def main() -> int:
                         )
             print()
             print(f"  tests run: {sev_tested}   clearing the bar: {sev_clear}")
+
+        if os.environ.get("EDGE_ROLL"):
+            # ---- REGISTERED BEFORE ANY DATA WAS FETCHED ------------------
+            # Roll (1984), J. Finance 39(4):1127-1139.
+            #
+            # CLAIM UNDER TEST: the negative 4h first-order autocorrelation
+            # (BTC t = -3.44, ETH t = -3.01) is the bid-ask bounce, not an edge.
+            #
+            # The rule taken from the paper, not its conclusion: in an efficient
+            # market a negative first-order serial covariance is a *measurement*
+            # of the spread, recoverable from prices alone with no quote data.
+            #
+            # CRITERIA, fixed in advance. Four assets x two horizons = 8 tests at
+            # G1, 4 at G2, 1 ordering at G3 -> 13 tests, Bonferroni two-sided bar
+            # 3.00 at alpha 0.05.
+            #
+            #   G1  gamma1 < 0 with t < -3.00, measured on log returns at 4h.
+            #   G2  |gamma1|/var at 4h exceeds |gamma1|/var at 1d, same asset.
+            #       This is the discriminant and it is scale-free: a mechanical
+            #       bounce cancels inside a longer interval while the
+            #       efficient-price variance survives, so a spread's contribution
+            #       per unit variance must fall as the horizon grows. An edge does
+            #       not shrink when averaged over.
+            #   G3  |gamma1| ordered by liquidity: BTC < ETH < DOGE. Independent
+            #       microstructure fact, not something fitted here.
+            #   G4  the implied spread, under BOTH conventions in the estimator,
+            #       against the ~20 bps round trip the reversal rule pays.
+            #
+            # FALSIFIED IF: G2 fails on BTC or ETH (a real edge would not shrink
+            # with horizon), or G3 is inverted (the spread does not track
+            # liquidity, so the covariance is not a spread).
+            #
+            # NOTE ON G4: the constant inside Roll's square root depends on
+            # whether gamma1 was defined as covariance or correlation in the
+            # source followed, and the two differ by sqrt(2). Rather than pick one
+            # from memory and have a comparison against a real cost inherit the
+            # error, both are printed and G4 must survive either.
+            # -----------------------------------------------------------------
+            async def _fetch_roll(
+                ticker: str, timeframe: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker,
+                    class_code="CRYPTO",
+                    provider="ccxt",
+                    timeframe=timeframe,
+                    limit=bars,
+                )
+
+            ROLL_ASSETS = ("BTC/USDT", "ETH/USDT", "DOGE/USDT", "SOL/USDT")
+            ROLL_TFS = ("4h", "1d")
+
+            print()
+            print("=" * 72)
+            print("EDGE_ROLL -- is the negative autocorrelation just the spread?")
+            print("=" * 72)
+            print("  registered: G1 gamma1<0, t < -3.00 | G2 4h ratio > 1d ratio")
+            print("              G3 |gamma1| ordered BTC < ETH < DOGE")
+            print("              G4 implied spread vs ~20 bps round trip, both forms")
+            print()
+
+            roll_rows: dict[tuple[str, str], dict[str, Any]] = {}
+            for ticker in ROLL_ASSETS:
+                for tf in ROLL_TFS:
+                    try:
+                        bars_ = await _fetch_roll(ticker, tf, BARS)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  {ticker:10} {tf:>3}  fetch failed ({type(exc).__name__})")
+                        continue
+                    closes = [
+                        float(getattr(b, "close", 0.0) or 0.0) for b in (bars_ or [])
+                    ]
+                    closes = [c for c in closes if c > 0.0]
+                    if len(closes) < 120:
+                        print(f"  {ticker:10} {tf:>3}  only {len(closes)} bars")
+                        continue
+                    rets = log_returns(closes)
+                    est = implied_spread(rets)
+                    var_r = sum(r * r for r in rets) / len(rets)
+                    sigma = math.sqrt(var_r)
+                    # `gamma1` is built from log returns, so the square root of it is
+                    # already a return-scale quantity -- there is nothing to divide by
+                    # to get basis points, and doing so inflated every number here by
+                    # 1/sigma (~200x at these bars). First run of this block reported
+                    # 4175 bps of spread on BTC, which is 42%: not a plausible
+                    # reading of anything, which is how the error was found.
+                    spread_bps = 1e4 * est["spread"]
+                    spread_alt_bps = 1e4 * est["spread_alt"]
+                    roll_rows[(ticker, tf)] = {
+                        "gamma1": est["gamma1"],
+                        "t": est["t"],
+                        "spread_bps": spread_bps,
+                        "spread_alt_bps": spread_alt_bps,
+                        # As registered: gamma1 / var, the first-order autocorrelation.
+                        # The first run used var**2, which contradicted the registered
+                        # text; corrected to the registered form and left there. Moving
+                        # it back would be criterion-shopping, so the correction is
+                        # recorded in the runbook rather than quietly applied.
+                        "norm": est["gamma1"] / var_r if var_r > 0 else 0.0,
+                        "sigma": sigma,
+                        "n": len(rets),
+                    }
+
+            print(
+                f"  {'series':10} {'tz':>3} {'n':>7} {'gamma1':>12} {'t':>7} "
+                f"{'g1':>3} {'spread bp':>11} {'alt bp':>9} {'rho1':>9}"
+            )
+            g1_clear = g1_tested = 0
+            for ticker in ROLL_ASSETS:
+                for tf in ROLL_TFS:
+                    row = roll_rows.get((ticker, tf))
+                    if not row:
+                        continue
+                    # `t` is negative for a negative covariance, so the bar has to be
+                    # applied as -ROLL_GATE_T. Written as `t < ROLL_GATE_T` this test
+                    # passed for every negative reading regardless of size, and the
+                    # G1 column was meaningless.
+                    ok = row["gamma1"] < 0.0 and row["t"] < -ROLL_GATE_T
+                    if tf == "4h":
+                        g1_tested += 1
+                        g1_clear += 1 if ok else 0
+                    print(
+                        f"  {ticker:10} {tf:>3} {row['n']:>7} "
+                        f"{row['gamma1']:>+12.3e} {row['t']:>+7.2f} "
+                        f"{'Y' if ok else '.':>3} {row['spread_bps']:>11.2f} "
+                        f"{row['spread_alt_bps']:>9.2f} {row['norm']:>+9.4f}"
+                    )
+            print()
+            print(
+                f"  G1: {g1_clear}/{g1_tested} 4h series with gamma1 < 0 "
+                f"at t < -{ROLL_GATE_T}"
+            )
+            print()
+
+            print("  G2 -- the discriminant: |gamma1|/var must shrink with horizon")
+            g2_clear = 0
+            g2_tested = 0
+            for ticker in ROLL_ASSETS:
+                short = roll_rows.get((ticker, "4h"))
+                long_ = roll_rows.get((ticker, "1d"))
+                if not short or not long_:
+                    continue
+                g2_tested += 1
+                ok = short["norm"] < long_["norm"]
+                g2_clear += 1 if ok else 0
+                print(
+                    f"    {ticker:10} 4h {short['norm']:>+10.4f}  "
+                    f"1d {long_['norm']:>+10.4f}   "
+                    f"{'HOLDS' if ok else 'FAILS'}"
+                )
+            print()
+
+            print("  G3 -- a spread tracks liquidity: BTC < ETH < DOGE")
+            chain = []
+            for ticker in ("BTC/USDT", "ETH/USDT", "DOGE/USDT"):
+                row = roll_rows.get((ticker, "4h"))
+                chain.append((ticker, abs(row["gamma1"])) if row else (ticker, None))
+            shown = " < ".join(
+                f"{t}({abs(g):.2e})" if g is not None else f"{t}(n/a)"
+                for t, g in chain
+            )
+            have = [g for _, g in chain]
+            g3_ok = all(a is not None for a in have) and all(
+                have[i] <= have[i + 1] for i in range(len(have) - 1)
+            )
+            print(f"    {shown}   {'HOLDS' if g3_ok else 'FAILS'}")
+            print()
+
+            print("  G4 -- implied spread against the ~20 bps round trip")
+            for ticker in ROLL_ASSETS:
+                row = roll_rows.get((ticker, "4h"))
+                if not row or row["spread_bps"] <= 0.0:
+                    continue
+                verdict = (
+                    "bounce accounts for the covariance AND the cost is not it"
+                    if row["spread_bps"] < 20.0
+                    else "implied spread exceeds what trading costs -- not a spread"
+                )
+                print(
+                    f"    {ticker:10} {row['spread_bps']:>7.2f} bps "
+                    f"(alt {row['spread_alt_bps']:>6.2f})   {verdict}"
+                )
+            print()
+            print("  VERDICT")
+            if g2_clear == g2_tested and g3_ok and g2_tested:
+                print("  Bounce explains the covariance. The autocorrelation is a")
+                print("  measurement of the spread, not an edge, and it does not")
+                print("  survive as a tradable signal at any holding period.")
+            else:
+                print("  Bounce does not explain the covariance. The effect is not")
+                print("  a spread -- re-open it, registered, not improvised.")
 
         await core.shutdown()
     return 0
