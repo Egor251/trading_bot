@@ -116,6 +116,18 @@ NULL_SEEDS = _arg_int(5, 20)
 BASELINE = "random_baseline"
 
 _OVERRIDES = {
+    # Research-only exchange override. Measured daily depth: binance 3000,
+    # bitget ~1200, bybit 1000, okx 1000 -- bitget and the rest ignore `since`
+    # on daily bars, so the backward walk exhausts after one page and `MAX_PAGES`
+    # never gets a chance. Binance is the only source that pages.
+    #
+    # Scoped to this tool on purpose. `services.ccxt_market_service.exchange`
+    # is the *live* market connector, and silently repointing the bot at a
+    # different venue for the sake of a backtest would be the wrong kind of
+    # convenience.
+    "services.ccxt_market_service.exchange": os.environ.get(
+        "WINDOW_EXCHANGE", "binance"
+    ),
     "services.phantom_service.enabled": True,
     "services.phantom_service.auto_start": True,
     "services.historical_data_service.enabled": True,
