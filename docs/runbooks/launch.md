@@ -1096,6 +1096,57 @@ falsifiable:
 If the ranking does not follow φ, the mechanism is wrong and the +334% is something
 else. Registered before that test, like every other one here.
 
+### The mechanism test failed, and it was the right thing to run
+
+| series | phi | t(phi) | rule net | t(rule) | buy-and-hold |
+|---|---|---|---|---|---|
+| BTC/USDT | −0.0677 | −2.26 | +334.3% | +1.90 | +1068.3% |
+| ETH/USDT | −0.0721 | −2.61 | +405.6% | +1.73 | +503.1% |
+| ^GSPC | **−0.1261** | −1.91 | **−2.3%** | −0.04 | +281.4% |
+| GC=F | −0.0289 | −1.28 | −0.8% | −0.01 | +259.7% |
+| EURUSD=X | +0.0075 | +0.33 | −36.2% | −1.40 | +2.4% |
+| AAPL | −0.0478 | −1.20 | +24.8% | +0.24 | +1096.9% |
+
+**Spearman(phi, rule net) = −0.429 — the wrong sign.** Predictions 3 and 4 failed.
+The rule paid on no series where the market fell, and every series it paid on had risen
+500–1100%. "Drift explains it" is also wrong: on ^GSPC, up 281%, the rule returned
+**−2.3%**, and on gold, up 260%, **−0.8%**.
+
+So the description of this result as "a lead with a mechanism" was wrong and is
+withdrawn. It was a long-biased rule printing the market's direction.
+
+### Prediction 4 demanded a falling market, so four were named in advance
+
+Nothing in the sample fell hard enough to test it, so the periods were fixed before
+looking rather than searched for — searching history for windows where the rule worked
+returns a pass every time.
+
+| series | period | bars | rule net | t | buy-and-hold |
+|---|---|---|---|---|---|
+| ^GSPC | 1929-08 → 1932-11 | 835 | **+88.4%** | +1.11 | **−77.5%** |
+| ^GSPC | 2007-10 → 2009-03 | 378 | **+13.6%** | +0.31 | **−48.4%** |
+| BTC/USDT | 2018-01 → 2018-12 | 501 | **+90.1%** | +0.88 | **−11.3%** |
+| BTC/USDT | 2021-11 → 2022-11 | 1 000 | +130.0% | +1.14 | +81.6% |
+
+**Four of four, criterion held.** The rule returned +88.4% through the Great
+Depression, while the S&P lost 77.5%, and +13.6% through the 2008 crash against a 48.4%
+fall. **Drift cannot manufacture that** — this is the first result in the project that
+has survived a test built specifically to destroy it.
+
+What it is not, yet, is a finding. Individually the t-statistics are weak — the largest
+is +1.14 — and the sign count is 4 of 4, which is `p = 0.0625` one-sided. Marginal,
+not significant. The φ mechanism is separately refuted: the rank correlation came out
+with the wrong sign, so what MA(5) vs MA(34) exploits is not the 1-bar autocorrelation
+measured earlier. Possibly it is a different horizon — a 5-versus-34 comparison is not
+a one-bar question — but that is a guess, and it gets its own registration rather than
+being asserted here.
+
+**Position: drift is ruled out; the mechanism is open; significance is not reached.**
+The rule earns money in rising and falling markets, on four named periods including
+the hardest available test. That is worth a proper registered test on periods not used
+here, and it is emphatically not worth a lookback sweep — a rule that has survived
+this much and then been tuned is the same artefact under a better name.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It

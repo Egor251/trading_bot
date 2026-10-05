@@ -501,6 +501,61 @@ EWO_SLOW = 34
 EWO_TIMEFRAMES: tuple[str, ...] = ("1d", "4h", "1h")
 EWO_GATE1_T = 2.70
 
+#: The mechanism test, registered before it is run.
+#:
+#: The claim being tested is not the rule. It is the explanation for the rule's daily
+#: result: that MA(5) vs MA(34) earns its money from the *significantly negative*
+#: return autocorrelation measured independently (-0.0677 BTC, -0.0721 ETH), and from
+#: nothing else. The rule was blind to a 36-fold uptrend (+2.2% net), so drift cannot
+#: be the source -- but drift has to be ruled out per series anyway, because an index
+#: that rose 4 000-fold hands a long-biased rule a large number for free.
+#:
+#: Four predictions, all falsifiable, over ten observations:
+#:
+#:   1  every observation with phi t < -2.0 has rule net > 0
+#:   2  no observation with phi t > -1.0 has rule net > 0
+#:   3  Spearman rank correlation of phi against rule net is positive
+#:   4  on at least one series where buy-and-hold is not positive, the rule is net
+#:      positive -- the only place drift cannot explain anything
+#:
+#: Prediction 4 is the one that carries weight. Predictions 1 to 3 can all hold on a
+#: set of instruments that only went up. Money made on a falling market cannot be
+#: drift, and that is what a reversal claim has to show.
+#:
+#: One test with ten observations, not ten tests: the rule itself was already
+#: registered, and this asks whether its result follows from a number measured by a
+#: different method on the same bars.
+#: Prediction 4 demanded a down market and there was none in the sample, so the
+#: periods are named here rather than searched for. Fixed in advance:
+#:
+#:   1929-08 .. 1932-11   the S&P fell about 86% peak to trough
+#:   2007-10 .. 2009-03   it fell about 57%
+#:   2018-01 .. 2018-12   a crypto bear market
+#:   2021-11 .. 2022-11   a larger crypto bear market
+#:
+#: Registered criterion: the rule must be net positive at 10 bps in at least two of
+#: them. Money made while the market falls is the only thing in this whole sequence
+#: that drift cannot manufacture, and it is what would separate a reversal effect
+#: from directional exposure. If the rule loses in every named down period, then the
+#: +334% and +406% are drift with extra steps, and the daily result should be struck
+#: from the record rather than re-explained.
+DOWN_PERIODS: tuple[tuple[str, str, str, str], ...] = (
+    ("^GSPC", "EQUITY", "yahoo", "1929-08-01/1932-11-30"),
+    ("^GSPC", "EQUITY", "yahoo", "2007-10-01/2009-03-31"),
+    ("BTC/USDT", "CRYPTO", "ccxt", "2018-01-01/2018-12-31"),
+    ("BTC/USDT", "CRYPTO", "ccxt", "2021-11-01/2022-11-30"),
+)
+DOWN_MIN_WINS = 2
+
+MECHANISM_SERIES: tuple[tuple[str, str, str], ...] = (
+    ("BTC/USDT", "CRYPTO", "ccxt"),
+    ("ETH/USDT", "CRYPTO", "ccxt"),
+    ("^GSPC", "EQUITY", "yahoo"),
+    ("GC=F", "COMMODITY", "yahoo"),
+    ("EURUSD=X", "FOREX", "yahoo"),
+    ("AAPL", "EQUITY", "yahoo"),
+)
+
 #: The range-breakout test, registered before it was run.
 #:
 #: The hypothesis has a source that is not this repository. A 2024 note in
@@ -928,6 +983,35 @@ def ewo_rule_pnl(
         out["t"] = (avg / se) if se > 0 else 0.0
         out["n_pos"] = float(m)
     return out
+
+
+def spearman(xs: list[float], ys: list[float]) -> float:
+    """Rank correlation, ties averaged. Order only, which is what the claim is about."""
+    def _ranks(values: list[float]) -> list[float]:
+        order = sorted(range(len(values)), key=lambda i: values[i])
+        ranks = [0.0] * len(values)
+        i = 0
+        while i < len(order):
+            j = i
+            while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+                j += 1
+            shared = (i + j) / 2.0 + 1.0
+            for k in range(i, j + 1):
+                ranks[order[k]] = shared
+            i = j + 1
+        return ranks
+
+    if len(xs) != len(ys) or len(xs) < 3:
+        return 0.0
+    rx, ry = _ranks(xs), _ranks(ys)
+    n = len(rx)
+    mx = sum(rx) / n
+    my = sum(ry) / n
+    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    den = (
+        sum((a - mx) ** 2 for a in rx) * sum((b - my) ** 2 for b in ry)
+    ) ** 0.5
+    return (num / den) if den else 0.0
 
 
 def _fmt_ci(est: float, se: float) -> str:
@@ -1431,6 +1515,155 @@ async def main() -> int:
                 )
             if not winners_e:
                 print("    None.")
+
+        if os.environ.get("EDGE_MECHANISM"):
+            async def _fetch_m2(
+                ticker: str, class_code: str, provider: str, tf: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe=tf, limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("MECHANISM: does the rule's P&L follow the measured phi?")
+            print("=" * 72)
+            print(f"  fast={EWO_FAST} slow={EWO_SLOW}, 10 bps per fill")
+            print("  registered predictions:")
+            print("    1  phi t < -2.0  =>  rule net > 0")
+            print("    2  phi t > -1.0  =>  rule net <= 0")
+            print("    3  Spearman(phi, rule net) > 0")
+            print("    4  rule net > 0 on some series where buy-and-hold is not")
+            print()
+            print(
+                f"  {'series':10} {'tz':>4} {'n':>7} {'phi':>9} {'t_phi':>7} "
+                f"{'rule net':>10} {'t_rule':>7} {'buy&hold':>10}"
+            )
+            obs_phi: list[float] = []
+            obs_net: list[float] = []
+            p1_ok = p2_ok = True
+            p4_ok = False
+            n_obs = 0
+            for ticker, class_code, provider in MECHANISM_SERIES:
+                for tf in ("1d",):
+                    want = BARS if tf == "1d" else MOMENTUM_BARS
+                    try:
+                        series = await _fetch_m2(
+                            ticker, class_code, provider, tf, want
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  {ticker:10} {tf:>4} fetch failed "
+                              f"({type(exc).__name__})")
+                        continue
+                    if not series or len(series) < 200:
+                        print(f"  {ticker:10} {tf:>4} only "
+                              f"{len(series or [])} bars")
+                        continue
+                    opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    rets = log_returns(closes)
+                    est = ar1(rets)
+                    res = ewo_rule_pnl(
+                        opens, closes, fast=EWO_FAST, slow=EWO_SLOW,
+                        cost_bps=10.0,
+                    )
+                    bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
+                    n_obs += 1
+                    obs_phi.append(est["phi"])
+                    obs_net.append(res["net"])
+                    if est["t"] < -2.0 and res["net"] <= 0:
+                        p1_ok = False
+                    if est["t"] > -1.0 and res["net"] > 0:
+                        p2_ok = False
+                    if res["net"] > 0 and bh <= 0:
+                        p4_ok = True
+                    print(
+                        f"  {ticker:10} {tf:>4} {len(rets):>7} "
+                        f"{est['phi']:>+9.4f} {est['t']:>+7.2f} "
+                        f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} "
+                        f"{100 * bh:>9.1f}%"
+                    )
+            rho = spearman(obs_phi, obs_net)
+            p3_ok = rho > 0
+            print()
+            print(f"  observations: {n_obs}")
+            print(f"  Spearman(phi, rule net) = {rho:+.3f}   "
+                  f"prediction 3 {'HOLDS' if p3_ok else 'FAILS'}")
+            print(f"  prediction 1 (significant negative phi pays)   "
+                  f"{'HOLDS' if p1_ok else 'FAILS'}")
+            print(f"  prediction 2 (non-negative phi does not pay)   "
+                  f"{'HOLDS' if p2_ok else 'FAILS'}")
+            print(f"  prediction 4 (pays where market fell)          "
+                  f"{'HOLDS' if p4_ok else 'FAILS'}")
+            print()
+            if p1_ok and p2_ok and p3_ok and p4_ok:
+                print("  MECHANISM SUPPORTED. The rule's gain tracks the measured")
+                print("  negative autocorrelation and is not explained by drift.")
+            else:
+                print("  MECHANISM NOT SUPPORTED. The daily result is not explained by")
+                print("  the measured phi, and is something else.")
+
+        if os.environ.get("EDGE_DOWN"):
+            async def _fetch_d(
+                ticker: str, class_code: str, provider: str,
+                start: str, end: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe="1d", limit=bars, start=start, end=end,
+                )
+
+            print()
+            print("=" * 72)
+            print("PREDICTION 4: the rule must pay in named down markets")
+            print("=" * 72)
+            print(f"  criterion: net positive at 10 bps in at least "
+                  f"{DOWN_MIN_WINS} of {len(DOWN_PERIODS)} named periods")
+            print()
+            print(
+                f"  {'series':10} {'period':>24} {'n':>6} {'rule net':>10} "
+                f"{'t':>7} {'buy&hold':>10}"
+            )
+            wins_d = 0
+            for ticker, class_code, provider, span in DOWN_PERIODS:
+                start, end = span.split("/")
+                want = BARS if provider == "ccxt" else MOMENTUM_BARS
+                try:
+                    series = await _fetch_d(
+                        ticker, class_code, provider, start, end, want
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  {ticker:10} {span:>24} fetch failed "
+                          f"({type(exc).__name__})")
+                    continue
+                if not series or len(series) < 200:
+                    print(f"  {ticker:10} {span:>24} only "
+                          f"{len(series or [])} bars, skipped")
+                    continue
+                opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                res = ewo_rule_pnl(
+                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=10.0
+                )
+                bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
+                if res["net"] > 0:
+                    wins_d += 1
+                print(
+                    f"  {ticker:10} {span:>24} {len(closes):>6} "
+                    f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} "
+                    f"{100 * bh:>9.1f}%"
+                )
+            print()
+            print(f"  periods won: {wins_d} of {len(DOWN_PERIODS)}  "
+                  f"criterion: {'HOLDS' if wins_d >= DOWN_MIN_WINS else 'FAILS'}")
+            if wins_d >= DOWN_MIN_WINS:
+                print("  Money made while the market falls is not drift. The")
+                print("  reversal claim is worth a proper registered test.")
+            else:
+                print("  The rule does not survive a falling market. The +334% and")
+                print("  +406% are directional exposure to two rising assets, and")
+                print("  should not be counted as a finding.")
 
         await core.shutdown()
     return 0

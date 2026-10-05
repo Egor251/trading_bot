@@ -891,6 +891,29 @@ def test_ewo_crossover_is_nearly_blind_to_drift_and_that_is_the_point() -> None:
     assert down["trades"] > 0 and up["trades"] > 0, "both must actually trade"
 
 
+def test_down_market_periods_are_named_not_searched_for() -> None:
+    """Prediction 4 demanded a falling market, so the falling markets are fixed here.
+
+    The mechanism test failed on its rank prediction, and this is what closed the
+    remaining loophole: the rule has to make money while the market is going down, or
+    the daily result is just directional exposure to two assets that rose. Naming the
+    periods in advance is what makes the answer worth having -- searching the history
+    for windows where it worked would produce a pass every time.
+    """
+    from tools.edge_ceiling import DOWN_MIN_WINS, DOWN_PERIODS
+
+    spans = [span for _t, _c, _p, span in DOWN_PERIODS]
+    assert len(spans) == len(set(spans)), "a period listed twice would count twice"
+    assert len(DOWN_PERIODS) >= 3, "too few periods to mean anything"
+    assert DOWN_MIN_WINS >= 2, (
+        "winning one of three down periods is not evidence of anything"
+    )
+    assert any("^GSPC" in t for t, _c, _p, _s in DOWN_PERIODS), (
+        "there must be at least one equity bear market in the set, since crypto "
+        "bears have been mild by comparison"
+    )
+
+
 def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
     """The ceiling measurement is only worth anything if its estimators are honest.
 
