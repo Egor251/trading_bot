@@ -469,3 +469,55 @@ def test_window_bounds_use_the_real_bar_interval() -> None:
             )
     finally:
         module.TIMEFRAME = original
+
+
+def test_the_null_calibration_measures_a_rate_near_the_nominal_when_independent() -> None:
+    """A control on the control.
+
+    Every verdict in this project compares an observed count against a nominal
+    10%. If the percentile arithmetic itself is wrong, the calibration would
+    report a number and nobody would notice. Under `independent` windows the
+    nominal rate should roughly reproduce, so this is the check that makes the
+    `market` and `serial` numbers mean something.
+    """
+    import random
+
+    from tools.null_calibration import _draw
+
+    rng = random.Random(11)
+    cleared = sum(
+        _draw(rng, structure="independent", strategies=6, windows=2, per_window=32)
+        for _ in range(60)
+    )
+    total = 60 * 6 * 2
+    rate = 100.0 * cleared / total
+    assert 5.0 < rate < 20.0, f"independent-window rate {rate:.1f}% is not near nominal"
+
+
+def test_a_shared_market_factor_inflates_the_false_positive_rate() -> None:
+    """The reason the calibration exists, stated as an assertion.
+
+    Real windows share a market factor -- measured on BTC, where window three
+    made every strategy look strong at once. If that structure does not raise
+    the false-positive rate above nominal, the whole justification for
+    calibrating is wrong.
+    """
+    import random
+
+    from tools.null_calibration import _draw
+
+    rates = {}
+    for structure in ("independent", "market", "serial"):
+        rng = random.Random(2026)
+        cleared = sum(
+            _draw(rng, structure=structure, strategies=6, windows=2, per_window=32)
+            for _ in range(60)
+        )
+        rates[structure] = 100.0 * cleared / (60 * 6 * 2)
+
+    assert rates["market"] > rates["independent"], (
+        f"a shared factor must inflate the rate: {rates}"
+    )
+    assert rates["serial"] > rates["market"], (
+        f"correlated windows must inflate it further: {rates}"
+    )

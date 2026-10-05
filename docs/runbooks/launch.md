@@ -464,6 +464,39 @@ answer: `bollinger_reversion` at 4/4 and `cci_reversion` at 4/4 were two
 strategies reading one ledger. And the null once came back as a clean
 distribution of 0.00 that 33 of 80 windows "beat".
 
+### The threshold was calibrated, not assumed
+
+Every verdict above compares an observed count against a nominal 10%. That
+expectation assumes the windows are independent trials. They are not — they are
+adjacent stretches of one market.
+
+```bash
+python -m tools.null_calibration
+```
+
+Synthetic series, sampled with three correlation structures:
+
+| structure | false positives at p90 | nominal |
+|---|---|---|
+| `independent` — windows share nothing | **12.3%** | 10% |
+| `market` — one shared factor per window | **19.5%** | 10% |
+| `serial` — and adjacent windows correlated | **22.0%** | 10% |
+
+`market` is not a worst case invented for effect: it is what was measured on
+BTC, where window three made every strategy look strong simultaneously. `serial`
+adds the regime carry-over between windows, which real windows have and
+independent trials do not.
+
+**The observed rates were 11.3%, 6.3%, 12.5% and 14.3%** — every one at or below
+the calibrated ~20% for the correlated case. So the negatives are stronger than
+they looked: the noise floor for this method is higher than the nominal figure,
+and the strategies did not clear even that.
+
+This is the one thing synthetic prices are genuinely good for. A random walk has
+no edge by construction, so a strategy that clears p90 against it is a false
+positive *by definition* — the draws cannot find an edge, they can only measure
+whether the measuring works.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
