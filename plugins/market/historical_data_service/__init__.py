@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from microkernel_core import BaseService, KernelEvent
@@ -16,6 +17,7 @@ from microkernel_core import BaseService, KernelEvent
 from engine.adapters.alpaca_adapter import AlpacaMarketDataAdapter
 from engine.adapters.ccxt_adapter import CcxtMarketDataAdapter
 from engine.adapters.moex_adapter import MoexMarketDataAdapter
+from engine.paths import data_dir
 from engine.adapters.yahoo_adapter import YahooMarketDataAdapter
 from engine.market import Candle, candle_to_market_payload
 from host.event_bus_settle import settle_unsatisfied, wait_for_bus_quiescence
@@ -246,6 +248,14 @@ class HistoricalDataService(BaseService):
         ttl = float(self.config.get("cache_ttl_sec") or 0)
         disk_ttl = float(self.config.get("disk_cache_ttl_sec") or 0)
         disk_root = str(self.config.get("disk_cache_dir") or "").strip()
+        if disk_root and not Path(disk_root).is_absolute():
+            # Anchor under the data directory rather than the process CWD.
+            # Research tools redirect TRADING_DATA_DIR to a scratch directory --
+            # that redirect exists so a backtest cannot contaminate live data --
+            # and a bare `data/ohlc_cache` ignores it. Caught in the act: a
+            # stability run wrote `data/ohlc_cache/BTC_USDT_1d_*.json` into the
+            # repository, and tests/conftest.py failed the suite for it.
+            disk_root = str(Path(data_dir()) / disk_root)
         disk_path = None
         if use_cache and disk_ttl > 0 and disk_root and prov not in {
             "runtime",

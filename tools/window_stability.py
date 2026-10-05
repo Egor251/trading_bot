@@ -522,6 +522,40 @@ async def main() -> int:
             for widx in range(len(nets))
             if widx < len(null_by_window) and null_by_window[widx]
         )
+        # Same comparison, market factor removed. Reported alongside rather than
+        # instead of, because the two answer different questions: the raw number
+        # asks "did this make money", the residual asks "did it make money for
+        # any reason other than being in the market".
+        if os.environ.get("WINDOW_RESIDUAL"):
+            print("\nafter removing the per-window market factor:")
+            residuals = _demean(rows, null_by_window)
+            resid_by_window: list[list[float]] = []
+            for widx in range(WINDOWS):
+                pool = (
+                    [
+                        value - _median([n[widx] for _s, n, *_ in residuals
+                                         if widx < len(n)])
+                        for value in null_by_window[widx]
+                    ]
+                    if null_by_window[widx]
+                    else []
+                )
+                resid_by_window.append(pool)
+            kept = 0
+            for sid, residual in residuals:
+                marks = []
+                for widx, value in enumerate(residual):
+                    pool = resid_by_window[widx]
+                    pct = _percentile(value, pool) if pool else 0.0
+                    if pct >= 90.0:
+                        kept += 1
+                    marks.append(f"w{widx + 1}:{value:8.2f}(p{pct:.0f})")
+                print(f"  {sid:24} " + " ".join(marks))
+            print(
+                f"\nwindows at or above p90 after demeaning: {kept} "
+                f"of {total_windows}"
+            )
+
         print(f"\nwindows at or above p90 of their own null: {len(beats)} "
               f"of {total_windows}")
         for sid, w, value, pct in beats:
@@ -535,6 +569,42 @@ async def main() -> int:
         )
         await core.shutdown()
     return 0
+
+
+def _demean(
+    rows: list[tuple[str, list[float], list[int], int, int]],
+    null_by_window: list[list[float]],
+) -> list[tuple[str, list[float]]]:
+    """Strip the per-window market factor out of every strategy.
+
+    Window three on BTC made every strategy look strong at once, with the
+    random-timing null's own median positive in the same window. That is one
+    market, not twenty discoveries, and measuring raw P&L credits each strategy
+    with the factor it did not earn.
+
+    So subtract the median across strategies, per window, from both the strategy
+    and the null it is compared against. The question becomes: does this
+    strategy do anything a randomly-timed position on the same market would not?
+
+    The property that makes this safe to add is structural -- subtracting a
+    common factor can only *lower* an apparent result. It cannot manufacture a
+    winner, so it cannot be gamed by searching for a filter that happens to
+    flatter one strategy. A denoiser that could only improve the numbers would
+    be twenty-second strategy and another best-of-N draw.
+    """
+    out: list[tuple[str, list[float]]] = []
+    for sid, nets, _tr, _p, _t in rows:
+        residual: list[float] = []
+        for widx, value in enumerate(nets):
+            peers = [
+                other[widx]
+                for _s, other, _tr2, _p2, _t2 in rows
+                if widx < len(other)
+            ]
+            centre = _median(peers) if peers else 0.0
+            residual.append(float(value) - centre)
+        out.append((sid, residual))
+    return out
 
 
 def _median(values: list[float]) -> float:

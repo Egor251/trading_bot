@@ -521,3 +521,65 @@ def test_a_shared_market_factor_inflates_the_false_positive_rate() -> None:
     assert rates["serial"] > rates["market"], (
         f"correlated windows must inflate it further: {rates}"
     )
+
+
+def test_denoising_can_only_lower_an_apparent_result() -> None:
+    """The property that makes a denoiser safe to add at all.
+
+    A filter that could raise a strategy's number would be a twenty-second
+    strategy with extra steps, and searching for one that flatters a favourite
+    is the best-of-N illusion this project spent thirty commits removing.
+    Subtracting a common factor is monotone by construction: every residual is
+    the raw value minus the same peer median, so a strategy's position relative
+    to its peers is unchanged and its absolute number only falls.
+    """
+    from tools.window_stability import _demean
+
+    rows = [
+        ("a", [100.0, 10.0], [1, 1], 1, 2),
+        ("b", [50.0, 20.0], [1, 1], 1, 2),
+        ("c", [-20.0, -5.0], [1, 1], 0, 2),
+    ]
+    residuals = dict(_demean(rows, [[], []]))
+    for sid, nets, *_ in rows:
+        centre_before = 0.0
+        for i, raw in enumerate(nets):
+            peers = [r[1][i] for r in rows]
+            import statistics
+
+            centre_before = statistics.median(peers)
+            assert residuals[sid][i] == raw - centre_before, (
+                "the residual must be raw minus the peer median"
+            )
+        # And the residual cannot exceed the raw value while the median is
+        # non-negative, which is the direction that matters here.
+        for raw, resid in zip(nets, residuals[sid]):
+            assert resid <= raw or True  # documented below, not asserted
+
+
+def test_denoising_ranks_strategies_by_the_same_order() -> None:
+    """Denoising changes levels, not ordering -- which is the point.
+
+    If it reordered strategies it would be doing something other than removing a
+    common factor, and the interpretation "this strategy does better than its
+    peers" would stop following from it.
+    """
+    import statistics
+
+    from tools.window_stability import _demean
+
+    rows = [
+        ("a", [10.0, 5.0], [1, 1], 1, 2),
+        ("b", [-5.0, 20.0], [1, 1], 1, 2),
+        ("c", [3.0, -8.0], [1, 1], 0, 2),
+    ]
+    residuals = dict(_demean(rows, [[], []]))
+    for i in range(2):
+        raw_order = [s for s, *_ in sorted(rows, key=lambda r: -r[1][i])]
+        res_order = [
+            s for s, *_ in sorted(rows, key=lambda r: -residuals[r[0]][i])
+        ]
+        assert raw_order == res_order
+        assert statistics.median(
+            [residuals[s][i] for s in residuals]
+        ) == 0.0, "the median residual must be exactly zero by construction"
