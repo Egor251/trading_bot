@@ -78,6 +78,24 @@ class LiveReadinessPolicy:
     #: trades against a required 20, and the snapshot had been stale since
     #: 2026-08-06. Set false to restore the previous advisory-only behaviour.
     enforce: bool = True
+    #: Whether the batch of strategies judged together is corrected for its own
+    #: size. Separate from ``require_ci_excludes_zero`` on purpose: that asks "is
+    #: this one interval clear of zero", this asks "given how many strategies were
+    #: measured at once, would the best of them clear zero by chance".
+    #:
+    #: At 95% per strategy and 28 strategies in a batch, ~1.4 false positives are
+    #: expected even if every strategy is pure noise. The gate had no way to express
+    #: that, so a batch of mediocre strategies looks like a batch containing winners.
+    require_multiplicity_correction: bool = True
+    #: Bonferroni / holm / benjamini-hochberg. Holm by default: same family-wise
+    #: error as Bonferroni but it does not assume independence between strategies,
+    #: which is false here -- strategies on one ticker share price data, and shared
+    #: data means shared errors.
+    multiplicity_method: str = "holm"
+    #: Alpha applied to the *corrected* p-value. Not a separate threshold: the
+    #: correction already accounts for N, so this stays at the conventional 0.05
+    #: and does not compound a second, harsher penalty on top.
+    multiplicity_alpha: float = 0.05
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> LiveReadinessPolicy:
@@ -201,6 +219,10 @@ def record_digest_clearance(
         "ci_crosses_zero": digest.get("ci_crosses_zero"),
         "ci_low": digest.get("ci_low"),
         "ci_high": digest.get("ci_high"),
+        # Carried so the batch-level multiplicity pass has a per-strategy p-value
+        # to correct. Without it the only evidence reaching the gate is the boolean
+        # above, and a boolean cannot be corrected -- which is the entire problem.
+        "p_value": digest.get("p_value"),
         "profit_factor": digest.get("profit_factor"),
         "total_oos_trades": _i(digest.get("total_oos_trades")),
         "timeframe": digest.get("timeframe"),
@@ -419,6 +441,14 @@ def evaluate_live_readiness(
     mean_oos = max((m for m in means if m is not None), default=None)
     any_ci_cross = any(bool(h.get("ci_crosses_zero")) for h in metric_pool)
     ci_ok = not any_ci_cross
+    # Worst p-value across the pool, matching `any_ci_cross` above: this strategy
+    # is only as supported as its least supportive ticker. Taking the best would
+    # mean a strategy cleared on the ticker that happened to suit it, which is the
+    # selection this gate exists to prevent. Tickers with no p-value on record
+    # yield None, and None is later treated as failing rather than skipped.
+    pool_p = [_f(h.get("p_value")) for h in metric_pool]
+    known_pool_p = [v for v in pool_p if v is not None and 0.0 <= v <= 1.0]
+    p_value = max(known_pool_p) if known_pool_p else None
 
     age_ok = True
     oldest_evidence: list[dict[str, Any]] = []
@@ -574,12 +604,17 @@ def evaluate_live_readiness(
         "best_entry": best,
         "robust_tickers": sorted(robust_tickers),
         "policy": pol.to_dict(),
+        # The per-strategy evidence the batch-level multiplicity pass corrects. It
+        # sits at the top level rather than inside `metrics` because it is an input
+        # to the batch decision, not a descriptive statistic of this row.
+        "p_value": p_value,
         "metrics": {
             "holdout_trades": holdout_trades,
             "total_oos_trades": oos_trades,
             "profit_factor": pf,
             "mean_oos_pnl": mean_oos,
             "ci_crosses_zero": any_ci_cross,
+            "p_value": p_value,
             "chosen": chosen,
         },
     }
@@ -638,6 +673,166 @@ def live_promotion_blockers(
     return out
 
 
+def apply_multiplicity(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    alpha: float = 0.05,
+    method: str = "holm",
+) -> dict[str, Any]:
+    """Correct a batch of per-strategy verdicts for how many were measured.
+
+    Each row is judged alone at first -- its interval either clears zero or it does
+    not. That is a valid test, and it is also exactly the test you must not run N
+    times without paying for it. At a 95% level, twenty-eight independent strategies
+    all built from noise produce about 1.4 that clear zero on average, and the
+    unlucky run produces several. Ranking them then promoting the best is selecting
+    on noise, which is why the winner's interval looks convincing and is not.
+
+    Correcting is the only honest response, and it has to happen here rather than
+    inside the per-strategy evaluation: multiplicity is a property of a *set*, and
+    no single strategy can know how many others were measured alongside it.
+
+    A row whose p-value is unknown -- a clearance written before p-values existed,
+    or a strategy with too few trades to resample -- is treated as failing. That is
+    deliberate. Missing evidence is not weak evidence for promotion, and the
+    alternative is a set of records that quietly pass because they predate the
+    field. Such rows get ``p_value = None`` in the output rather than a fabricated
+    number, so the report cannot be read as "measured and insignificant".
+
+    Returns a summary carrying the corrected p-value, the batch size and the
+    correction method, and mutates each row's ``checks``/``blockers`` in place to
+    record the outcome -- the same shape every other gate check uses, so existing
+    consumers of ``live_ok`` need no changes.
+    """
+    from .simulation import adjust_pvalues
+
+    items = [dict(row) for row in rows]
+    if not items:
+        # Same keys as the populated case, so a consumer never has to branch on
+        # whether there was anything to correct.
+        return {
+            "rows": [],
+            "multiplicity_corrected": False,
+            "multiplicity_batch_size": 0,
+            "multiplicity_method": str(method or "holm"),
+            "multiplicity_alpha": float(alpha),
+            "multiplicity_measured": 0,
+            "multiplicity_unknown": 0,
+            "multiplicity_ok": [],
+            "multiplicity_fail": [],
+        }
+
+    known: list[int] = []
+    raw_p: list[float] = []
+    for index, row in enumerate(items):
+        value = _f(row.get("p_value"))
+        if value is None or not (0.0 <= value <= 1.0):
+            continue
+        known.append(index)
+        raw_p.append(value)
+
+    method_norm = str(method or "holm").lower().replace("_", "-")
+    adjusted: dict[int, float] = {}
+    if raw_p:
+        try:
+            corrected = adjust_pvalues(raw_p, method_norm)
+        except ValueError:
+            corrected = adjust_pvalues(raw_p, "holm")
+            method_norm = "holm"
+        for index, value in zip(known, corrected):
+            adjusted[index] = float(value)
+
+    alpha_f = float(alpha)
+    ok_ids: list[str] = []
+    fail_ids: list[str] = []
+    unknown = 0
+
+    for index, row in enumerate(items):
+        sid = str(row.get("strategy_id") or "")
+        if index in adjusted:
+            p_adjusted = adjusted[index]
+            passed = p_adjusted < alpha_f
+            detail: dict[str, Any] = {
+                "p_value": _f(row.get("p_value")),
+                "p_adjusted": p_adjusted,
+                "method": method_norm,
+                "batch_size": len(items),
+                "alpha": alpha_f,
+                "known_p_values": len(raw_p),
+            }
+            known_reason = "multiplicity"
+        else:
+            p_adjusted = None
+            passed = False
+            unknown += 1
+            detail = {
+                "p_value": None,
+                "p_adjusted": None,
+                "method": method_norm,
+                "batch_size": len(items),
+                "alpha": alpha_f,
+                "known_p_values": len(raw_p),
+                "reason_detail": "no_p_value_on_record",
+            }
+            known_reason = "multiplicity_unknown_p_value"
+
+        row["p_value_adjusted"] = p_adjusted
+        row["multiplicity_batch_size"] = len(items)
+
+        checks = list(row.get("checks") or [])
+        checks.append(
+            {
+                # Two different failures that share a fix. Naming them apart matters
+                # on a real snapshot: every clearance written before p-values
+                # existed reports the unknown case, and if that printed as
+                # `multiplicity` on all twenty rows the name would stop carrying
+                # information and a genuine failure later would be lost in it.
+                "name": known_reason if not passed and p_adjusted is None
+                else "multiplicity",
+                "ok": passed,
+                "detail": detail,
+                "live": True,
+                "observe": True,
+            }
+        )
+        row["checks"] = checks
+
+        blockers = list(row.get("blockers") or [])
+        if not passed:
+            blockers.append(
+                {
+                    "reason": known_reason,
+                    "detail": detail,
+                    "grade": row.get("grade"),
+                    "score": row.get("score"),
+                }
+            )
+            # Failing here can never promote a row, only withhold one. Demoting both
+            # grades is the conservative direction: a strategy that cannot be shown
+            # significant after correcting for its own batch has not earned live
+            # voting, and observe exists to watch, not to trade.
+            row["live_ok"] = False
+            row["observe_ok"] = False
+        row["blockers"] = blockers
+
+        if passed:
+            ok_ids.append(sid)
+        else:
+            fail_ids.append(sid)
+
+    return {
+        "rows": items,
+        "multiplicity_corrected": True,
+        "multiplicity_batch_size": len(items),
+        "multiplicity_method": method_norm,
+        "multiplicity_alpha": alpha_f,
+        "multiplicity_measured": len(raw_p),
+        "multiplicity_unknown": unknown,
+        "multiplicity_ok": ok_ids,
+        "multiplicity_fail": fail_ids,
+    }
+
+
 def evaluate_many(
     strategy_ids: Sequence[str],
     *,
@@ -645,6 +840,7 @@ def evaluate_many(
     policy: LiveReadinessPolicy | None = None,
     raw_cfg: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    pol = policy or policy_from_config(raw_cfg)
     rows = []
     for sid in strategy_ids:
         sid_s = str(sid or "").strip()
@@ -660,6 +856,16 @@ def evaluate_many(
                 else None,
             )
         )
+    multiplicity: dict[str, Any] = {}
+    if pol.require_multiplicity_correction and rows:
+        corrected_rows = apply_multiplicity(
+            rows,
+            alpha=pol.multiplicity_alpha,
+            method=pol.multiplicity_method,
+        )
+        rows = list(corrected_rows.get("rows") or rows)
+        multiplicity = {k: v for k, v in corrected_rows.items() if k != "rows"}
+
     rows.sort(
         key=lambda r: (
             bool(r.get("live_ok")),
@@ -678,6 +884,7 @@ def evaluate_many(
             if r.get("observe_ok") and not r.get("live_ok")
         ],
         "research_only": [r["strategy_id"] for r in rows if not r.get("observe_ok")],
+        "multiplicity": multiplicity,
         "rows": rows,
     }
 

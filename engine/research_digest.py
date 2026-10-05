@@ -83,6 +83,11 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         "ci_low": _f(ci_lo) if ci_lo is not None else None,
         "ci_high": _f(ci_hi) if ci_hi is not None else None,
         "ci_crosses_zero": ci_crosses_zero,
+        # Null-hypothesis p-value for the mean, from the recentred block bootstrap.
+        # Absent on older reports rather than defaulted to 0.05: a record written
+        # before this field existed has *unknown* evidence, and treating unknown as
+        # "p = 0.05, fails the corrected bar" is the safe direction to be wrong in.
+        "p_value": _f(oos.get("p_value")),
         "win_rate": _f(oos.get("win_rate")),
         "profit_factor": _f(oos.get("profit_factor")),
         "total_oos_trades": int(oos.get("total_oos_trades") or 0),

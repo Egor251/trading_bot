@@ -650,6 +650,22 @@ trading:
     observe_require_ci_excludes_zero: false
     require_ci_excludes_zero: true
     require_params_applied: true
+    # The batch of strategies judged together is corrected for its own size.
+    # `require_ci_excludes_zero` asks "is this one interval clear of zero", which
+    # is a fair test to run once and not twenty-eight times: at 95% and N=28 it
+    # yields ~1.4 false positives even if every strategy is pure noise, and ranking
+    # the survivors promotes the luckiest one.
+    #
+    # `adjust_pvalues` existed in engine/simulation.py for the whole time with no
+    # caller; it is now wired to evaluate_many, the one place that can see the set.
+    #
+    # Set this to false to judge each strategy on its own evidence. That is a real
+    # decision, not a default: it is the situation this was added to prevent.
+    require_multiplicity_correction: true
+    # holm, not bonferroni: same family-wise error but it does not assume the
+    # strategies are independent, which they are not -- they share price data.
+    multiplicity_method: holm
+    multiplicity_alpha: 0.05
   mode: paper
   performance:
     daily_minimum: 100

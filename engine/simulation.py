@@ -603,6 +603,102 @@ def adjust_pvalues(pvalues: Sequence[float], method: str = "holm") -> list[float
 multiple_testing_correction = adjust_pvalues
 
 
+def ar1(
+    values: Sequence[float], *, lags: int | None = None
+) -> dict[str, float]:
+    """OLS of ``x_t`` on ``x_{t-1}`` with a Newey-West standard error.
+
+    Lives here rather than in a research tool because the question it answers -- *is
+    this series predictable at all* -- is prior to any strategy question, and every
+    backtest that reports a P&L should be answerable against it. A strategy set can
+    only be as good as the predictability of the series it trades.
+
+    Newey-West rather than an i.i.d. error, and the reason is not pedantry: an
+    i.i.d. standard error on autocorrelated data understates the true variance of
+    the estimate and inflates apparent significance, which is the one direction of
+    error that manufactures findings. The default lag is the Newey-West rule of
+    thumb, which grows slowly with n and lands near 5 at these sample sizes.
+    """
+    xs = [float(v) for v in values]
+    n = len(xs)
+    if n < 20:
+        return {"phi": 0.0, "se": 0.0, "t": 0.0, "n": float(n)}
+    lead, lag_ = xs[:-1], xs[1:]
+    m = len(lead)
+    mx = sum(lead) / m
+    my = sum(lag_) / m
+    sxx = sum((v - mx) ** 2 for v in lead)
+    if sxx <= 0.0:
+        return {"phi": 0.0, "se": 0.0, "t": 0.0, "n": float(m)}
+    sxy = sum((a - mx) * (b - my) for a, b in zip(lead, lag_))
+    phi = sxy / sxx
+    alpha = my - phi * mx
+    resid = [b - (alpha + phi * a) for a, b in zip(lead, lag_)]
+
+    if lags is None:
+        lags = int(math.ceil(4.0 * (m / 100.0) ** (2.0 / 9.0)))
+    band = max(1, int(lags))
+    u = [r * (v - mx) for r, v in zip(resid, lead)]
+    long_run = sum(v * v for v in u)
+    for offset in range(1, band + 1):
+        weight = 1.0 - offset / (band + 1.0)
+        long_run += weight * 2.0 * sum(
+            u[i] * u[i - offset] for i in range(offset, m)
+        )
+    variance = long_run / (sxx * sxx)
+    se = math.sqrt(variance) if variance > 0.0 else 0.0
+    return {"phi": phi, "se": se, "t": (phi / se if se > 0 else 0.0), "n": float(m)}
+
+
+def variance_ratio(values: Sequence[float], lag: int) -> dict[str, float]:
+    """Lo-MacKinlay variance ratio at one lag.
+
+    ``VR(q) = Var(q-bar sum) / (q * Var(1-bar))``. A random walk gives 1. Above 1
+    means positive autocorrelation and below 1 the reverse, and on real markets the
+    sign at short lags is frequently negative -- which is a fact about markets, and
+    is exactly the kind of thing a strategy should be told about rather than
+    discovered by losing money to it.
+
+    The z statistic uses the overlapping-sums correction ``(2q-1)(q-1)/q``, because
+    the naive variance of overlapping q-bar sums understates the error badly enough
+    to make a random walk look significant.
+    """
+    xs = [float(v) for v in values]
+    n = len(xs)
+    if lag < 2 or n < 4 * lag + 10:
+        return {"vr": 1.0, "z": 0.0, "n": float(n)}
+    mu = sum(xs) / n
+    dev = [x - mu for x in xs]
+    var1 = sum(v * v for v in dev) / (n - 1)
+    if var1 <= 0.0:
+        return {"vr": 1.0, "z": 0.0, "n": float(n)}
+    sums = [sum(dev[i : i + lag]) for i in range(n - lag + 1)]
+    m = len(sums)
+    mean_q = sum(sums) / m
+    var_q = sum((s - mean_q) ** 2 for s in sums) / (m - 1)
+    vr = var_q / (lag * var1)
+    denom = math.sqrt(2.0 * (2.0 * lag - 1.0) * (lag - 1.0) / lag)
+    return {
+        "vr": vr,
+        "z": (math.sqrt(n) * (vr - 1.0) / denom) if denom > 0 else 0.0,
+        "n": float(n),
+    }
+
+
+def resolvable_phi(n: int, *, confidence: float = 1.96) -> float:
+    """Smallest autocorrelation this sample size could tell apart from zero.
+
+    The standard error of an AR(1) coefficient behaves like ``1/sqrt(n)``, so the
+    answer is ``confidence/sqrt(n)``. This is the arithmetic behind every "not
+    significant" in a research log, and it is the reason a per-window number cannot
+    be called anything: 749 bars cannot resolve 0.072, so a 748-bar window can never
+    distinguish a true 0.05 from zero no matter what the market does.
+    """
+    if n <= 0:
+        return float("inf")
+    return confidence / math.sqrt(n)
+
+
 def bootstrap_stress(
     returns: Sequence[float],
     *,
@@ -694,13 +790,16 @@ __all__ = [
     "SimOrderType",
     "ZeroCostCalculator",
     "adjust_pvalues",
+    "ar1",
     "bootstrap_stress",
     "monte_carlo_stress",
     "multiple_testing_correction",
     "plateau_score",
     "purged_cv_splits",
     "purged_kfold_splits",
+    "resolvable_phi",
     "sensitivity_plateau",
+    "variance_ratio",
     "stable_hash",
     "walk_forward_splits",
 ]

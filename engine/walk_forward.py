@@ -313,6 +313,34 @@ def _optimal_block_length(n: int) -> int:
     return max(1, min(n, int(round(n ** (1.0 / 3.0)))))
 
 
+def _null_bootstrap_p(null_means: Sequence[float], observed: float) -> float:
+    """Two-sided p-value from a resample of the series *recentered on zero*.
+
+    The tempting shortcut -- ask where the observed mean falls inside the bootstrap
+    distribution -- does not work, and it fails silently rather than loudly. A
+    bootstrap distribution is centred on the observed statistic by construction, so
+    the observed mean sits at its midpoint and the answer comes out near 1 for
+    every input, including series with an enormous signal. It reported p = 0.975
+    for a mean of 3.0 with a CI of [2.93, 3.09] before this was caught.
+
+    A p-value is the probability of the data *under the null*, so the null has to be
+    baked into the resample. Recentering on zero imposes "mean is zero" while the
+    block structure keeps the autocorrelation intact, and the question becomes the
+    honest one: how often does a world with no edge produce a mean this large?
+
+    ``(1 + count) / (1 + n)`` rather than ``count / n`` so a strong signal reports a
+    small number instead of exactly zero -- a p-value of 0 asserts more than any
+    finite sample can support, and the correction downstream multiplies by N.
+    """
+    target = abs(float(observed))
+    if not null_means:
+        return 1.0
+    if target == 0.0:
+        return 1.0
+    count = sum(1 for value in null_means if abs(value) >= target)
+    return min(1.0, (1.0 + count) / (1.0 + len(null_means)))
+
+
 def block_bootstrap_mean_ci(
     values: Sequence[float],
     *,
@@ -344,8 +372,13 @@ def block_bootstrap_mean_ci(
             "bootstrap_mean": 0.0,
             "bootstrap_samples": 0,
             "block_length": 0,
+            "p_value": 1.0,
         }
     if n == 1 or samples <= 0:
+        # A single observation has no resample to build a distribution from, so
+        # there is no evidence either way. Reporting 1.0 rather than guessing is the
+        # whole point: an unwinnable record must not be corrected into significance
+        # by the multiplicity pass downstream.
         m = float(xs[0])
         return {
             "ci_low": m,
@@ -354,6 +387,7 @@ def block_bootstrap_mean_ci(
             "bootstrap_mean": m,
             "bootstrap_samples": 0,
             "block_length": 0,
+            "p_value": 1.0,
         }
 
     block = int(block_length or _optimal_block_length(n))
@@ -361,14 +395,23 @@ def block_bootstrap_mean_ci(
     rng = random.Random(int(seed))
     blocks_needed = -(-n // block)  # ceil
     starts_max = n - block
+    observed = sum(xs) / n
+    # Two resamples from one loop, one stream of randomness: the interval from the
+    # raw series, the p-value from the same series recentered on zero. Sharing the
+    # stream keeps the two numbers describing the same draws, which matters when a
+    # reader is trying to work out why they disagree.
+    centered = [v - observed for v in xs]
     means: list[float] = []
+    null_means: list[float] = []
     for _ in range(int(samples)):
         picks: list[float] = []
+        picks_c: list[float] = []
         for _ in range(blocks_needed):
             start = rng.randint(0, starts_max) if starts_max > 0 else 0
             picks.extend(xs[start : start + block])
-        draw = picks[:n]
-        means.append(sum(draw) / len(draw))
+            picks_c.extend(centered[start : start + block])
+        means.append(sum(picks[:n]) / n)
+        null_means.append(sum(picks_c[:n]) / n)
     means.sort()
     alpha = 1.0 - float(ci)
     lo = means[max(0, int((alpha / 2.0) * len(means)))]
@@ -377,9 +420,14 @@ def block_bootstrap_mean_ci(
         "ci_low": lo,
         "ci_high": hi,
         "ci_level": float(ci),
-        "bootstrap_mean": sum(xs) / n,
+        "bootstrap_mean": observed,
         "bootstrap_samples": len(means),
         "block_length": block,
+        # A CI says only whether the interval cleared a line; a p-value is the thing
+        # that can be corrected for how many strategies were measured. Correcting is
+        # the entire purpose of the gate this feeds, so the number has to exist in
+        # the record before the batch size is known.
+        "p_value": _null_bootstrap_p(null_means, observed),
     }
 
 

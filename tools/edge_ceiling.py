@@ -52,6 +52,13 @@ ensure_code_base_path()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The estimators live in the engine now. They were written here first, which is the
+# wrong way round: anything that gates a decision belongs where the decision is made,
+# not in a script that happens to run one experiment. Re-exported rather than
+# imported directly so the ~2200 call sites in this file, and the other research
+# tools that import from here, keep working unchanged.
+from engine.simulation import ar1, resolvable_phi, variance_ratio  # noqa: E402
+
 #: The smallest injected edge the power sweep detected above the noise floor,
 #: registered there before it was run: phi = 0.05, snr 0.32.
 DETECTION_FLOOR = 0.05
@@ -138,89 +145,6 @@ def log_returns(closes: list[float]) -> list[float]:
         if prev > 0 and cur > 0:
             out.append(math.log(cur / prev))
     return out
-
-
-def ar1(returns: list[float], *, lags: int | None = None) -> dict[str, float]:
-    """OLS of `r_t` on `r_{t-1}`, with a Newey-West standard error.
-
-    Newey-West because an i.i.d. standard error is the wrong one here and errs in
-    the convenient direction: returns are heteroskedastic (a quiet week and a
-    violent one produce very different squared returns), so assuming independence
-    understates the true variance of the estimate and inflates apparent
-    significance. Lag default is Newey-West's own rule of thumb, which grows very
-    slowly with n and lands near 5 at this sample size.
-    """
-    n = len(returns)
-    if n < 20:
-        return {"phi": 0.0, "se": 0.0, "t": 0.0, "n": float(n)}
-    x = returns[:-1]
-    y = returns[1:]
-    m = len(x)
-    mx = sum(x) / m
-    my = sum(y) / m
-    sxx = sum((v - mx) ** 2 for v in x)
-    if sxx <= 0.0:
-        return {"phi": 0.0, "se": 0.0, "t": 0.0, "n": float(m)}
-    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
-    phi = sxy / sxx
-    alpha = my - phi * mx
-    resid = [b - (alpha + phi * a) for a, b in zip(x, y)]
-
-    if lags is None:
-        lags = int(math.ceil(4.0 * (m / 100.0) ** (2.0 / 9.0)))
-    u = [r * (v - mx) for r, v in zip(resid, x)]
-    long_run = sum(v * v for v in u)
-    for lag in range(1, max(1, lags) + 1):
-        weight = 1.0 - lag / (max(1, lags) + 1.0)
-        long_run += weight * 2.0 * sum(u[i] * u[i - lag] for i in range(lag, m))
-    variance = long_run / (sxx * sxx)
-    se = math.sqrt(variance) if variance > 0.0 else 0.0
-    return {"phi": phi, "se": se, "t": (phi / se if se > 0 else 0.0), "n": float(m)}
-
-
-def variance_ratio(returns: list[float], lag: int) -> dict[str, float]:
-    """Lo-MacKinlay variance ratio at one lag.
-
-    VR(q) = Var(q-bar sum) / (q * Var(1-bar)). A random walk gives 1. Above 1 means
-    positive autocorrelation, below 1 means the opposite -- and on real markets the
-    sign is frequently negative at short lags, which is a fact about the instrument
-    as much as about the market.
-
-    The z statistic is the asymptotic normal approximation, with the overlapping
-    sums accounted for by the (2q-1)(q-1)/q correction, which is why a naive
-    variance of overlapping q-sums understates the error.
-    """
-    n = len(returns)
-    if n < 4 * lag + 10:
-        return {"vr": 1.0, "z": 0.0, "n": float(n)}
-    mean = sum(returns) / n
-    dev = [r - mean for r in returns]
-    var1 = sum(v * v for v in dev) / (n - 1)
-    if var1 <= 0.0:
-        return {"vr": 1.0, "z": 0.0, "n": float(n)}
-    sums = [
-        sum(dev[i : i + lag]) for i in range(n - lag + 1)
-    ]
-    m = len(sums)
-    mean_q = sum(sums) / m
-    var_q = sum((s - mean_q) ** 2 for s in sums) / (m - 1)
-    vr = var_q / (lag * var1)
-    denom = math.sqrt(2.0 * (2.0 * lag - 1.0) * (lag - 1.0) / lag)
-    z = math.sqrt(n) * (vr - 1.0) / denom if denom > 0 else 0.0
-    return {"vr": vr, "z": z, "n": float(n)}
-
-
-def resolvable_phi(n: int, *, confidence: float = 1.96) -> float:
-    """Smallest `phi` this sample size could tell apart from zero.
-
-    The standard error of an AR(1) coefficient behaves like 1/sqrt(n), so the
-    answer is confidence/sqrt(n). Stated explicitly because it is the reason the
-    per-window numbers are so much weaker than the pooled one, and it is the
-    reason a null result here is never proof of absence at the per-window scale.
-    """
-    if n <= 0:
-        return float("inf")
-    return confidence / math.sqrt(n)
 
 
 def lag_sensitivity(returns: list[float], lags: tuple[int, ...]) -> list[dict[str, float]]:

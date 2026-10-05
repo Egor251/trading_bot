@@ -96,6 +96,46 @@ and `min_oos_trades` out-of-sample trades — with `max_age_days` expiry.
 Read the whole gate state with `python tools/gate_status.py` and one strategy's
 evidence with `python tools/clearance_table.py <strategy>`.
 
+### The batch is corrected for its own size
+
+`require_ci_excludes_zero` asks one question per strategy: does its interval clear
+zero? That is a fair test to run **once**, and it was being run 28 times without
+paying for it. At 95% a batch of 28 strategies built from pure noise produces about
+1.4 intervals clear of zero on average and more on an unlucky run; ranking the
+survivors and promoting the best is selection on noise, and the winner's interval
+looks entirely convincing.
+
+`evaluate_many` now corrects the batch with `apply_multiplicity`, and the
+correction is recorded as an ordinary gate check named `multiplicity` carrying the
+raw p-value, the corrected one, the batch size and the method:
+
+```
+live_ok: ['s3']          # before
+multiplicity: {'batch_size': 12, 'measured': 12, 'method': 'holm',
+               'multiplicity_ok': ['s3'], 'alpha': 0.05}
+```
+
+`adjust_pvalues` had been in `engine/simulation.py` the whole time —
+implemented, tested, exported, called from nothing but its own tests. This is what
+it was for.
+
+Three decisions worth knowing before changing any of it:
+
+- **Holm, not Bonferroni.** Same family-wise error, but it does not assume the
+  strategies are independent, and they are not: they share price data, so they
+  share errors.
+- **A missing p-value blocks rather than passes.** Clearance records written
+  before p-values existed have *unknown* evidence, and unknown is not a pass. They
+  are reported with `p_value_adjusted: null` and a
+  `multiplicity_unknown_p_value` blocker, so the report cannot be misread as
+  "measured and insignificant".
+- **The correction can only withhold.** Every row that entered the pass already
+  satisfied its own checks; the correction demotes and never promotes. A correction
+  that quietly rescues weak evidence is worse than none, because it looks rigorous.
+
+`require_multiplicity_correction: false` judges each strategy on its own evidence
+and is reported as such in `multiplicity`. It is a real decision, not a default.
+
 ### Clearance depends on how much history the venue would serve
 
 The venue caps a single klines request (Bitget: 300 daily bars), and the adapter
@@ -1386,6 +1426,51 @@ The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
 resolves from `OPERATOR_API_TOKEN`, else from `data/ui/operator_token` (mode
 0600), else it is generated at first boot. A non-loopback `--host` requires
 `--allow-lan`.
+
+## The inferential layer, and one bug worth recording
+
+Two things that gate decisions used to live only in research scripts, and now live
+in `engine/simulation.py`:
+
+- **`ar1(values, lags=...)`** — AR(1) with a Newey-West standard error. Newey-West
+  because an i.i.d. error is the wrong one here and errs in the convenient
+  direction: returns are heteroskedastic, so assuming independence understates the
+  variance of the estimate and inflates apparent significance. The correction grows
+  with the dependence it corrects for — on white noise the two estimators agree
+  (ratio 1.00), on φ=0.80 the Newey-West interval is **1.57× wider**.
+- **`variance_ratio(values, lag)`** — Lo-MacKinlay, with the overlapping-sums
+  `(2q-1)(q-1)/q` correction. Without it the naive variance of overlapping q-bar
+  sums understates the error badly enough to make a random walk look significant.
+- **`resolvable_phi(n)`** — `1.96/sqrt(n)`, the floor below which a sample size
+  cannot tell an autocorrelation from zero. At 749 bars the floor is 0.072, so a
+  window reporting φ = 0.05 has reported nothing regardless of what the market did.
+
+### The first p-value written here was wrong, and failed silently
+
+The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
+"where does the observed mean fall inside the bootstrap distribution". That does not
+work, and it fails quietly rather than loudly: **a bootstrap distribution is centred
+on the observed statistic by construction**, so the observed mean sits at its
+midpoint and the answer comes out near 1 for every input.
+
+It reported **p = 0.975 for a mean of 3.0 with a CI of [2.93, 3.09]** — a
+signal so strong the interval did not come close to crossing zero, graded as
+evidence *against* itself.
+
+A p-value is the probability of the data *under the null*, so the null has to be in
+the resample. The fix recenters the series on zero before resampling, which imposes
+"mean is zero" while the block structure keeps the autocorrelation intact. Calibrated
+on 300 runs of iid noise: **4.3% rejections at a nominal 5%**, and 100% detection on
+a shifted mean. The test
+`test_p_value_is_calibrated_at_its_nominal_rate` exists because the shortcut passes
+every other test in the file.
+
+The floor is `(1 + count) / (1 + n)`, never zero. A p-value of 0 asserts more than
+any finite sample supports, and the correction downstream multiplies it by N.
+
+This is the 12th instance in this project of a quantity recorded in one place and
+interpreted in another. The distinguishing feature was that it was *written* to be
+plausible: monotone in the right direction, right range, right units.
 
 ## Control plane
 
