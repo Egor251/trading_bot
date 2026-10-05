@@ -605,6 +605,49 @@ EWO_GATE1_T = 2.70
 #: The library turned out to hold fourteen usable oscillators rather than the
 #: thirteen registered, so the grid is 56 tests rather than 52. Recorded rather than
 #: quietly rounded: the bar moves from 3.10 to 3.11, which changes no verdict here.
+#: Volatility-expansion reversal, registered before it is run.
+#:
+#: This is the one direction the measurements actually point at, and the reason it
+#: has not paid in anything above is frequency rather than absence.
+#:
+#: What is measured, not hoped for:
+#:
+#:   lag-1 return autocorrelation is significantly negative -- -0.0677 on BTC and
+#:     -0.0721 on ETH, t = -2.26 and -2.61, stable across Newey-West lags 1 to 30,
+#:     with variance ratios of 0.933 and 0.928
+#:   magnitude is strongly persistent -- corr(|r_t|, |r_t+1|) = 0.165 and 0.161, and the
+#:     next bar is 1.28x to 1.54x larger after a large one
+#:
+#: A contrarian rule aimed at the first and triggered by the second is therefore not
+#: a guess. What has killed every version so far is that it was run at one decision per
+#: bar, where turnover is 1.07 flips per bar and the breakeven cost is 35 bps against
+#: a market charging 4 to 10. Holding longer is the only lever that changes that
+#: arithmetic, so holding period is the parameter that matters -- and it is set by the
+#: cost arithmetic, not searched.
+#:
+#: Two holding periods are tested, and they are a genuine fork between the two
+#: mechanisms rather than a search:
+#:
+#:   H = 2   trusts the measured 1-bar autocorrelation and nothing else
+#:   H = 10  trusts the persistence of magnitude -- a volatility expansion implies
+#:           more volatility, and a reversion that plays out over several bars is
+#:           the same effect read at a coarser scale
+#:
+#: Trigger is a 2-sigma move, the conventional definition of a volatility expansion,
+#: not a fitted threshold. Direction is contrarian, taken from the sign of the
+#: measured phi rather than from testing both ways.
+#:
+#:   grid   2 instruments x 2 horizons x 2 holding periods = 8 tests
+#:   bar    t > 2.90, one-sided Bonferroni for 8 at alpha 0.05
+#:
+#: The primitives are printed regardless of the verdict, because the useful output
+#: here is the breakeven cost: if it sits below what the venue charges, no amount of
+#: cleverness helps, and that is worth knowing without having to infer it from a P&L.
+EXPANSION_K_SIGMA = 2.0
+EXPANSION_HOLDS: tuple[int, ...] = (2, 10)
+EXPANSION_TIMEFRAMES: tuple[str, ...] = ("4h", "1h")
+EXPANSION_GATE_T = 2.90
+
 PANEL_OSCILLATORS = 14
 PANEL_SIGNS = 2
 PANEL_INSTRUMENTS = 2
@@ -1327,6 +1370,90 @@ def signal_rule_pnl(
         m = len(per_bar)
         avg = sum(per_bar) / m
         var = sum((v - avg) ** 2 for v in per_bar) / (m - 1)
+        se = (var / m) ** 0.5 if var > 0 else 0.0
+        out["t"] = (avg / se) if se > 0 else 0.0
+    return out
+
+
+def expansion_reversal_pnl(
+    opens: list[float],
+    closes: list[float],
+    *,
+    k_sigma: float,
+    hold: int,
+    cost_bps: float,
+) -> dict[str, float]:
+    """Fade a move larger than k sigma, for `hold` bars. Both directions.
+
+    The trigger is volatility expansion and the direction is taken from the measured
+    sign of the autocorrelation, so this is one rule rather than two guesses. Position
+    size is flat, there is no stop and no target: a stop would add a second parameter
+    to justify, and the arithmetic under test is whether the first bar of reversion is
+    worth more than the fill costs.
+    """
+    n = min(len(opens), len(closes))
+    out = {
+        "net": 0.0, "gross": 0.0, "cost": 0.0, "trades": 0.0,
+        "t": 0.0, "signals": 0.0, "turnover": 0.0, "bars": 0.0,
+    }
+    if n < 100 or hold < 1 or k_sigma <= 0:
+        return out
+    sigma = math.sqrt(sum(r * r for r in log_returns(closes)) / max(1, n - 1))
+    if sigma <= 0:
+        return out
+    cut = k_sigma * sigma
+    position = 0.0
+    opened_at = -10 ** 6
+    may_open_from = 0
+    gross = 0.0
+    cost_total = 0.0
+    trades = 0.0
+    signals = 0.0
+    per_trade: list[float] = []
+    trade_pnl = 0.0
+    for t in range(1, n - 2):
+        want = position
+        if position == 0.0:
+            if t >= may_open_from:
+                move = closes[t] - closes[t - 1]
+                if abs(move) > cut:
+                    want = -1.0 if move > 0 else 1.0
+                    opened_at = t
+                    trade_pnl = 0.0
+                    signals += 1.0
+        elif t - opened_at >= hold:
+            want = 0.0
+        turnover = abs(want - position)
+        trades += turnover
+        entry, leave = opens[t + 1], opens[t + 2]
+        bar_ret = 0.0
+        if entry > 0:
+            bar_ret = want * (leave - entry) / entry
+            gross += bar_ret
+        c = turnover * cost_bps / 10_000.0
+        # The running total is never reset. An earlier version cleared it on every
+        # open, which left `net` equal to `gross`: a rule with no signal at all
+        # reported +120% because the fills it was being charged for had been
+        # forgotten. The self-check on a zero-autocorrelation series is what caught it.
+        cost_total += c
+        if position != 0.0 or want != 0.0:
+            trade_pnl += bar_ret - c
+        if position != 0.0 and want == 0.0:
+            per_trade.append(trade_pnl)
+            trade_pnl = 0.0
+            may_open_from = t + 1
+        position = want
+    out["gross"] = gross
+    out["cost"] = cost_total
+    out["net"] = gross - cost_total
+    out["trades"] = trades
+    out["signals"] = signals
+    out["turnover"] = trades / max(1, n)
+    out["bars"] = float(n)
+    if len(per_trade) > 5:
+        m = len(per_trade)
+        avg = sum(per_trade) / m
+        var = sum((v - avg) ** 2 for v in per_trade) / (m - 1)
         se = (var / m) ** 0.5 if var > 0 else 0.0
         out["t"] = (avg / se) if se > 0 else 0.0
     return out
@@ -2189,6 +2316,107 @@ async def main() -> int:
                 print("  PANEL RESULT: nothing clears. Technical indicators in this")
                 print("  library carry no measurable signal on daily crypto, in either")
                 print("  direction, at library-default parameters.")
+
+        if os.environ.get("EDGE_EXPANSION"):
+            async def _fetch_x(
+                ticker: str, class_code: str, provider: str,
+                timeframe: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe=timeframe, limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("EXPANSION REVERSAL: fade a 2-sigma move")
+            print("=" * 72)
+            print("  primitives first, because they decide whether any rule can pay:")
+            print()
+            print(
+                f"  {'series':10} {'tz':>4} {'n':>7} {'phi':>9} {'t':>7} "
+                f"{'cond mean':>11} {'t':>7} {'breakeven':>11}"
+            )
+            for ticker, class_code, provider in (
+                ("BTC/USDT", "CRYPTO", "ccxt"),
+                ("ETH/USDT", "CRYPTO", "ccxt"),
+                ("^GSPC", "EQUITY", "yahoo"),
+            ):
+                for tf in EXPANSION_TIMEFRAMES:
+                    want = MOMENTUM_BARS if provider == "ccxt" else MOMENTUM_BARS
+                    try:
+                        series = await _fetch_x(
+                            ticker, class_code, provider, tf, want
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  {ticker:10} {tf:>4} fetch failed "
+                              f"({type(exc).__name__})")
+                        continue
+                    if not series or len(series) < 500:
+                        print(f"  {ticker:10} {tf:>4} only "
+                              f"{len(series or [])} bars, skipped")
+                        continue
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    rets = log_returns(closes)
+                    est = ar1(rets)
+                    sigma = math.sqrt(
+                        sum(r * r for r in rets) / max(1, len(rets))
+                    )
+                    cond = breakout_expectancy(
+                        rets, threshold=EXPANSION_K_SIGMA, sigma=sigma
+                    )
+                    be = breakeven_cost_bps(
+                        phi=est["phi"], sigma=sigma, flip_frequency=0.5
+                    )
+                    print(
+                        f"  {ticker:10} {tf:>4} {len(rets):>7} "
+                        f"{est['phi']:>+9.4f} {est['t']:>+7.2f} "
+                        f"{cond['mean']:>+11.5f} {cond['t']:>+7.2f} "
+                        f"{be:>9.1f}b"
+                    )
+
+            print()
+            print("  the rule, 10 bps per fill:")
+            print(
+                f"  {'series':10} {'tz':>4} {'hold':>5} {'signals':>8} "
+                f"{'turn/bar':>9} {'gross':>9} {'net':>9} {'t':>7} {'g1':>3}"
+            )
+            exp_tested = 0
+            exp_clear = 0
+            for ticker, class_code, provider in (
+                ("BTC/USDT", "CRYPTO", "ccxt"),
+                ("ETH/USDT", "CRYPTO", "ccxt"),
+            ):
+                for tf in EXPANSION_TIMEFRAMES:
+                    try:
+                        series = await _fetch_x(
+                            ticker, class_code, provider, tf, MOMENTUM_BARS
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if not series or len(series) < 500:
+                        continue
+                    opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    for hold in EXPANSION_HOLDS:
+                        res = expansion_reversal_pnl(
+                            opens, closes,
+                            k_sigma=EXPANSION_K_SIGMA, hold=hold, cost_bps=10.0,
+                        )
+                        exp_tested += 1
+                        ok = res["net"] > 0 and res["t"] > EXPANSION_GATE_T
+                        if ok:
+                            exp_clear += 1
+                        print(
+                            f"  {ticker:10} {tf:>4} {hold:>5} "
+                            f"{int(res['signals']):>8} "
+                            f"{res['turnover']:>9.3f} "
+                            f"{100 * res['gross']:>8.1f}% "
+                            f"{100 * res['net']:>8.1f}% {res['t']:>+7.2f} "
+                            f"{'Y' if ok else '.'}"
+                        )
+            print()
+            print(f"  tests run: {exp_tested}   clearing the bar: {exp_clear}")
 
         await core.shutdown()
     return 0

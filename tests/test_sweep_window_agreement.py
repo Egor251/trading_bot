@@ -914,6 +914,57 @@ def test_down_market_periods_are_named_not_searched_for() -> None:
     )
 
 
+def test_expansion_reversal_charges_every_fill_and_fades_only_reversions() -> None:
+    """Two ways this rule could lie, both pinned.
+
+    The first version reset its running cost total on every position open, which left
+    net equal to gross: a series with *no* autocorrelation reported +120% because the
+    fills it was being charged for had been forgotten. Costs must accumulate across the
+    whole run, and the zero-autocorrelation case is the test that catches it.
+
+    The second is direction: the rule fades, so it must lose where the series trends
+    and win where the series reverts. A rule that makes money on both is measuring
+    something other than what it claims.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import expansion_reversal_pnl
+
+    def _series(phi: float, seed: int = 3, n: int = 3000):
+        rng = random.Random(seed)
+        closes = [100.0]
+        prev = 0.0
+        for _ in range(n - 1):
+            prev = phi * prev + rng.gauss(0, 0.02)
+            closes.append(closes[-1] * math.exp(prev))
+        opens = [closes[max(0, i - 1)] for i in range(n)]
+        return opens, closes
+
+    trending = expansion_reversal_pnl(
+        *_series(0.15), k_sigma=2.0, hold=10, cost_bps=10.0
+    )
+    reverting = expansion_reversal_pnl(
+        *_series(-0.15), k_sigma=2.0, hold=10, cost_bps=10.0
+    )
+    assert trending["net"] < 0, (
+        f"fading a trending series must lose: {trending['net']:.3f}"
+    )
+    assert reverting["gross"] > 0, (
+        f"fading a reverting series must pay before costs: "
+        f"{reverting['gross']:.3f}"
+    )
+    cheap = expansion_reversal_pnl(
+        *_series(0.0, seed=5), k_sigma=2.0, hold=10, cost_bps=5.0
+    )
+    dear = expansion_reversal_pnl(
+        *_series(0.0, seed=5), k_sigma=2.0, hold=10, cost_bps=25.0
+    )
+    assert cheap["cost"] > 0.0, "cost must accumulate, not be forgotten"
+    assert dear["cost"] > cheap["cost"], "and must scale with the rate"
+    assert dear["net"] < cheap["net"], "and must actually reduce net"
+
+
 def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
     """The ceiling measurement is only worth anything if its estimators are honest.
 

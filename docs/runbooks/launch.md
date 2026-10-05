@@ -1258,6 +1258,68 @@ reports `56 of 56`.
 ETH, in either direction, at library-default parameters.** The value of the study is
 that corrected count, not a winner.
 
+### Volatility-expansion reversal: a real signal, measured, and priced
+
+The one direction the measurements point at: fade a move larger than 2 sigma, holding
+2 or 10 bars. Registered before the run, with the trigger at the conventional 2 sigma
+and the direction taken from the sign of the measured phi rather than from testing
+both ways. Eight tests, Bonferroni bar t > 2.90.
+
+**The primitives are the finding.**
+
+| series | tf | bars | phi | t(phi) | mean after a 2σ move | t | breakeven |
+|---|---|---|---|---|---|---|---|
+| BTC/USDT | **4h** | 20 004 | **−0.0438** | **−3.44** | −0.00154 | −1.48 | **10.1 bps** |
+| BTC/USDT | 1h | 29 999 | −0.0164 | −1.72 | +0.00002 | +0.08 | 1.3 bps |
+| ETH/USDT | **4h** | 20 004 | **−0.0346** | **−3.01** | −0.00074 | −0.61 | 10.1 bps |
+| ETH/USDT | 1h | 29 999 | +0.0004 | +0.04 | +0.00034 | +0.83 | 0.0 bps |
+
+**The negative autocorrelation is stronger and far more significant on 4h than on
+daily** — t = −3.44 against −2.26 on BTC, −3.01 against −2.61 on ETH, over 20 004
+observations. This is the most solid single number produced anywhere in this project:
+a short-horizon reversal effect in crypto that is not noise. It is also the answer to
+why daily testing never found it — the effect lives at a horizon the daily grid cannot
+see, because 20 004 bars are 8× more than daily sampling of the same history gives.
+
+The rule still loses, and the table says exactly why:
+
+| series | tf | hold | signals | turns/bar | gross | net @10bp | t |
+|---|---|---|---|---|---|---|---|
+| BTC/USDT | 4h | 2 | 6 667 | 0.667 | +52.2% | −1281.2% | −7.74 |
+| BTC/USDT | 4h | 10 | 1 819 | 0.182 | −271.5% | −635.2% | −3.54 |
+| ETH/USDT | 4h | 2 | 6 654 | 0.665 | −57.4% | −1388.1% | −6.52 |
+| ETH/USDT | 4h | 10 | 1 817 | 0.182 | −212.3% | −575.6% | −2.30 |
+
+Zero of eight clear the bar. But the reason is now a **price, not an absence**:
+
+- the reversion is worth about **15 bps per trade** (the conditional mean is 0.00154);
+- a round trip costs about **20 bps** at the 10 bps assumed here;
+- capturing it at a 2-bar hold needs 0.667 trades per bar, which is what turns a
+  15 bps edge into a −1281% bill;
+- holding 10 bars cuts turnover 3.7× but *destroys* the gross (−271.5%), because the
+  reversion is a one-bar effect and the remaining nine bars are pure drift.
+
+**That is a materially different position from everything else in this file.** Every
+previous negative was "the effect is not there, or not tradeable". This one is: the
+effect is there at t = −3.44, it is worth a measured 15 bps per trade, and it loses to
+a 20 bps round trip. The gap is a pricing problem, and pricing problems have a known
+lever — a lower all-in cost, or a slower instrument where the same edge is captured
+with fewer fills. The breakeven is 10.1 bps per fill against a 4–10 bps market, so a
+maker tier or a wider instrument sits inside it.
+
+The equity intraday leg could not run: Yahoo raised `TimeframeMismatchError` on 4h and
+returned nothing for 1h, so the 99 years of daily history is not available at the
+horizon where the effect was found.
+
+Building this cost one bug of the worst kind in this repository's history: the running
+cost total was reset on every position open, leaving net equal to gross, and the rule
+reported **+120% on a series with zero autocorrelation** because the fills it was
+being charged for had been forgotten. Only the self-check against a series with a
+known answer caught it. It is now pinned by a test that requires costs to accumulate,
+to scale with the rate, and to leave net strictly below gross.
+
+895 passed.
+
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
 resolves from `OPERATOR_API_TOKEN`, else from `data/ui/operator_token` (mode
 0600), else it is generated at first boot. A non-loopback `--host` requires
