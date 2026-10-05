@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,75 @@ class ExecutionObservation:
             "expected_slippage_bps": 0.0,
             "actual_slippage_bps": self.slippage_bps,
         }
+
+
+def cost_model_from_config(raw_cfg: Mapping[str, Any] | None) -> dict[str, float]:
+    """The per-fill cost the product actually charges, read from its own config.
+
+    Two numbers for the same thing is the defect this exists to remove. The shipped
+    config charges ``fee_bps: 5`` + ``slippage_bps: 2`` = 7 bps per fill, while
+    ``tools/edge_ceiling.py`` hardcodes ``cost_bps=10.0`` at nineteen call sites.
+    Research therefore ran 1.43x more pessimistic than the system it documents, and
+    any reconciliation of fills against the model would have compared observed costs
+    to the wrong number.
+
+    A research tool that hardcodes its own cost is making a claim about the product
+    without reading it, and the claim is wrong the moment the config moves. Single
+    source first: this function is the only place that turns configuration into a
+    cost, and both the engine and the research tools read it from here.
+
+    The block lives at ``services.phantom_service`` -- it is a plugin's own config,
+    which is how ``phantom_service`` reads it at runtime. ``trading.phantom_service``
+    is also accepted because that is where a reader would reasonably look first, and
+    silently returning the fallback from a misplaced path is the kind of quiet
+    miss this module exists to prevent.
+
+    Falls back to the shipped values if the block is absent, because a missing cost
+    model should not make execution look free.
+    """
+    cfg = raw_cfg or {}
+    # Passed the block itself, not the whole config. Supporting that matters more
+    # than it looks: without it the caller reads `services.phantom_service`, hands
+    # the block over, and gets the *fallback* -- which happens to equal the shipped
+    # values, so the test passes while the wiring is quietly dead and any config
+    # change is ignored.
+    if "fee_bps" in cfg or "slippage_bps" in cfg:
+        return _split_cost(cfg)
+    block: Mapping[str, Any] = {}
+    for path in (("services", "phantom_service"), ("trading", "phantom_service")):
+        candidate = cfg.get(path[0])
+        if isinstance(candidate, Mapping):
+            found = candidate.get(path[1])
+            if isinstance(found, Mapping):
+                block = found
+                break
+    if not block:
+        candidate = cfg.get("phantom_service")
+        if isinstance(candidate, Mapping):
+            block = candidate
+
+    fee = block.get("fee_bps")
+    slip = block.get("slippage_bps")
+    return _split_cost({"fee_bps": fee, "slippage_bps": slip})
+
+
+def _split_cost(block: Mapping[str, Any]) -> dict[str, float]:
+    fee = block.get("fee_bps")
+    slip = block.get("slippage_bps")
+    fee_value = float(fee) if fee is not None else DEFAULT_FEE_BPS
+    slip_value = float(slip) if slip is not None else DEFAULT_SLIPPAGE_BPS
+    return {
+        "fee_bps": fee_value,
+        "slippage_bps": slip_value,
+        "total_bps": fee_value + slip_value,
+    }
+
+
+#: What the shipped config charges. Named so the fallback above is a stated
+#: assumption rather than a silent zero, and so a test can assert the config still
+#: says what this module believes it says.
+DEFAULT_FEE_BPS = 5.0
+DEFAULT_SLIPPAGE_BPS = 2.0
 
 
 @dataclass(frozen=True)

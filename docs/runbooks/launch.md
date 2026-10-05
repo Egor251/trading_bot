@@ -1581,6 +1581,46 @@ exchange-specific and would not survive being hidden behind the adapter's interf
 What was measurable without it — Amihud-style impact per unit volume, and the spread
 itself — is measured above, and it is enough to show that the fee share dominates.
 
+### What was done about the cost model, rather than just noted
+
+Two things, both the same defect as `adjust_pvalues` — correct code, no caller.
+
+**One cost, one source.** `engine.cost_calibration.cost_model_from_config` is the
+only thing that turns configuration into a cost. `tools/edge_ceiling.py` reads it
+from the shipped config; the eighteen `cost_bps=10.0` literals are gone, replaced by
+`COST_BPS_PER_FILL = _shipped_cost_bps()`. A test asserts no call site passes a
+numeric literal, and that a loop passing a *variable* still works — the distinction
+matters, because the grid sweeps legitimately vary cost on purpose.
+
+**The comparison now runs.** `calibrate` and `nightly_fee_reconciliation` are wired
+into `ops_monitor_service` on `cost_reconcile_every_sec` (default hourly), with the
+report in `get_status()` and a `cost_model_understates` alert when the model is
+optimistic. Every cost figure in the research log was an assumption; this is what
+turns the largest of them into a measurement.
+
+Two things about it are worth knowing before trusting a report:
+
+- **A fill without a reference price is excluded, not zero-filled.** Implementation
+  shortfall is measured against the price the decision was made on. Defaulting a
+  missing reference to the fill price would report slippage of exactly 0.0 bps for
+  those fills and drag p50 and p90 down with them, so a broken feed would read as a
+  cheap one.
+- **`sufficient: false` is a real state.** Ten fills give a number, not a trustworthy
+  one, and acting on it swaps a wrong constant for a differently wrong one.
+
+Two bugs found while wiring it, both mine:
+
+- `await core.config.get()` with no key raises `TypeError`, not "give me
+  everything". It failed the whole service load and was caught by
+  `test_ai_analyst_plugin.py`, which boots every component.
+- Reading `services.phantom_service` and handing the *block* to
+  `cost_model_from_config` returned the **fallback**, not the config — and the
+  fallback equals the shipped values, so every test still passed while the wiring
+  was dead and any config change would have been ignored. The function now accepts
+  the block directly, and the test feeds it a deliberately different config and
+  asserts the model changes, because an assertion the fallback also satisfies is
+  not a check.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as

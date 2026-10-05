@@ -415,6 +415,18 @@ services:
     # On a venue outage the audit deliberately does not try to flatten -- the
     # venue being unreachable is why a market order cannot be placed.
     protection_audit_sec: 30
+    # Cost reconciliation on a schedule. `calibrate` and
+    # `nightly_fee_reconciliation` were both correct, tested, and reachable from
+    # nowhere — so every fill charged the model number, and any error in that model
+    # propagated into every P&L derived from it without anything comparing the model
+    # against what the venue actually charged. This runs the comparison.
+    #
+    # Only fills carrying a reference price can measure slippage; those without one
+    # are excluded rather than counted as zero slippage, which would drag every
+    # percentile down and make a broken feed look like a cheap one.
+    cost_reconcile_every_sec: 3600
+    cost_reconcile_min_samples: 30
+    cost_reconcile_window: 500
     journal_path: data/ops/trades.jsonl
     telegram_bot_token: ''
     telegram_chat_id: ''

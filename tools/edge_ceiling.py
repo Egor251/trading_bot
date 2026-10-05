@@ -64,6 +64,31 @@ from engine.simulation import (  # noqa: E402
     variance_ratio,
 )
 
+#: Per-fill cost every experiment in this file is charged, read from the product's
+#: own config rather than stated here.
+#:
+#: This was `10.0`, hardcoded at nineteen call sites, while the product charges
+#: `fee_bps: 5` + `slippage_bps: 2` = 7. Research was therefore running 1.43x more
+#: pessimistic than the system it documents -- the 14th instance in this project of
+#: a quantity recorded in one place and interpreted in another. More importantly the
+#: two numbers could not both be right, and no reconciliation of realised fills
+#: against the cost model could have been meaningful while they disagreed.
+#:
+#: Every `cost_bps=` below now resolves through this one name. Changing the config
+#: changes every experiment, which is the only version of this that can be trusted.
+def _shipped_cost_bps() -> float:
+    """Read the per-fill cost out of the shipped trading config."""
+    import yaml
+
+    from engine.cost_calibration import cost_model_from_config
+
+    config = Path(__file__).resolve().parents[1] / "config" / "trading_bot.yaml"
+    raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+    return cost_model_from_config(raw)["total_bps"]
+
+
+COST_BPS_PER_FILL = _shipped_cost_bps()
+
 #: The smallest injected edge the power sweep detected above the noise floor,
 #: registered there before it was run: phi = 0.05, snr 0.32.
 DETECTION_FLOOR = 0.05
@@ -742,9 +767,9 @@ async def momentum_sweep(
                 continue
             rets = log_returns(cl)
             est = ar1(rets)
-            a = out_of_sample_rule(op, cl, cost_bps=10.0)
-            b = out_of_sample_rule(op, cl, cost_bps=10.0, reverse=True)
-            traded = lag_rule_pnl(op, cl, cost_bps=10.0, lean=1.0)
+            a = out_of_sample_rule(op, cl, cost_bps=COST_BPS_PER_FILL)
+            b = out_of_sample_rule(op, cl, cost_bps=COST_BPS_PER_FILL, reverse=True)
+            traded = lag_rule_pnl(op, cl, cost_bps=COST_BPS_PER_FILL, lean=1.0)
             rows.append(
                 {
                     "ticker": ticker,
@@ -813,8 +838,8 @@ async def sweep(
             est = ar1(rets)
             sigma = math.sqrt(sum(r * r for r in rets) / len(rets))
             # Gate 2: the sign alone, carried across a half-sample, both ways.
-            a = out_of_sample_rule(op, cl, cost_bps=10.0)
-            b = out_of_sample_rule(op, cl, cost_bps=10.0, reverse=True)
+            a = out_of_sample_rule(op, cl, cost_bps=COST_BPS_PER_FILL)
+            b = out_of_sample_rule(op, cl, cost_bps=COST_BPS_PER_FILL, reverse=True)
             oos_pays = a["gross"] > 0 and b["gross"] > 0
             turnovers = (a["trades"] + b["trades"]) / max(1, len(cl))
             be = breakeven_cost_bps(phi=est["phi"], sigma=sigma)
@@ -1822,18 +1847,18 @@ async def main() -> int:
                         highs, lows, opens, closes,
                         lookback=BREAKOUT_LOOKBACK,
                         hold=BREAKOUT_HOLD,
-                        cost_bps=10.0,
+                        cost_bps=COST_BPS_PER_FILL,
                     )
                     half = len(closes) // 2
                     a = breakout_rule_pnl(
                         highs[:half], lows[:half], opens[:half], closes[:half],
                         lookback=BREAKOUT_LOOKBACK, hold=BREAKOUT_HOLD,
-                        cost_bps=10.0,
+                        cost_bps=COST_BPS_PER_FILL,
                     )
                     b_half = breakout_rule_pnl(
                         highs[half:], lows[half:], opens[half:], closes[half:],
                         lookback=BREAKOUT_LOOKBACK, hold=BREAKOUT_HOLD,
-                        cost_bps=10.0,
+                        cost_bps=COST_BPS_PER_FILL,
                     )
                     tested_b += 1
                     g1 = res["net"] > 0 and res["t"] > BREAKOUT_GATE1_T
@@ -1907,16 +1932,16 @@ async def main() -> int:
                     closes = [float(getattr(b, 'close', 0) or 0) for b in series]
                     res = ewo_rule_pnl(
                         opens, closes, fast=EWO_FAST, slow=EWO_SLOW,
-                        cost_bps=10.0,
+                        cost_bps=COST_BPS_PER_FILL,
                     )
                     half = len(closes) // 2
                     a = ewo_rule_pnl(
                         opens[:half], closes[:half], fast=EWO_FAST,
-                        slow=EWO_SLOW, cost_bps=10.0,
+                        slow=EWO_SLOW, cost_bps=COST_BPS_PER_FILL,
                     )
                     b_half = ewo_rule_pnl(
                         opens[half:], closes[half:], fast=EWO_FAST,
-                        slow=EWO_SLOW, cost_bps=10.0,
+                        slow=EWO_SLOW, cost_bps=COST_BPS_PER_FILL,
                     )
                     tested_e += 1
                     g1 = res["net"] > 0 and res["t"] > EWO_GATE1_T
@@ -1990,7 +2015,7 @@ async def main() -> int:
                     est = ar1(rets)
                     res = ewo_rule_pnl(
                         opens, closes, fast=EWO_FAST, slow=EWO_SLOW,
-                        cost_bps=10.0,
+                        cost_bps=COST_BPS_PER_FILL,
                     )
                     bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
                     n_obs += 1
@@ -2068,7 +2093,7 @@ async def main() -> int:
                 opens = [float(getattr(b, 'open', 0) or 0) for b in series]
                 closes = [float(getattr(b, 'close', 0) or 0) for b in series]
                 res = ewo_rule_pnl(
-                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=10.0
+                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=COST_BPS_PER_FILL
                 )
                 bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
                 if res["net"] > 0:
@@ -2103,7 +2128,7 @@ async def main() -> int:
                 opens = [float(getattr(b, 'open', 0) or 0) for b in series]
                 closes = [float(getattr(b, 'close', 0) or 0) for b in series]
                 res = ewo_rule_pnl(
-                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=10.0
+                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=COST_BPS_PER_FILL
                 )
                 bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
                 return res, bh
@@ -2240,7 +2265,7 @@ async def main() -> int:
                         flipped = [
                             None if s is None else s * sign for s in scored
                         ]
-                        res = signal_rule_pnl(opens, flipped, cost_bps=10.0)
+                        res = signal_rule_pnl(opens, flipped, cost_bps=COST_BPS_PER_FILL)
                         panel_rows.append(
                             {
                                 "ticker": ticker,
@@ -2380,7 +2405,7 @@ async def main() -> int:
                     for hold in EXPANSION_HOLDS:
                         res = expansion_reversal_pnl(
                             opens, closes,
-                            k_sigma=EXPANSION_K_SIGMA, hold=hold, cost_bps=10.0,
+                            k_sigma=EXPANSION_K_SIGMA, hold=hold, cost_bps=COST_BPS_PER_FILL,
                         )
                         exp_tested += 1
                         ok = res["net"] > 0 and res["t"] > EXPANSION_GATE_T
@@ -2549,7 +2574,7 @@ async def main() -> int:
                 for k in SEVERITY_K:
                     for hold in SEVERITY_HOLDS:
                         res = expansion_reversal_pnl(
-                            opens, closes, k_sigma=k, hold=hold, cost_bps=10.0
+                            opens, closes, k_sigma=k, hold=hold, cost_bps=COST_BPS_PER_FILL
                         )
                         sev_tested += 1
                         ok = res["net"] > 0 and res["t"] > SEVERITY_GATE_T
@@ -2825,7 +2850,7 @@ def _tradability(
     print(f"  {'direction':>22} {'phi on train':>13} {'gross':>10} "
           f"{'cost@10bp':>10} {'net':>10}")
     for label, reverse in (("first -> second half", False), ("second -> first half", True)):
-        oos = out_of_sample_rule(opens, closes, cost_bps=10.0, reverse=reverse)
+        oos = out_of_sample_rule(opens, closes, cost_bps=COST_BPS_PER_FILL, reverse=reverse)
         print(
             f"  {label:>22} {oos['phi_train']:>+13.4f} "
             f"{100 * oos['gross']:>9.1f}% {100 * oos['cost']:>9.1f}% "

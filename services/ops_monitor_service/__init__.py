@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from microkernel_core import BaseService, KernelEvent
 
+from engine.cost_calibration import (
+    ExecutionObservation,
+    calibrate,
+    cost_model_from_config,
+)
 from engine.ops_safety import (
     AlertBus,
     AlertSeverity,
@@ -192,6 +198,31 @@ class OpsMonitorService(BaseService):
         self._clean_bars = 0
         self._frozen_for_data = False
         self._diagnose_every_sec = float(self.config.get("diagnose_every_sec") or 60.0)
+        # Cost reconciliation on a schedule, which is the whole reason this module
+        # exists: `nightly_fee_reconciliation` and `calibrate` were both correct,
+        # tested, and unreachable, so every fill charged the model number and the
+        # model's error was invisible. Same defect `adjust_pvalues` had.
+        self._cost_reconcile_every_sec = float(
+            self.config.get("cost_reconcile_every_sec") or 3600.0
+        )
+        self._last_cost_reconcile_ts = 0.0
+        self._cost_reconcile_min_samples = int(
+            self.config.get("cost_reconcile_min_samples") or 30
+        )
+        # The cost model is the plugin's own block, read by dotted path the way the
+        # rest of this service reads config -- `config.get()` takes a key and
+        # passing none is a TypeError, not "give me everything".
+        self._cost_model = cost_model_from_config(
+            dict(
+                (await self.core.config.get("services.phantom_service", {})) or {}
+            )
+        )
+        # Bounded, because this is a sample of recent fills and an unbounded list
+        # in a long-running process is a leak dressed as a feature.
+        self._fill_samples: deque[ExecutionObservation] = deque(
+            maxlen=int(self.config.get("cost_reconcile_window") or 500)
+        )
+        self._cost_report: dict[str, Any] | None = None
         self._protection_audit_sec = float(
             self.config.get("protection_audit_sec") or 30.0
         )
@@ -281,6 +312,31 @@ class OpsMonitorService(BaseService):
                     await self.evaluate_phantom_vs_live()
                 except Exception:
                     pass
+            if now - self._last_cost_reconcile_ts >= self._cost_reconcile_every_sec:
+                self._last_cost_reconcile_ts = now
+                try:
+                    report = await self.reconcile_costs()
+                except Exception:
+                    report = None
+                if report and report.get("understates"):
+                    # CRITICAL because every P&L derived from this cost model is
+                    # wrong in the optimistic direction, invisibly.
+                    alert = self.alerts.emit(
+                        "cost_model_understates",
+                        (
+                            f"observed p90 slippage {report.get('observed_p90_bps')} bps "
+                            f"vs model {report.get('model_slippage_bps')} bps over "
+                            f"{report.get('samples')} fills"
+                        ),
+                        severity=AlertSeverity.HIGH
+                        if report.get("sufficient")
+                        else AlertSeverity.CRITICAL,
+                        details={
+                            "report": report,
+                            "model": report.get("model"),
+                        },
+                    )
+                    await self._publish_alert(alert)
             # Publish the health state file. This is what the container
             # HEALTHCHECK reads; without a writer the probe could only check
             # that PID 1 was still alive.
@@ -401,6 +457,95 @@ class OpsMonitorService(BaseService):
         )
         await self._publish_alert(alert)
 
+    def _sample_fill(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        payload: dict[str, Any],
+        order: dict[str, Any],
+    ) -> None:
+        """Keep this fill as evidence for the cost reconciliation.
+
+        Only fills that carry a reference price and a real venue fee are kept.
+        Implementation shortfall is measured against the price the decision was
+        made on -- "the strategy acted because of this price" -- and a fill without
+        one can only supply a fee delta. Storing it anyway and treating the missing
+        half as zero would report slippage of exactly zero for those fills and drag
+        every percentile down, so those fills are dropped instead and the sample
+        count says how many were usable.
+        """
+        reference = payload.get("reference_price") or order.get("reference_price")
+        if reference is None or quantity <= 0 or price <= 0:
+            return
+        notional = abs(quantity) * price
+        if notional <= 0:
+            return
+        try:
+            self._fill_samples.append(
+                ExecutionObservation(
+                    fill_id=str(
+                        payload.get("fill_id")
+                        or payload.get("trade_id")
+                        or payload.get("id")
+                        or ""
+                    ),
+                    venue=str(payload.get("venue") or order.get("venue") or ""),
+                    symbol=symbol,
+                    side=side,
+                    quantity=abs(quantity),
+                    reference_price=float(reference),
+                    fill_price=price,
+                    notional=notional,
+                    expected_cost=notional
+                    * (self._cost_model["fee_bps"] + self._cost_model["slippage_bps"])
+                    / 10_000.0,
+                    actual_fee=fee if fee > 0 else None,
+                )
+            )
+        except (TypeError, ValueError):
+            return
+
+    async def reconcile_costs(self) -> dict[str, Any]:
+        """Compare what execution actually cost against the configured model.
+
+        Runs on a schedule rather than never. The report states `sufficient: false`
+        and explains itself when there is not enough evidence, instead of reporting a
+        confident number built from a handful of fills -- acting on ten trades would
+        replace a wrong constant with a differently wrong one.
+        """
+        rows = list(self._fill_samples)
+        model_slip = self._cost_model["slippage_bps"]
+        needed = self._cost_reconcile_min_samples
+        report = calibrate(
+            rows,
+            model_slippage_bps=model_slip,
+            minimum_samples=needed,
+        )
+        body = report.to_dict()
+        body.update(
+            {
+                "sufficient": len(rows) >= needed,
+                "min_samples": needed,
+                "model": dict(self._cost_model),
+                "observed_p90_slippage_bps": body.get("observed_p90_bps"),
+                "sampled_fills": len(rows),
+            }
+        )
+        if not body["sufficient"]:
+            body["note"] = (
+                f"{len(rows)} usable fill(s), need {needed}. "
+                "Fills without a reference price cannot measure slippage and are "
+                "excluded, so this stays silent rather than reporting zero."
+            )
+        self._cost_report = body
+        if body.get("understates"):
+            body["alert"] = "cost_model_understates"
+        return body
+
     async def _on_fill(self, event: KernelEvent) -> None:
         payload = event.payload or {}
         order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
@@ -458,6 +603,15 @@ class OpsMonitorService(BaseService):
                 reason=str(payload.get("reason") or order.get("reason") or "fill"),
                 fee=fee,
             )
+        self._sample_fill(
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            price=price,
+            fee=fee,
+            payload=payload,
+            order=order,
+        )
         # Rough signed trade pnl proxy for performance monitor.
         from engine.research import estimate_fill_pnl
 
@@ -741,6 +895,12 @@ class OpsMonitorService(BaseService):
                 "performance": self.performance.snapshot() if self.performance else None,
                 "journal_rows": len(self.journal.entries()) if self.journal else 0,
                 "day_pnl": self._day_pnl,
+                # Present from the first call, not only after a reconciliation has
+                # run, so an operator can see the model in force and how much
+                # evidence exists for it rather than an absent key.
+                "cost_reconciliation": self._cost_report,
+                "cost_model": dict(self._cost_model),
+                "cost_samples": len(self._fill_samples),
             }
         )
         return status
