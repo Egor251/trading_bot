@@ -764,6 +764,105 @@ def implied_spread(values: Sequence[float]) -> dict[str, float]:
     }
 
 
+def decompose_cost(
+    fee_bps: float,
+    slippage_bps: float,
+    measured_spread_bps: float,
+) -> dict[str, float]:
+    """Split a per-fill cost model into the parts that behave differently.
+
+    Almgren et al. (2005) found that execution cost separates into a *permanent*
+    part, driven by the size of the order and persisting after it completes, and a
+    *temporary* part, driven by how fast it is executed and vanishing when it is
+    done. The split matters operationally because only one of them is reducible:
+    a temporary cost can be traded away by scheduling, a permanent one cannot be
+    traded away at any speed.
+
+    That decomposition is the wrong frame for this system's cost model, and
+    applying it is what surfaced the problem. A round trip here is charged as
+    ``fee_bps + slippage_bps`` per fill, and **the fee is not an impact at all** --
+    it is a transfer to the venue that no execution schedule can influence.
+    Splitting a cost model that is mostly fees into "permanent impact versus
+    temporary impact" produces a confident number about a quantity that does not
+    exist.
+
+    So this reports the three parts as they actually behave:
+
+    - ``fee`` -- a transfer. Neither permanent nor temporary. Not reducible.
+    - ``crossing`` -- the measured bid-ask spread, the only part that is a genuine
+      market-impact cost and the part Roll (1984) can measure from prices alone.
+    - ``residual_slippage`` -- whatever slippage is charged beyond the measured
+      spread. This is where unmodelled impact would live if it existed, so its size
+      is the honest upper bound on the impact we have not accounted for.
+
+    ``impact_bps`` is the share a strategy's edge is actually competing against,
+    and it is the number every "the edge does not cover the cost" claim should be
+    measured against. A conclusion drawn against the full model overstates the
+    barrier by whatever share is fees.
+
+    Returns the split plus ``fee_share``, which is the fraction of the charged cost
+    that no execution improvement can touch.
+    """
+    fee = float(fee_bps)
+    slippage = float(slippage_bps)
+    crossing = float(measured_spread_bps)
+    residual = max(0.0, slippage - crossing)
+    total = fee + slippage
+    impact = crossing + residual
+    return {
+        "total_bps": total,
+        "fee_bps": fee,
+        "crossing_bps": crossing,
+        "residual_slippage_bps": residual,
+        "impact_bps": impact,
+        "fee_share": (fee / total) if total > 0 else 0.0,
+        "impact_share": (impact / total) if total > 0 else 0.0,
+    }
+
+
+def breakeven_vs_cost(
+    edge_bps_per_trade: float,
+    cost_bps_per_fill: float,
+    *,
+    fee_bps: float | None = None,
+    measured_spread_bps: float | None = None,
+) -> dict[str, float]:
+    """Shortfall ratio of a per-trade edge against a per-fill cost, both ways.
+
+    The two arguments are in *different* units on purpose and the conversion is done
+    here, because mixing them is an easy and quiet error: an edge is naturally
+    measured per round trip while a cost schedule is quoted per fill, and comparing
+    them directly understates the barrier by exactly a factor of two. The first
+    version of this function took both at face value and reported 12.8x where the
+    round-trip comparison gives 25.6x -- a number already stated in a research log.
+
+    Returns both ratios because they answer different questions. The full model is
+    what the account is actually charged. The impact-only figure excludes exchange
+    fees, which no execution schedule can influence, and is the barrier a strategy
+    can do anything about.
+
+    ``fee_bps`` is needed to separate the two; without it the impact-only ratio is
+    reported as equal to the full one rather than guessed.
+    """
+    edge = float(edge_bps_per_trade)
+    per_fill = float(cost_bps_per_fill)
+    round_trip = 2.0 * per_fill
+    impact_round_trip = round_trip
+    if fee_bps is not None and measured_spread_bps is not None:
+        split = decompose_cost(
+            float(fee_bps), per_fill - float(fee_bps), measured_spread_bps
+        )
+        impact_round_trip = 2.0 * split["impact_bps"]
+    return {
+        "edge_bps": edge,
+        "cost_bps_full_round_trip": round_trip,
+        "shortfall_vs_full": (round_trip / edge) if edge > 0 else float("inf"),
+        "cost_bps_impact_round_trip": impact_round_trip,
+        "shortfall_vs_impact": (
+            impact_round_trip / edge) if edge > 0 else float("inf"),
+    }
+
+
 def resolvable_phi(n: int, *, confidence: float = 1.96) -> float:
     """Smallest autocorrelation this sample size could tell apart from zero.
 
@@ -871,6 +970,8 @@ __all__ = [
     "adjust_pvalues",
     "ar1",
     "bootstrap_stress",
+    "breakeven_vs_cost",
+    "decompose_cost",
     "implied_spread",
     "monte_carlo_stress",
     "multiple_testing_correction",

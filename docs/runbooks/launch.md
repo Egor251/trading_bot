@@ -1506,6 +1506,81 @@ trip.** Where the other ~18.8 bps go is now a question with a number attached, a
 that is the Almgren question: how much of a cost is the spread crossing and how much
 is permanent impact. See below.
 
+### The cost model is mostly fees, and a fee is not an impact
+
+Almgren et al. (2005) split execution cost into permanent impact (size-driven,
+persisting) and temporary impact (pace-driven, vanishing). Applied to this system
+that split is a category error, and discovering why was the useful part.
+
+A round trip here is charged `fee_bps: 5` + `slippage_bps: 2` = **7 bps per fill**.
+Against the spread Roll measured at 1m (1.19 bps):
+
+```
+total charged      7.00 bps/fill
+fee (a transfer)   5.00 bps   71.4%
+measured crossing  1.19 bps
+residual slippage  0.81 bps
+impact total       2.00 bps   28.6%
+```
+
+A fee is a transfer to the venue. It does not scale with size, does not decay when
+the order completes, and no execution schedule touches it. Describing it as permanent
+impact overstates how much of the barrier is addressable; describing it as temporary
+impact implies a scheduling fix that does not exist.
+
+**The 25× shortfall, in the units it was stated in and then corrected.** The edge is
+0.78 bps **per trade**; a cost schedule is quoted **per fill**. Those were compared
+directly at first, which halves the barrier and reported 12.8×. In round-trip units:
+
+| comparison | cost | shortfall |
+|---|---|---|
+| research sweep, full model (20 bps RT) | 20.0 | **25.6×** |
+| research sweep, impact only (10 bps RT) | 10.0 | **12.8×** |
+| product model, full (14 bps RT) | 14.0 | 18.0× |
+| product model, impact only (4 bps RT) | 4.0 | **5.1×** |
+
+So 25.6× was the right figure and the fee share was 83% of it. **The conclusion
+does not change** — at a zero fee the measured spread alone is still 1.5× the edge, so
+the 4h reversal rule still fails to pay. What changes is that the barrier it fails
+against is roughly half what was quoted, and a strategy cannot close that gap by
+executing better.
+
+`engine.simulation.decompose_cost` and `breakeven_vs_cost` do the split, with the
+unit conversion inside `breakeven_vs_cost` so the two cannot be compared raw.
+
+### Two cost numbers in one repo, and the fee that must be measured not remembered
+
+`tools/edge_ceiling.py` hardcodes `cost_bps=10.0` at **19 call sites**. The product's
+own config charges 7. Research has been running 1.43× more pessimistic than the thing
+it is a research log for. This is the 14th instance of a quantity recorded in one
+place and interpreted in another.
+
+**Do not settle the fee schedule by looking it up.** The real number has to come from
+fills, and the product can already supply them: `engine/execution.py` records the
+venue's actual fee on every `Fill` (`r["fee"]["cost"]`), and
+`engine/cost_calibration.py` computes implementation shortfall from those fills.
+
+What that module says about itself — that `nightly_fee_reconciliation` "would catch
+that, except nothing ever calls it outside tests, so it compares an expected fee
+against an expected fee" — is the same defect as `adjust_pvalues` had, and the fix is
+the same shape: wire the observed side into something that runs on a schedule.
+Until then, every cost figure in the research log is an assumption, and this one is
+the largest assumption in it.
+
+### The signed order flow is not obtainable through the current data path
+
+Almgren's decomposition properly needs signed order flow, and the path cannot supply
+it: `ccxt.fetch_ohlcv` returns six columns, and Binance's taker-buy volume — fields
+9 and 10 of the raw kline — is discarded before it reaches us. `_ccxt_row` then
+truncates the row again with `row[:6]`. The data exists on the exchange.
+
+So the permanent-vs-temporary split is **not testable today**, and the reason is
+recorded rather than worked around: it needs the raw klines endpoint, which is
+exchange-specific and would not survive being hidden behind the adapter's interface.
+
+What was measurable without it — Amihud-style impact per unit volume, and the spread
+itself — is measured above, and it is enough to show that the fee share dominates.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
