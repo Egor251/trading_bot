@@ -539,6 +539,52 @@ EWO_GATE1_T = 2.70
 #: from directional exposure. If the rule loses in every named down period, then the
 #: +334% and +406% are drift with extra steps, and the daily result should be struck
 #: from the record rather than re-explained.
+#: The confirmation test, on data that formed no part of the impression.
+#:
+#: Everything so far -- the +334% and +406% on BTC and ETH, the four of four down
+#: periods -- came from two instruments whose daily autocorrelation had already been
+#: measured and discussed before the rule was run. Whatever those results are worth,
+#: they are the results that were *expected* to look like that, so they cannot also
+#: confirm it.
+#:
+#: Two fresh axes, neither used anywhere above:
+#:
+#:   instruments   SOL, XRP and DOGE have never appeared in any test here, and the
+#:                 Nasdaq 100 and Russell 2000 have not either. Same rule, same
+#:                 5/34 periods from the source article, same 10 bps.
+#:   periods       the 1929 crash, 2008 and the 2021-22 bear market were used. These
+#:                 were not: the 1968-82 secular bear, the 2000-02 collapse, and the
+#:                 2020 COVID drawdown.
+#:
+#: Registered criteria, both required:
+#:
+#:   A  net positive after 10 bps on at least 4 of the 5 fresh instruments, and
+#:      t > 2.70 on at least one of them
+#:   B  net positive after 10 bps on at least 2 of the 3 fresh bear periods, each of
+#:      which must have a negative buy-and-hold
+#:
+#: Nothing here was looked at before this was written. Note the honest asymmetry:
+#: SOL, XRP and DOGE are younger and far more volatile than BTC, so they carry fewer
+#: bars and more of them in filings. That cuts both ways and is why criterion A asks
+#: for four of five rather than all five.
+FRESH_INSTRUMENTS: tuple[tuple[str, str, str], ...] = (
+    ("SOL/USDT", "CRYPTO", "ccxt"),
+    ("XRP/USDT", "CRYPTO", "ccxt"),
+    ("DOGE/USDT", "CRYPTO", "ccxt"),
+    ("^NDX", "EQUITY", "yahoo"),
+    ("^RUT", "EQUITY", "yahoo"),
+)
+
+FRESH_BEARS: tuple[tuple[str, str, str, str], ...] = (
+    ("^GSPC", "EQUITY", "yahoo", "1968-01-01/1982-12-31"),
+    ("^GSPC", "EQUITY", "yahoo", "2000-03-01/2002-10-09"),
+    ("^GSPC", "EQUITY", "yahoo", "2018-10-01/2020-03-23"),
+)
+
+FRESH_MIN_INSTRUMENTS = 4
+FRESH_MIN_T = 2.70
+FRESH_MIN_BEARS = 2
+
 DOWN_PERIODS: tuple[tuple[str, str, str, str], ...] = (
     ("^GSPC", "EQUITY", "yahoo", "1929-08-01/1932-11-30"),
     ("^GSPC", "EQUITY", "yahoo", "2007-10-01/2009-03-31"),
@@ -1664,6 +1710,108 @@ async def main() -> int:
                 print("  The rule does not survive a falling market. The +334% and")
                 print("  +406% are directional exposure to two rising assets, and")
                 print("  should not be counted as a finding.")
+
+        if os.environ.get("EDGE_FRESH"):
+            async def _fetch_f(
+                ticker: str, class_code: str, provider: str,
+                bars: int, start: str | None = None, end: str | None = None
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe="1d", limit=bars, start=start, end=end,
+                )
+
+            def _run(series: Any) -> tuple[dict[str, float], float]:
+                opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                res = ewo_rule_pnl(
+                    opens, closes, fast=EWO_FAST, slow=EWO_SLOW, cost_bps=10.0
+                )
+                bh = (closes[-1] / closes[0] - 1.0) if closes[0] > 0 else 0.0
+                return res, bh
+
+            print()
+            print("=" * 72)
+            print("CONFIRMATION: instruments and periods that formed no impression")
+            print("=" * 72)
+            print(
+                f"  A: net > 0 on >= {FRESH_MIN_INSTRUMENTS} of "
+                f"{len(FRESH_INSTRUMENTS)} instruments, t > {FRESH_MIN_T} on >= 1"
+            )
+            print(
+                f"  B: net > 0 on >= {FRESH_MIN_BEARS} of "
+                f"{len(FRESH_BEARS)} unused bear periods (buy&hold negative)"
+            )
+            print()
+            print("  -- fresh instruments --")
+            print(
+                f"  {'series':10} {'n':>7} {'rule net':>10} {'t':>7} "
+                f"{'buy&hold':>10}"
+            )
+            a_ok = 0
+            a_sig = 0
+            for ticker, class_code, provider in FRESH_INSTRUMENTS:
+                want = BARS if provider == "ccxt" else MOMENTUM_BARS
+                try:
+                    series = await _fetch_f(ticker, class_code, provider, want)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  {ticker:10} fetch failed ({type(exc).__name__})")
+                    continue
+                if not series or len(series) < 200:
+                    print(f"  {ticker:10} only {len(series or [])} bars, skipped")
+                    continue
+                res, bh = _run(series)
+                if res["net"] > 0:
+                    a_ok += 1
+                if res["net"] > 0 and res["t"] > FRESH_MIN_T:
+                    a_sig += 1
+                print(
+                    f"  {ticker:10} {len(series):>7} {100 * res['net']:>9.1f}% "
+                    f"{res['t']:>+7.2f} {100 * bh:>9.1f}%"
+                )
+            gate_a = a_ok >= FRESH_MIN_INSTRUMENTS and a_sig >= 1
+
+            print()
+            print("  -- fresh bear periods --")
+            print(
+                f"  {'period':>24} {'n':>6} {'rule net':>10} {'t':>7} "
+                f"{'buy&hold':>10}"
+            )
+            b_ok = 0
+            for ticker, class_code, provider, span in FRESH_BEARS:
+                start, end = span.split("/")
+                try:
+                    series = await _fetch_f(
+                        ticker, class_code, provider, MOMENTUM_BARS, start, end
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  {span:>24} fetch failed ({type(exc).__name__})")
+                    continue
+                if not series or len(series) < 200:
+                    print(f"  {span:>24} only {len(series or [])} bars, skipped")
+                    continue
+                res, bh = _run(series)
+                if res["net"] > 0 and bh <= 0:
+                    b_ok += 1
+                print(
+                    f"  {span:>24} {len(series):>6} "
+                    f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} "
+                    f"{100 * bh:>9.1f}%"
+                )
+            gate_b = b_ok >= FRESH_MIN_BEARS
+
+            print()
+            print(f"  A: {a_ok}/{len(FRESH_INSTRUMENTS)} positive, "
+                  f"{a_sig} significant   {'HOLDS' if gate_a else 'FAILS'}")
+            print(f"  B: {b_ok}/{len(FRESH_BEARS)} bear periods   "
+                  f"{'HOLDS' if gate_b else 'FAILS'}")
+            print()
+            if gate_a and gate_b:
+                print("  CONFIRMED on data that formed no part of the impression.")
+            else:
+                print("  NOT CONFIRMED. The daily result came from two known assets whose")
+                print("  drift was already known, and it does not transfer to")
+                print("  instruments or periods that were never part of it.")
 
         await core.shutdown()
     return 0

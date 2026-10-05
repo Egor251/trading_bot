@@ -1147,6 +1147,48 @@ the hardest available test. That is worth a proper registered test on periods no
 here, and it is emphatically not worth a lookback sweep — a rule that has survived
 this much and then been tuned is the same artefact under a better name.
 
+### Confirmation on untouched data — failed
+
+Everything above came from BTC and ETH, whose drift and autocorrelation were already
+known and discussed before the rule was run. Results that were *expected* to look like
+that cannot also confirm it. So the confirmation ran on two axes that formed no part of
+the impression: five instruments never used anywhere above, and three bear periods
+never used above.
+
+| fresh instrument | bars | rule net | t | buy-and-hold |
+|---|---|---|---|---|
+| SOL/USDT | 2 247 | +658.0% | +2.40 | +3546.5% |
+| XRP/USDT | 3 000 | −64.6% | −0.22 | +238.1% |
+| DOGE/USDT | 2 650 | +912.1% | +1.81 | +2371.3% |
+| ^NDX | 10 332 | **−25.7%** | −0.16 | **+27 612.2%** |
+| ^RUT | 9 841 | +67.5% | +0.54 | +1584.8% |
+
+| fresh bear period | bars | rule net | t | buy-and-hold |
+|---|---|---|---|---|
+| 1968-01 → 1982-12 | 3 761 | **−85.0%** | −1.63 | **+46.3%** |
+| 2000-03 → 2002-10 | 655 | +26.3% | +0.74 | −43.7% |
+| 2018-10 → 2020-03 | 371 | +29.1% | +1.40 | −23.5% |
+
+**Criterion A failed: 3 of 5 positive, none significant. Criterion B held: 2 of 3.**
+
+Not confirmed, and the failure is informative rather than marginal. The two fresh
+instruments that paid are the two with the most violent drift — SOL at +3546% and
+DOGE at +2371% — where the rule captured 18% and 38% of a rise, the same ratio as on
+BTC. XRP lost. And on the Nasdaq 100, up **27 612%**, the rule returned **−25.7%**:
+it captures essentially nothing of an equity drift, consistent with the −2.3% it
+made on the S&P since 1929.
+
+A registration error is worth recording too. The 1968–1982 window was named here as a
+"secular bear", and the market was **+46.3%** across it — the −46% crash was inside the
+window, not across it. The rule lost 85% over fourteen years of grinding upward, which
+is the whipsaw this rule is structurally prone to, and the same thing it did over the
+full S&P history. The tool's own buy-and-hold column caught the mislabelling, which is
+the argument for printing it.
+
+So the sequence now reads: a promising daily result, a falsification test it survived,
+and a confirmation test it did not. The +334% and +406% were the two best-known,
+highest-drift crypto assets, and the effect does not travel.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
