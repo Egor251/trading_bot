@@ -1320,6 +1320,68 @@ to scale with the rate, and to leave net strictly below gross.
 
 895 passed.
 
+### The 4h reversal: the margin is 25x, not 1.3x
+
+Three follow-ups, all registered before running: the breakeven curve, severity
+filtering, and whether the effect is the bid-ask bounce.
+
+**First, a correction.** The previous section said the reversion is "worth a measured
+15 bps per trade and loses to a 20 bps round trip, so the gap is a pricing problem".
+That was wrong. It extrapolated from the conditional mean after a 2 sigma move, which
+the rule does not capture in full. The realised number:
+
+| series | tf | hold | 0 bps | 2 bps | 5 bps | 7.5 bps | 10 bps | 15 bps |
+|---|---|---|---|---|---|---|---|---|
+| BTC/USDT | 4h | 2 | **+52.2%** | −214.5% | −614.5% | −947.8% | −1281.2% | −1947.9% |
+| BTC/USDT | 4h | 10 | −271.5% | −344.2% | −453.3% | −544.3% | −635.2% | −817.0% |
+| ETH/USDT | 4h | 2 | −57.4% | −323.6% | −722.8% | −1055.4% | −1388.1% | −2053.5% |
+| ETH/USDT | 4h | 10 | −212.3% | −285.0% | −394.0% | −484.8% | −575.6% | −757.3% |
+
+Net crosses zero at roughly **0.6 bps per fill**. That is +52.2% of gross across 6 667
+trades, or **0.78 bps of edge per trade** against a round trip near 20. The shortfall is
+**twenty-five to one.** A maker tier does not close a gap of that size, and the honest
+description is that the effect is real, significant at t = −3.44, and worth about a
+twenty-fifth of what it costs to trade.
+
+**Severity filtering does not close it.** Zero of twelve clear t > 3.00. Gross does
+improve with severity on BTC — +52.2%, +112.8%, +178.2% at k = 2.0, 2.5, 3.0 — but
+turnover is unchanged, so net stays between −1155% and −1358%. Best row anywhere is ETH
+at k = 3.0, hold 5, at −693.5%.
+
+### The bounce test held, and then complicated itself
+
+Registered criterion: the conditional reversion as a fraction of the asset's own
+volatility must be at least 1.30x larger on the cheapest asset than on BTC.
+
+| series | bars | phi | t(phi) | cond mean | t | abs mean / sigma |
+|---|---|---|---|---|---|---|
+| DOGE/USDT | 15 894 | +0.0058 | +0.15 | +0.00700 | +1.29 | **0.27811** |
+| XRP/USDT | 18 450 | +0.0028 | +0.17 | +0.00273 | +1.38 | 0.13639 |
+| SOL/USDT | 13 480 | −0.0422 | −2.70 | −0.00063 | −0.29 | 0.02557 |
+| ETH/USDT | 20 004 | −0.0346 | −3.01 | −0.00074 | −0.61 | 0.04023 |
+| BTC/USDT | 20 004 | −0.0438 | −3.44 | −0.00154 | −1.48 | 0.10646 |
+
+**The criterion held: 2.61x on the cheapest asset.** And the data then said something
+more interesting than the criterion asked for.
+
+The magnitude ordering is what a spread effect predicts — the cheapest and least liquid
+pair has by far the largest conditional move relative to its own volatility. But the
+**sign ordering is the reverse**. The negative autocorrelation is strongest on the
+three most liquid assets (BTC −0.0438, SOL −0.0422, ETH −0.0346, all t < −2.7) and
+**absent on the two cheapest** (DOGE +0.0058, XRP +0.0028, neither significant). Plain
+bid-ask bounce predicts the opposite, because bounce scales with illiquidity.
+
+So bounce explains the *size* of the conditional move and not the *sign* of the
+autocorrelation. Something specific to deep, liquid, leveraged markets — liquidation
+cascades, perpetual funding and index-arbitrage flow — fits the phi ordering far better
+than a generic microstructure story, and it would be crypto-specific rather than
+universal. That is a hypothesis the data suggests and does not prove, and it is the more
+interesting of the two.
+
+Either way the trading conclusion does not move: 0.78 bps per trade against 20 bps round
+trip, and no severity or cost setting reachable on an exchange changes that by the
+required factor of twenty-five.
+
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
 resolves from `OPERATOR_API_TOKEN`, else from `data/ui/operator_token` (mode
 0600), else it is generated at first boot. A non-loopback `--host` requires

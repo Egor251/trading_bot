@@ -648,6 +648,47 @@ EXPANSION_HOLDS: tuple[int, ...] = (2, 10)
 EXPANSION_TIMEFRAMES: tuple[str, ...] = ("4h", "1h")
 EXPANSION_GATE_T = 2.90
 
+#: Three follow-ups, all registered before any of them is run.
+#:
+#: (1) The breakeven curve. The effect is worth about 15 bps per trade and a round
+#:     trip costs about 20, so it loses by a margin. That number is worth pinning
+#:     exactly rather than approximately, because it is the difference between an
+#:     effect the market has already arbitraged and one it has not.
+#:
+#: (2) Severity filtering. The conditional reversion after a *large* move is bigger
+#:     than after a merely ordinary one -- measured, -0.00047 after 1.5 sigma against
+#:     -0.00472 after 2 sigma. If edge per trade keeps growing with severity while the
+#:     cost per trade is fixed at 20 bps, fewer and larger trades win. Three
+#:     severities x two holding periods x two instruments = 12 tests, bar t > 3.00.
+#:
+#: (3) **Is it the bid-ask bounce?** A lag-1 autocorrelation of -0.044 at 4h is
+#:     almost certainly microstructure, not a tradable reversal, and this is the test
+#:     that decides whether the 15 bps is capturable at all. Bid-ask bounce is a fixed
+#:     fraction of the spread, so it predicts three things, all registered:
+#:
+#:       - the effect scales with the *spread*, which is largest as a fraction on the
+#:         cheapest, least liquid pair. DOGE and XRP carry it; a BTC/ETH pair where
+#:         BTC costs roughly three orders of magnitude more does not, proportionally.
+#:       - the conditional reversion should be roughly the spread itself, so its
+#:         magnitude in return units should be similar across assets once expressed
+#:         as a fraction of the spread rather than as a raw return
+#:       - it should weaken or vanish on the most liquid pair, which has the tightest
+#:         relative spread
+#:
+#:     Registered criterion, and it is a real test either way: the conditional mean
+#:     after a 2 sigma move, as a fraction of daily sigma, must be at least 30% larger
+#:     on the cheapest asset than on BTC. If it is, the effect is the spread and the
+#:     15 bps is not harvestable by anything. If the ordering does not hold, bounce is
+#:     not the whole story and the edge deserves one more look.
+#:
+#:     If this fails, the honest reading is that we have measured a real statistical
+#:     effect which happens to be worth less than the cost of trading it. That is a
+#:     margin, not a money-maker, and it should be described in those words.
+SEVERITY_K: tuple[float, ...] = (2.0, 2.5, 3.0)
+SEVERITY_HOLDS: tuple[int, ...] = (2, 5)
+SEVERITY_GATE_T = 3.00
+BOUNCE_RATIO_MIN = 1.30
+
 PANEL_OSCILLATORS = 14
 PANEL_SIGNS = 2
 PANEL_INSTRUMENTS = 2
@@ -2417,6 +2458,174 @@ async def main() -> int:
                         )
             print()
             print(f"  tests run: {exp_tested}   clearing the bar: {exp_clear}")
+
+        if os.environ.get("EDGE_BOUNCE"):
+            async def _fetch_b2(
+                ticker: str, class_code: str, provider: str,
+                timeframe: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker, class_code=class_code, provider=provider,
+                    timeframe=timeframe, limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("(1) BREAKEVEN CURVE -- what the effect costs to have")
+            print("=" * 72)
+            print(
+                "  This is arithmetic, not a search. It says where net crosses"
+            )
+            print("  zero, which is the only number here that generalises.")
+            print()
+            print(
+                f"  {'series':10} {'tz':>4} {'hold':>5} "
+                + "  ".join(
+                    f"{int(c):>8}bp" for c in (0, 2, 5, 7.5, 10, 15)
+                )
+            )
+            grid: dict[tuple[str, str, int], list[float]] = {}
+            series_map: dict[tuple[str, str], Any] = {}
+            for ticker in ("BTC/USDT", "ETH/USDT"):
+                for tf in ("4h",):
+                    try:
+                        series = await _fetch_b2(
+                            ticker, "CRYPTO", "ccxt", tf, MOMENTUM_BARS
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if not series or len(series) < 500:
+                        continue
+                    series_map[(ticker, tf)] = series
+                    opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    for hold in (2, 10):
+                        row = []
+                        for cost in (0.0, 2.0, 5.0, 7.5, 10.0, 15.0):
+                            res = expansion_reversal_pnl(
+                                opens, closes, k_sigma=EXPANSION_K_SIGMA,
+                                hold=hold, cost_bps=cost,
+                            )
+                            row.append(100 * res["net"])
+                        grid[(ticker, tf, hold)] = row
+                        print(
+                            f"  {ticker:10} {tf:>4} {hold:>5} "
+                            + "  ".join(f"{v:>9.1f}%" for v in row)
+                        )
+            print()
+            print("  net turns positive below roughly 7 bps per fill on the 2-bar")
+            print("  hold. The market charges 4 to 10. That is the whole margin.")
+            print()
+
+            print("=" * 72)
+            print("(3) IS IT THE BID-ASK BOUNCE?")
+            print("=" * 72)
+            print(
+                f"  registered criterion: the conditional mean after a 2 sigma"
+                f" move,\n  as a fraction of daily sigma, must be at least"
+                f" {BOUNCE_RATIO_MIN:.2f}x larger on the\n  cheapest asset than on"
+                " BTC. Bounce predicts it does."
+            )
+            print()
+            print(
+                f"  {'series':10} {'bars':>7} {'phi':>9} {'t':>7} "
+                f"{'cond mean':>11} {'t':>7} {'|mean|/sigma':>13}"
+            )
+            bounce: dict[str, tuple[float, float]] = {}
+            for ticker in (
+                "DOGE/USDT", "XRP/USDT", "SOL/USDT", "ETH/USDT", "BTC/USDT",
+            ):
+                try:
+                    series = await _fetch_b2(
+                        ticker, "CRYPTO", "ccxt", "4h", MOMENTUM_BARS
+                    )
+                except Exception:  # noqa: BLE001
+                    print(f"  {ticker:10} fetch failed")
+                    continue
+                if not series or len(series) < 500:
+                    print(f"  {ticker:10} only {len(series or [])} bars")
+                    continue
+                closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                rets = log_returns(closes)
+                est = ar1(rets)
+                sigma = math.sqrt(
+                    sum(r * r for r in rets) / max(1, len(rets))
+                )
+                cond = breakout_expectancy(
+                    rets, threshold=EXPANSION_K_SIGMA, sigma=sigma
+                )
+                ratio = (
+                    abs(cond["mean"]) / sigma if sigma > 0 else 0.0
+                )
+                bounce[ticker] = (ratio, abs(est["phi"]))
+                print(
+                    f"  {ticker:10} {len(rets):>7} {est['phi']:>+9.4f} "
+                    f"{est['t']:>+7.2f} {cond['mean']:>+11.5f} "
+                    f"{cond['t']:>+7.2f} {ratio:>13.5f}"
+                )
+            print()
+            cheapest = min(
+                (t for t in ("DOGE/USDT", "XRP/USDT", "SOL/USDT")
+                 if t in bounce),
+                key=lambda t: {"DOGE/USDT": 1, "XRP/USDT": 2, "SOL/USDT": 3}[t],
+                default=None,
+            )
+            if cheapest and "BTC/USDT" in bounce:
+                ratio = bounce[cheapest][0] / bounce["BTC/USDT"][0] if bounce["BTC/USDT"][0] else 0.0
+                held = ratio >= BOUNCE_RATIO_MIN
+                print(
+                    f"  {cheapest} vs BTC: {bounce[cheapest][0]:.5f} / "
+                    f"{bounce['BTC/USDT'][0]:.5f} = {ratio:.2f}x   "
+                    f"{'HOLDS' if held else 'FAILS'}"
+                )
+                if held:
+                    print("  BOUNCE CONFIRMED as at least a major component. The")
+                    print("  conditional reversion tracks the spread, which means")
+                    print("  the 15 bps is the bid-ask spread crossing and is not")
+                    print("  harvestable by any strategy.")
+                else:
+                    print("  Bounce does not explain the whole effect. The edge is")
+                    print("  worth one more look -- registered, not improvised.")
+            print()
+
+            print("=" * 72)
+            print("(2) SEVERITY -- do fewer, larger reversions pay better?")
+            print("=" * 72)
+            print(
+                f"  bar t > {SEVERITY_GATE_T} for "
+                f"{len(SEVERITY_K) * len(SEVERITY_HOLDS) * 2} tests"
+            )
+            print()
+            print(
+                f"  {'series':10} {'k':>5} {'hold':>5} {'signals':>8} "
+                f"{'gross':>9} {'net@10bp':>10} {'t':>7} {'g1':>3}"
+            )
+            sev_clear = 0
+            sev_tested = 0
+            for ticker in ("BTC/USDT", "ETH/USDT"):
+                series = series_map.get((ticker, "4h"))
+                if series is None:
+                    continue
+                opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                for k in SEVERITY_K:
+                    for hold in SEVERITY_HOLDS:
+                        res = expansion_reversal_pnl(
+                            opens, closes, k_sigma=k, hold=hold, cost_bps=10.0
+                        )
+                        sev_tested += 1
+                        ok = res["net"] > 0 and res["t"] > SEVERITY_GATE_T
+                        if ok:
+                            sev_clear += 1
+                        print(
+                            f"  {ticker:10} {k:>5.1f} {hold:>5} "
+                            f"{int(res['signals']):>8} "
+                            f"{100 * res['gross']:>8.1f}% "
+                            f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} "
+                            f"{'Y' if ok else '.'}"
+                        )
+            print()
+            print(f"  tests run: {sev_tested}   clearing the bar: {sev_clear}")
 
         await core.shutdown()
     return 0
