@@ -475,6 +475,39 @@ MOMENTUM_GATE1_T = 3.10
 #: this is: the correction follows from which cells could not run at all.
 MOMENTUM_BARS = int(os.environ.get("EDGE_MOMENTUM_BARS") or 30000)
 
+#: The range-breakout test, registered before it was run.
+#:
+#: The hypothesis has a source that is not this repository. A 2024 note in
+#: "Progressive Economy" (Kusaev, DOI 10.54861/27131211_2024_4_83) describes a
+#: head-and-shoulders on BTC and states the tradeable part mechanically: the signal
+#: is the neckline break, and the neckline is the range boundary. What is taken here
+#: is that *rule*. None of the note's conclusions are used, because it has none that
+#: can be checked -- it contains no returns, no sample and no test, and its central
+#: claim is that the patterns "do not contradict" wave theory, which is a statement
+#: about interpretability rather than about edge. The author notes the patterns can
+#: be read several ways, which is the reason they need measuring rather than reading.
+#:
+#: Rule: long when the close exceeds the highest high of the previous `LOOKBACK`
+#: bars, short when it falls below the lowest low, flat otherwise, holding each
+#: position for `HOLD` bars. Both directions, because the research engine's default
+#: long/flat mode would make half of every breakout unreachable.
+#:
+#: Parameters are taken by convention and are not tuned -- 20 and 5 bars -- and are
+#: applied unchanged at every timeframe. Only the timeframe varies, so the grid is
+#: three tests, not thirty.
+#:
+#:   grid    1 series x 3 timeframes = 3 tests
+#:   gate 1  net positive after 10 bps per fill, and t > 2.70 (Bonferroni, 3 tests)
+#:   gate 2  the first and second halves of the series must both be net positive
+#:
+#: Registered with no result seen. A lookback sweep would be a parameter search with
+#: one parameter's clothing on, and the best of thirty lookbacks on a single sample
+#: is the exact illusion this repository was assembled to dismantle.
+BREAKOUT_LOOKBACK = 20
+BREAKOUT_HOLD = 5
+BREAKOUT_TIMEFRAMES: tuple[str, ...] = ("1d", "4h", "1h")
+BREAKOUT_GATE1_T = 2.70
+
 
 async def momentum_sweep(
     fetch: Any, grid: tuple[tuple[str, str, str, str], ...], bars: int
@@ -717,6 +750,96 @@ def breakout_expectancy(
             out["n"] = float(m)
             out["mean"] = mean
             out["t"] = (mean / se) if se > 0 else 0.0
+    return out
+
+
+def breakout_rule_pnl(
+    highs: list[float],
+    lows: list[float],
+    opens: list[float],
+    closes: list[float],
+    *,
+    lookback: int,
+    hold: int,
+    cost_bps: float,
+) -> dict[str, float]:
+    """A range breakout: long above the recent high, short below the recent low.
+
+    This is the operational content of the pattern a 2024 note describes -- a
+    head-and-shoulders reduced to the part that can be measured without a human
+    looking at it: the neckline is the range boundary, and the trade is the break.
+    The note's *conclusions* are not used. It contains no returns, no sample and no
+    test, and its central claim is that the patterns "do not contradict" wave
+    theory, which is a statement about ambiguity rather than about edge.
+
+    The rule takes its parameters by convention and is not tuned: lookback 20, hold
+    5, in bars, applied unchanged across every timeframe. A version swept over
+    lookbacks would be a parameter search wearing one parameter's clothing, and the
+    best of thirty lookbacks on one sample is exactly the illusion this repository
+    was assembled to remove.
+
+    Long and short are both allowed here. The research engine runs long/flat by
+    default (`forbid_net_flip`), which would make half of every breakout
+    unreachable -- so this is computed from OHLC directly, which is also why it
+    needs no engine change to be measured. Integrating a winner as a plugin
+    strategy would still require opening up the position mode.
+    """
+    n = min(len(opens), len(closes), len(highs), len(lows))
+    out = {"gross": 0.0, "cost": 0.0, "net": 0.0, "trades": 0.0,
+           "signals": 0.0, "bars": float(max(0, n - lookback)),
+           "t": 0.0, "n_pos": 0.0}
+    if n <= lookback + 2 or lookback < 2 or hold < 1:
+        return out
+    position = 0.0
+    entry_index = -10 ** 6
+    gross = 0.0
+    cost_total = 0.0
+    trades = 0.0
+    signals = 0.0
+    per_bar: list[float] = []
+    for t in range(lookback, n - 2):
+        want = position
+        if position == 0.0 or (t - entry_index) >= hold:
+            window_hi = max(highs[t - lookback : t])
+            window_lo = min(lows[t - lookback : t])
+            if closes[t] > window_hi:
+                want = 1.0
+            elif closes[t] < window_lo:
+                want = -1.0
+            else:
+                want = 0.0
+            if want != 0.0:
+                signals += 1.0
+        turnover = abs(want - position)
+        trades += turnover
+        entry, leave = opens[t + 1], opens[t + 2]
+        bar_ret = 0.0
+        if entry > 0:
+            bar_ret = want * (leave - entry) / entry
+            gross += bar_ret
+        cost = turnover * cost_bps / 10_000.0
+        cost_total += cost
+        if want != 0.0:
+            per_bar.append(bar_ret - cost)
+        if want != position:
+            entry_index = t
+        position = want
+    out["gross"] = gross
+    out["cost"] = cost_total
+    out["net"] = gross - cost_total
+    out["trades"] = trades
+    out["signals"] = signals
+    # Significance of the per-bar returns earned while in a position. Approximate:
+    # these overlap when a position lasts more than one bar, so the standard error
+    # is understated. Reported because a rule that pays only by luck still has a
+    # mean, and the mean alone is not evidence.
+    if len(per_bar) > 5:
+        m = len(per_bar)
+        avg = sum(per_bar) / m
+        var = sum((v - avg) ** 2 for v in per_bar) / (m - 1)
+        se = (var / m) ** 0.5 if var > 0 else 0.0
+        out["t"] = (avg / se) if se > 0 else 0.0
+        out["n_pos"] = float(m)
     return out
 
 
@@ -1049,6 +1172,96 @@ async def main() -> int:
                     f"net={100 * row['net_at_10bp']:.1f}%"
                 )
             if not winners_m:
+                print("    None.")
+
+        if os.environ.get("EDGE_BREAKOUT"):
+            async def _fetch_b(
+                ticker: str, timeframe: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker,
+                    class_code="CRYPTO",
+                    provider="ccxt",
+                    timeframe=timeframe,
+                    limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("RANGE BREAKOUT: registered, untuned, both directions")
+            print("=" * 72)
+            print(
+                f"  lookback={BREAKOUT_LOOKBACK}  hold={BREAKOUT_HOLD}  "
+                f"cost=10 bps per fill"
+            )
+            print(
+                f"  gate 1: net > 0 and t > {BREAKOUT_GATE1_T} "
+                f"(Bonferroni, {len(BREAKOUT_TIMEFRAMES)} tests)\n"
+                "  gate 2: both halves of the series net positive"
+            )
+            print()
+            print(
+                f"  {'series':10} {'tz':>4} {'n':>7} {'signals':>8} "
+                f"{'gross':>9} {'net@10bp':>10} {'t':>7} {'g1':>3} {'g2':>3}"
+            )
+            winners_b: list[dict[str, Any]] = []
+            tested_b = 0
+            for ticker in ("BTC/USDT", "ETH/USDT"):
+                for tf in BREAKOUT_TIMEFRAMES:
+                    want = BARS if tf == "1d" else MOMENTUM_BARS
+                    try:
+                        series = await _fetch_b(ticker, tf, want)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  {ticker:10} {tf:>4} fetch failed "
+                              f"({type(exc).__name__})")
+                        continue
+                    if not series or len(series) < 200:
+                        print(f"  {ticker:10} {tf:>4} only "
+                              f"{len(series or [])} bars")
+                        continue
+                    highs = [float(getattr(b, 'high', 0) or 0) for b in series]
+                    lows = [float(getattr(b, 'low', 0) or 0) for b in series]
+                    opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    res = breakout_rule_pnl(
+                        highs, lows, opens, closes,
+                        lookback=BREAKOUT_LOOKBACK,
+                        hold=BREAKOUT_HOLD,
+                        cost_bps=10.0,
+                    )
+                    half = len(closes) // 2
+                    a = breakout_rule_pnl(
+                        highs[:half], lows[:half], opens[:half], closes[:half],
+                        lookback=BREAKOUT_LOOKBACK, hold=BREAKOUT_HOLD,
+                        cost_bps=10.0,
+                    )
+                    b_half = breakout_rule_pnl(
+                        highs[half:], lows[half:], opens[half:], closes[half:],
+                        lookback=BREAKOUT_LOOKBACK, hold=BREAKOUT_HOLD,
+                        cost_bps=10.0,
+                    )
+                    tested_b += 1
+                    g1 = res["net"] > 0 and res["t"] > BREAKOUT_GATE1_T
+                    g2 = a["net"] > 0 and b_half["net"] > 0
+                    flags = "   ".join(["Y" if g1 else ".", "Y" if g2 else "."])
+                    print(
+                        f"  {ticker:10} {tf:>4} {len(closes):>7} "
+                        f"{int(res['signals']):>8} {100 * res['gross']:>8.1f}% "
+                        f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} {flags}"
+                    )
+                    if g1 and g2:
+                        winners_b.append(
+                            {"ticker": ticker, "tf": tf, "r": res}
+                        )
+            print()
+            print(f"  tests run: {tested_b}   passing both gates: "
+                  f"{len(winners_b)}")
+            for w in winners_b:
+                print(
+                    f"    CANDIDATE: {w['ticker']} {w['tf']} "
+                    f"net={100 * w['r']['net']:.1f}% t={w['r']['t']:+.2f}"
+                )
+            if not winners_b:
                 print("    None.")
 
         await core.shutdown()

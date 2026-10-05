@@ -813,6 +813,47 @@ def test_breakout_expectancy_reports_the_mean_and_not_the_variance() -> None:
     )
 
 
+def _ohlc(closes: list[float], seed: int = 5):
+    import random
+    rng = random.Random(seed)
+    highs = [c * (1.0 + abs(rng.gauss(0, 0.004))) for c in closes]
+    lows = [c * (1.0 - abs(rng.gauss(0, 0.004))) for c in closes]
+    opens = [closes[max(0, i - 1)] for i in range(len(closes))]
+    return highs, lows, opens, closes
+
+
+def test_range_breakout_finds_a_trend_and_does_not_invent_one() -> None:
+    """The registered rule, pinned on both sides before it is trusted on BTC.
+
+    A breakout rule that cannot find a trend is measuring nothing; one that also
+    "finds" a random walk is measuring the wrong thing. Both directions are
+    required, and costs must be monotone, because the whole negative result at
+    short timeframes is an arithmetic consequence of turnover rather than of signal.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import breakout_rule_pnl
+
+    rng = random.Random(5)
+    trending = [100.0]
+    for _ in range(2999):
+        trending.append(trending[-1] * math.exp(0.0012 + rng.gauss(0, 0.015)))
+    walk = [100.0]
+    for _ in range(2999):
+        walk.append(walk[-1] * math.exp(rng.gauss(0, 0.015)))
+
+    up = breakout_rule_pnl(*_ohlc(trending), lookback=20, hold=5, cost_bps=10.0)
+    down = breakout_rule_pnl(*_ohlc(walk), lookback=20, hold=5, cost_bps=10.0)
+    assert up["net"] > 0.5, f"a trend must be found: {up['net']:.3f}"
+    assert down["net"] < 0, f"a random walk must not be: {down['net']:.3f}"
+    assert up["signals"] > 50, "and it must actually be trading"
+
+    free = breakout_rule_pnl(*_ohlc(trending), lookback=20, hold=5, cost_bps=0.0)
+    dear = breakout_rule_pnl(*_ohlc(trending), lookback=20, hold=5, cost_bps=25.0)
+    assert free["net"] > dear["net"], "costs must be monotone"
+
+
 def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
     """The ceiling measurement is only worth anything if its estimators are honest.
 

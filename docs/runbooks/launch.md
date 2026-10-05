@@ -978,6 +978,65 @@ The traded rule goes long in an index that rose 4 000-fold over the sample, so i
 collects the index's drift. Drift is not momentum, and a positive net on a rising
 index is the market being paid, not an edge being found.
 
+### The range breakout, registered from a paper and measured here
+
+A 2024 note — Kusaev, *Progressive Economy* 4, DOI 10.54861/27131211_2024_4_83 —
+describes a head-and-shoulders on BTC and states the tradeable part mechanically: the
+signal is the neckline break, and the neckline is the range boundary.
+
+**Its rule was taken. Its conclusions were not.** The note contains no returns, no
+sample and no test; its central claim is that the patterns "do not contradict" wave
+theory, which is a statement about interpretability rather than about edge, and the
+author notes the same patterns can be read several ways. That is the reason they need
+measuring rather than reading. So the operational claim was registered and measured
+with the instruments here:
+
+> Long when the close exceeds the highest high of the previous 20 bars, short when it
+> falls below the lowest low, flat otherwise, held 5 bars. Both directions — the
+> engine's default long/flat mode would make half of every breakout unreachable.
+> Parameters by convention, not tuned. 3 timeframes on each of BTC and ETH, so six
+> tests. Gate 1: net positive after 10 bps per fill and t > 2.70. Gate 2: both halves
+> of the series net positive.
+
+```bash
+$env:EDGE_BREAKOUT="1"
+python -m tools.edge_ceiling 1d BTC/USDT,ETH/USDT 3000 4
+```
+
+| series | tf | bars | signals | gross | net @10bp | t | gate 1 | gate 2 |
+|---|---|---|---|---|---|---|---|---|
+| BTC/USDT | 1d | 3 000 | 191 | +97.3% | **+64.9%** | +0.73 | no | no |
+| BTC/USDT | 4h | 20 004 | 1 134 | +339.4% | **+143.2%** | +1.99 | no | **yes** |
+| BTC/USDT | 1h | 30 000 | 1 606 | +32.8% | **−258.3%** | −2.36 | no | no |
+| ETH/USDT | 1d | 3 000 | 176 | +258.9% | **+227.7%** | +1.69 | no | no |
+| ETH/USDT | 4h | 20 004 | 1 150 | +311.1% | **+112.5%** | +1.33 | no | **yes** |
+| ETH/USDT | 1h | 30 000 | 1 575 | +39.0% | **−244.6%** | −1.60 | no | no |
+
+**Nothing passed, and that is the verdict.** The rule does not clear the registered bar
+at any timeframe on either asset.
+
+Two things in that table are worth reading carefully, because they are the strongest
+thing in this repository and they are still not a result.
+
+**The 4-hour rows are the closest anything has come.** Net +143.2% on BTC and +112.5%
+on ETH over 20 004 bars, positive after costs, and — the part that matters — positive
+in *both halves* of both series. Two independent instruments agreeing in direction,
+each consistent across its own history, with t = 1.99 and 1.33 against a bar of 2.70.
+That is what a small real edge looks like, and it is not enough. Choosing 4h *because*
+it is the row that passed gate 2 while 1d and 1h did not would be selection across the
+six registered tests, which is the same move as tuning the lookback until something
+clears.
+
+**The rule dies where turnover rises, and the arithmetic is exact.** At 1h the gross
+collapses to +32.8% and +39.0% while 10 bps per fill on 1 600 signals takes it to
+−258.3% and −244.6%. Same rule, same parameters, three times the frequency, negative
+outcome. This is the clearest demonstration in the project that for a cost-bearing
+strategy, *timeframe is a risk parameter and not a display setting*.
+
+On the note itself: its own claim, at its own asset and its own timeframe, reads
++64.9% net with t = 0.73. The operational idea survives as a testable rule; the paper
+does not show it works.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
