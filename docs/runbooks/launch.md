@@ -64,6 +64,24 @@ assertion carries the received `fills` so a failure is diagnosable. The cause
 has not been isolated; inventing a fix for an unreproducible failure risks
 making it worse. If it appears, the assertion payload is the starting point.
 
+### Known intermittent: test_historical_service_stubbed
+
+`ERROR tests/test_historical_data.py::test_historical_service_stubbed` appeared in
+**2 of 6 full-suite runs**, and never in isolation (7/7 clean) or alongside its
+nearest neighbours (`test_event_loop_hazards`, `test_pipeline_is_alive`, 29/29
+clean). It is an `ERROR`, not a `FAIL` -- the test itself asserts nothing
+relevant to the failure, which points at setup/teardown rather than the
+assertions.
+
+Not fixed, and not worked around. The same reasoning as the Quik flake applies
+with less information: an unreproducible failure that is worked around becomes a
+failure that is hidden. Recorded here so the next person does not spend an hour
+deciding whether it is new.
+
+Worth noting what it is *not*: it appeared alongside changes to
+`historical_data_service` and after they were reverted, so it does not correlate
+with any specific edit made in this line of work.
+
 ## Research gate
 
 `trading.live_readiness` is **enforced** at Consilium start-up. Any member of
