@@ -475,6 +475,32 @@ MOMENTUM_GATE1_T = 3.10
 #: this is: the correction follows from which cells could not run at all.
 MOMENTUM_BARS = int(os.environ.get("EDGE_MOMENTUM_BARS") or 30000)
 
+#: The Elliott Wave Oscillator rule, registered from an explainer before running.
+#:
+#: The source is an RBK Investments explainer from June 2022, not a study. Most of
+#: what it describes -- impulse waves, corrective A-B-C, the wave count -- is
+#: subjective, and the article says so itself, quoting the standard objection that
+#: one may see many things in a price chart. None of that is used.
+#:
+#: What it does supply is the method's own non-subjective substitute, stated
+#: mechanically: the EWO is the difference of a 5-bar and a 34-bar moving average,
+#: which the article is explicit "does not use the wave-detection rules", and the
+#: trade is to be long while it is above zero on a trough-to-peak leg and short
+#: while it is below zero on a peak-to-trough leg.
+#:
+#: So the honest description of what is being tested is a moving-average crossover
+#: on 5 and 34 bars -- the periods are the article's, not chosen here -- and any
+#: result belongs to that rule, not to wave theory. It is worth one test because
+#: the rule has a strong prior and because its profile is the one that survived the
+#: previous registered sweep: slow, low turnover, few fills to pay for.
+#:
+#: Registered with nothing seen. This is the seventh registered test of a trading
+#: rule in this repository, and the multiplicity bar accounts for it.
+EWO_FAST = 5
+EWO_SLOW = 34
+EWO_TIMEFRAMES: tuple[str, ...] = ("1d", "4h", "1h")
+EWO_GATE1_T = 2.70
+
 #: The range-breakout test, registered before it was run.
 #:
 #: The hypothesis has a source that is not this repository. A 2024 note in
@@ -833,6 +859,67 @@ def breakout_rule_pnl(
     # these overlap when a position lasts more than one bar, so the standard error
     # is understated. Reported because a rule that pays only by luck still has a
     # mean, and the mean alone is not evidence.
+    if len(per_bar) > 5:
+        m = len(per_bar)
+        avg = sum(per_bar) / m
+        var = sum((v - avg) ** 2 for v in per_bar) / (m - 1)
+        se = (var / m) ** 0.5 if var > 0 else 0.0
+        out["t"] = (avg / se) if se > 0 else 0.0
+        out["n_pos"] = float(m)
+    return out
+
+
+def ewo_rule_pnl(
+    opens: list[float],
+    closes: list[float],
+    *,
+    fast: int,
+    slow: int,
+    cost_bps: float,
+) -> dict[str, float]:
+    """Long above zero on the EWO, short below it. The moving-average crossover.
+
+    `slow` has to have warmed up before the rule can say anything at all, and the
+    bars used to warm it are not counted as flat performance -- they are excluded,
+    because measuring a moving average over the bars that produced it is how a rule
+    appears to trade during the period it was still being defined.
+    """
+    n = min(len(opens), len(closes))
+    out = {
+        "gross": 0.0, "cost": 0.0, "net": 0.0, "trades": 0.0,
+        "t": 0.0, "n_pos": 0.0, "bars": 0.0,
+    }
+    if n <= slow + 2 or slow < 2 or fast >= slow:
+        return out
+
+    def _ma(end: int, span: int) -> float:
+        return sum(closes[end - span : end]) / span
+
+    position = 0.0
+    gross = 0.0
+    cost_total = 0.0
+    trades = 0.0
+    per_bar: list[float] = []
+    for t in range(slow, n - 2):
+        ewo = _ma(t, fast) - _ma(t, slow)
+        want = 1.0 if ewo > 0 else (-1.0 if ewo < 0 else 0.0)
+        turnover = abs(want - position)
+        trades += turnover
+        entry, leave = opens[t + 1], opens[t + 2]
+        bar_ret = 0.0
+        if entry > 0:
+            bar_ret = want * (leave - entry) / entry
+            gross += bar_ret
+        c = turnover * cost_bps / 10_000.0
+        cost_total += c
+        if want != 0.0:
+            per_bar.append(bar_ret - c)
+        position = want
+    out["gross"] = gross
+    out["cost"] = cost_total
+    out["net"] = gross - cost_total
+    out["trades"] = trades
+    out["bars"] = float(n - slow)
     if len(per_bar) > 5:
         m = len(per_bar)
         avg = sum(per_bar) / m
@@ -1262,6 +1349,87 @@ async def main() -> int:
                     f"net={100 * w['r']['net']:.1f}% t={w['r']['t']:+.2f}"
                 )
             if not winners_b:
+                print("    None.")
+
+        if os.environ.get("EDGE_EWO"):
+            async def _fetch_e(
+                ticker: str, timeframe: str, bars: int
+            ) -> Any:
+                return await hist.fetch(
+                    ticker,
+                    class_code="CRYPTO",
+                    provider="ccxt",
+                    timeframe=timeframe,
+                    limit=bars,
+                )
+
+            print()
+            print("=" * 72)
+            print("EWO / MA(5) vs MA(34): registered from an explainer")
+            print("=" * 72)
+            print(
+                f"  fast={EWO_FAST} slow={EWO_SLOW} cost=10 bps per fill, "
+                "both directions"
+            )
+            print(
+                f"  gate 1: net > 0 and t > {EWO_GATE1_T}; gate 2: both halves "
+                "net positive"
+            )
+            print()
+            print(
+                f"  {'series':10} {'tz':>4} {'n':>7} {'fills':>7} {'gross':>9} "
+                f"{'net@10bp':>10} {'t':>7} {'g1':>3} {'g2':>3}"
+            )
+            winners_e: list[dict[str, Any]] = []
+            tested_e = 0
+            for ticker in ("BTC/USDT", "ETH/USDT"):
+                for tf in EWO_TIMEFRAMES:
+                    want = BARS if tf == "1d" else MOMENTUM_BARS
+                    try:
+                        series = await _fetch_e(ticker, tf, want)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  {ticker:10} {tf:>4} fetch failed "
+                              f"({type(exc).__name__})")
+                        continue
+                    if not series or len(series) < 200:
+                        print(f"  {ticker:10} {tf:>4} only "
+                              f"{len(series or [])} bars")
+                        continue
+                    opens = [float(getattr(b, 'open', 0) or 0) for b in series]
+                    closes = [float(getattr(b, 'close', 0) or 0) for b in series]
+                    res = ewo_rule_pnl(
+                        opens, closes, fast=EWO_FAST, slow=EWO_SLOW,
+                        cost_bps=10.0,
+                    )
+                    half = len(closes) // 2
+                    a = ewo_rule_pnl(
+                        opens[:half], closes[:half], fast=EWO_FAST,
+                        slow=EWO_SLOW, cost_bps=10.0,
+                    )
+                    b_half = ewo_rule_pnl(
+                        opens[half:], closes[half:], fast=EWO_FAST,
+                        slow=EWO_SLOW, cost_bps=10.0,
+                    )
+                    tested_e += 1
+                    g1 = res["net"] > 0 and res["t"] > EWO_GATE1_T
+                    g2 = a["net"] > 0 and b_half["net"] > 0
+                    flags = "   ".join(["Y" if g1 else ".", "Y" if g2 else "."])
+                    print(
+                        f"  {ticker:10} {tf:>4} {len(closes):>7} "
+                        f"{res['trades']:>7.0f} {100 * res['gross']:>8.1f}% "
+                        f"{100 * res['net']:>9.1f}% {res['t']:>+7.2f} {flags}"
+                    )
+                    if g1 and g2:
+                        winners_e.append({"ticker": ticker, "tf": tf, "r": res})
+            print()
+            print(f"  tests run: {tested_e}   passing both gates: "
+                  f"{len(winners_e)}")
+            for w in winners_e:
+                print(
+                    f"    CANDIDATE: {w['ticker']} {w['tf']} "
+                    f"net={100 * w['r']['net']:.1f}% t={w['r']['t']:+.2f}"
+                )
+            if not winners_e:
                 print("    None.")
 
         await core.shutdown()

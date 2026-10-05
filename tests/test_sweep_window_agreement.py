@@ -854,6 +854,43 @@ def test_range_breakout_finds_a_trend_and_does_not_invent_one() -> None:
     assert free["net"] > dear["net"], "costs must be monotone"
 
 
+def test_ewo_crossover_is_nearly_blind_to_drift_and_that_is_the_point() -> None:
+    """A rule that cannot capture a known uptrend must be measured on what it can do.
+
+    On a synthetic series rising 36x, the sign of MA(5) - MA(34) nets +2.2% after
+    costs. It flips every dozen bars and spends half its time short, so it forfeits
+    nearly all of the drift. That is a property of the rule, established before any
+    real data was run, and it decides how a result on BTC may be read: whatever it
+    earns there did not come from holding an uptrend.
+    """
+    import math
+    import random
+
+    from tools.edge_ceiling import ewo_rule_pnl
+
+    rng = random.Random(5)
+    trending = [100.0]
+    for _ in range(2999):
+        trending.append(trending[-1] * math.exp(0.0012 + rng.gauss(0, 0.015)))
+    opens = [trending[max(0, i - 1)] for i in range(len(trending))]
+    up = ewo_rule_pnl(opens, trending, fast=5, slow=34, cost_bps=10.0)
+    assert up["net"] < 0.20, (
+        f"the rule must not quietly become a drift-catcher: {up['net']:.3f} on a "
+        "36x uptrend means it could, and the real-data reading would change"
+    )
+
+    rng = random.Random(11)
+    walk = [100.0]
+    for _ in range(2999):
+        walk.append(walk[-1] * math.exp(rng.gauss(0, 0.015)))
+    opens2 = [walk[max(0, i - 1)] for i in range(len(walk))]
+    down = ewo_rule_pnl(opens2, walk, fast=5, slow=34, cost_bps=10.0)
+    assert down["net"] < 0.0, (
+        f"on a random walk it must lose: {down['net']:.3f}"
+    )
+    assert down["trades"] > 0 and up["trades"] > 0, "both must actually trade"
+
+
 def test_edge_ceiling_estimators_are_calibrated_on_series_with_known_structure() -> None:
     """The ceiling measurement is only worth anything if its estimators are honest.
 

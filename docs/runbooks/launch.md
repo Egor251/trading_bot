@@ -1037,6 +1037,65 @@ On the note itself: its own claim, at its own asset and its own timeframe, reads
 +64.9% net with t = 0.73. The operational idea survives as a testable rule; the paper
 does not show it works.
 
+### The one non-subjective part of wave theory is a moving average
+
+An RBK Investments explainer from June 2022 offers the method's objective substitute:
+the Elliott Wave Oscillator, "the difference of moving averages over five and
+thirty-four periods … essentially the histogram of MACD", and it states plainly that
+the oscillator "does not use the wave-detection rules". The trade is to be long while
+it is above zero on a trough-to-peak leg.
+
+**So the rule registered and measured here is a moving-average crossover, and its
+result belongs to that rule and not to wave theory.** The periods are the article's.
+
+A property of the rule was established before any real data was run, and it decides
+how the result may be read: on a synthetic series rising **36-fold**, the sign of
+MA(5) − MA(34) nets **+2.2%** after costs. It flips about every twelve bars and
+spends half its time short, so it forfeits nearly all of a known drift. Whatever it
+earns on BTC did not come from holding an uptrend.
+
+| series | tf | bars | fills | gross | net @10bp | t | gate 1 | gate 2 |
+|---|---|---|---|---|---|---|---|---|
+| BTC/USDT | 1d | 3 000 | 247 | +359.0% | **+334.3%** | +1.90 | no | **yes** |
+| BTC/USDT | 4h | 20 004 | 1 799 | +320.6% | +140.7% | +0.68 | no | no |
+| BTC/USDT | 1h | 30 000 | 2 767 | +14.5% | **−262.2%** | −3.11 | no | no |
+| ETH/USDT | 1d | 3 000 | 215 | +427.1% | **+405.6%** | +1.73 | no | **yes** |
+| ETH/USDT | 4h | 20 004 | 1 799 | +301.2% | +121.3% | +0.47 | no | no |
+| ETH/USDT | 1h | 30 000 | 2 811 | −10.1% | **−291.2%** | −2.56 | no | no |
+
+**Zero of six passed.** The registered verdict is negative.
+
+But the daily rows are the closest anything in this repository has come to its bar:
+**+334.3% on BTC and +405.6% on ETH after costs, positive in both halves of both
+series, t = 1.90 and 1.73 against 2.70.** Two independent instruments, each
+consistent across its own history.
+
+And there is a mechanism, which is the part that matters. The rule is nearly blind to
+drift — proved above. So its gain cannot be drift. It is timing, and daily crypto
+return autocorrelation is significantly **negative** at −0.0677 on BTC and −0.0721 on
+ETH. A rule that goes short when the short average is below the long one is aligned
+with that reversal rather than against it. **Two independent measurements explain each
+other**, which is the first time in this project that has happened.
+
+The cost arithmetic separates the rows. At 1d the rule fills 247 times over 3 000 bars
+— 0.08 fills per bar — against the bar-flipper's 1.07, so 10 bps is survivable. At 1h
+it fills 2 767 times and the same rule loses 262% and 291%. Slow enough to keep the
+reversal, fast enough to pay for it: that is the whole trade-off, and 1h is past it.
+
+The honest position: this is a lead with a mechanism, not a finding. The gate says no.
+
+**The next step is to test the mechanism, not the rule.** If the gain really comes from
+the measured negative autocorrelation, then two things must hold, and both are
+falsifiable:
+
+1. the rule's P&L should rank in the same order as the measured φ across instruments
+   and timeframes;
+2. the gain should vanish where φ is near zero, and appear where φ is significantly
+   negative.
+
+If the ranking does not follow φ, the mechanism is wrong and the +334% is something
+else. Registered before that test, like every other one here.
+
 ## Operator session token
 
 The BFF authenticates `/api/*` and the WebSocket with `X-Operator-Token`. It
