@@ -1613,12 +1613,25 @@ class PhantomService(BaseService):
         from engine.research_digest import digest_walk_forward
 
         result["digest"] = digest_walk_forward(result)
-        try:
-            from engine.research_gate import record_digest_clearance
+        # Persisting clearance was unconditional, and the write target is an absolute
+        # path inside the repository rather than one under TRADING_DATA_DIR. So any
+        # caller of `run_walk_forward` -- a research tool, a probe, an experiment --
+        # silently mutated the live gate store, and redirecting the data root did not
+        # stop it. It happened here: a tool that documented "writes to its own store,
+        # never the live one" wrote 20 entries to the live store through this line,
+        # and inflated `variants_tried_lifetime` to 12 by running three times.
+        #
+        # The gate is the thing that decides what trades. A measurement that changes
+        # it without saying so is not a measurement.
+        if self.config.get("persist_clearance", True):
+            try:
+                from engine.research_gate import record_digest_clearance
 
-            record_digest_clearance(result.get("digest"))
-        except Exception:
-            pass
+                record_digest_clearance(result.get("digest"))
+            except Exception:
+                pass
+        else:
+            result["clearance_persisted"] = False
         result.update(
             {
                 "ticker": ticker,

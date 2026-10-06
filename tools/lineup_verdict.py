@@ -73,7 +73,11 @@ DEFAULT_LINEUP = (
     "mean_reversion_example",
 )
 
-TICKER = "ETH/USDT"
+#: Tickers, from `clearance_table.py`'s default and the shipped snapshot. Two at
+#: minimum: the gate requires `min_tickers_robust: 2`, and promoting a single-ticker
+#: measurement over a multi-ticker snapshot would reduce the fidelity of the gate
+#: rather than improve it.
+TICKERS = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
 TIMEFRAME = "1d"
 LIMIT = 1500
 TRAIN, TEST = 200, 50
@@ -138,6 +142,13 @@ async def main() -> int:
             "services.historical_data_service.disk_cache_ttl_sec": 60,
             "services.phantom_service.enabled": True,
             "services.phantom_service.auto_start": True,
+            # The write that leaked. `phantom_service` persisted clearance from every
+            # `run_walk_forward` into an absolute path inside the repository, so this
+            # tool wrote 20 entries to the live gate store on its first run while its
+            # own docstring claimed otherwise, and repeated runs inflated
+            # `variants_tried_lifetime` to 12. Redirecting TRADING_DATA_DIR did not
+            # stop it, because the write target does not live under the data root.
+            "services.phantom_service.persist_clearance": False,
             "storage.enabled": False,
             **_loaders_disabled(),
         }
@@ -157,67 +168,83 @@ async def main() -> int:
         await core.start()
         phantom = core.service_registry.get("phantom_service")
 
-        # Our own store. The live clearance file is not touched.
+        # Our own store. With `persist_clearance: false` above, the live clearance
+        # file genuinely is not touched -- the previous version of this tool believed
+        # that while writing 20 entries into it.
         out_store = ROOT / "data" / "research" / "lineup_clearance.json"
         out_store.parent.mkdir(parents=True, exist_ok=True)
 
         hist = core.service_registry.get("historical_data_service")
-        bars = []
-        try:
-            bars = await hist.fetch(
-                TICKER, class_code="CRYPTO", timeframe=TIMEFRAME,
-                limit=LIMIT, provider="ccxt",
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"history fetch failed: {type(exc).__name__}")
-        print(f"{TICKER} {TIMEFRAME}: {len(bars)} of {LIMIT} bars requested")
-        if not bars:
-            await core.shutdown()
-            return 1
-
-        min_research = TRAIN + TEST * max(1, FOLDS)
-        holdout_bars = max(0, len(bars) - min_research - 1)
-        print(
-            f"research window {min_research} + holdout {holdout_bars} "
-            f"= {min_research + holdout_bars} of {len(bars)}\n"
-        )
-
-        measured: list[str] = []
-        for name in lineup:
+        windows: dict[str, tuple[int, int]] = {}
+        for ticker in TICKERS:
             try:
-                result = await phantom.run_walk_forward(
-                    TICKER,
-                    class_code="CRYPTO",
-                    provider="ccxt",
-                    limit=LIMIT,
-                    strategy_id=name,
-                    feed="history",
-                    timeframe=TIMEFRAME,
-                    holdout_bars=holdout_bars,
-                    train_bars=TRAIN,
-                    test_bars=TEST,
-                    min_folds=FOLDS,
-                    step=50,
+                bars = await hist.fetch(
+                    ticker, class_code="CRYPTO", timeframe=TIMEFRAME,
+                    limit=LIMIT, provider="ccxt",
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"  {name:26} FAILED {type(exc).__name__}: {exc}")
+                print(f"{ticker}: fetch failed ({type(exc).__name__})")
                 continue
-            digest = result.get("digest") or digest_walk_forward(result)
-            if not digest.get("ok"):
-                print(f"  {name:26} no digest")
+            if not bars or len(bars) <= TRAIN + TEST * max(1, FOLDS) + 1:
+                print(f"{ticker}: {len(bars or [])} bars, too few")
                 continue
-            record_digest_clearance(digest, path=out_store)
-            series = digest.get("oos_pnl_by_fold") or []
-            p_value = digest.get("p_value")
-            measured.append(name)
+            min_research = TRAIN + TEST * max(1, FOLDS)
+            windows[ticker] = (max(0, len(bars) - min_research - 1), len(bars))
             print(
-                f"  {name:26} folds={len(series):>3} "
-                f"mean={float(digest.get('mean_oos_pnl') or 0):>+9.3f} "
-                f"p={p_value if p_value is None else f'{p_value:.4f}':>8} "
-                f"variants={int(digest.get('variants_count') or 0):>4}"
+                f"{ticker:10} {TIMEFRAME}: {len(bars):>5} of {LIMIT} bars  "
+                f"research {min_research} + holdout {windows[ticker][0]}"
             )
+        if not windows:
+            await core.shutdown()
+            return 1
+        print()
 
-        print(f"\nmeasured {len(measured)} of {len(lineup)} strategies")
+        measured: list[str] = []
+        per_ticker_rows: dict[str, int] = {}
+        for ticker, (holdout_bars, _n_bars) in windows.items():
+            got = 0
+            for name in lineup:
+                try:
+                    result = await phantom.run_walk_forward(
+                        ticker,
+                        class_code="CRYPTO",
+                        provider="ccxt",
+                        limit=LIMIT,
+                        strategy_id=name,
+                        feed="history",
+                        timeframe=TIMEFRAME,
+                        holdout_bars=holdout_bars,
+                        train_bars=TRAIN,
+                        test_bars=TEST,
+                        min_folds=FOLDS,
+                        step=50,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  {ticker:9} {name:26} FAILED {type(exc).__name__}")
+                    continue
+                digest = result.get("digest") or digest_walk_forward(result)
+                if not digest.get("ok"):
+                    print(f"  {ticker:9} {name:26} no digest")
+                    continue
+                record_digest_clearance(digest, path=out_store)
+                series = digest.get("oos_pnl_by_fold") or []
+                p_value = digest.get("p_value")
+                print(
+                    f"  {ticker:9} {name:26} folds={len(series):>3} "
+                    f"mean={float(digest.get('mean_oos_pnl') or 0):>+9.3f} "
+                    f"p={p_value if p_value is None else f'{p_value:.4f}':>8} "
+                    f"variants={int(digest.get('variants_count') or 0):>4}"
+                )
+                if name not in measured:
+                    measured.append(name)
+                got += 1
+            per_ticker_rows[ticker] = got
+            print()
+
+        print(
+            f"measured {len(measured)} of {len(lineup)} strategies "
+            f"across {len(windows)} ticker(s): {per_ticker_rows}"
+        )
         store = load_clearance(out_store)
         entries = store.get("entries") or {}
         print(f"our store: {out_store}  ({len(entries)} entries)")

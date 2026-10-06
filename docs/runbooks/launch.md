@@ -1802,6 +1802,62 @@ series, and H1 is the reason that mattered: before this, every strategy on the l
 snapshot reported `batch_not_evaluable` and none of the three tests had ever executed
 on product data.
 
+### A research run was silently writing to the live gate store
+
+`tools/lineup_verdict.py` documented "writes to its own clearance file, never the
+live one". It wrote 20 entries to the live store on its first run. The claim was
+false and so was the docstring's confidence in it.
+
+The mechanism is in `phantom_service.run_walk_forward`:
+
+```python
+record_digest_clearance(result.get("digest"))   # no path
+except Exception: pass
+```
+
+No path means `DEFAULT_CLEARANCE_PATH`, an **absolute path inside the repository**,
+so redirecting `TRADING_DATA_DIR` to a sandbox does not redirect it. There was no
+switch to turn it off, and the `except: pass` meant a failure would have been
+invisible. The second and third runs then inflated `variants_tried_lifetime` from 3
+to 12 — the universe denominator the Sullivan correction depends on, quietly
+polluted with the experiment's own repetitions.
+
+This is the 15th instance of a quantity recorded in one place and interpreted in
+another, and the first where the interpreter was a *side effect* of a research tool.
+A measurement that changes what trades without saying so is not a measurement.
+
+Fixed at the source rather than worked around: `persist_clearance: bool = True`
+(YAML: `services.phantom_service.persist_clearance`), honoured at the write site,
+and `false` in `lineup_verdict.py`. The knob is on the service because the write
+belongs to the service, not to the caller that happens to invoke it.
+
+### The gate now runs its batch tests on its own data
+
+The shipped snapshot predated `p_value` and `oos_pnl_by_fold`, so all twenty
+strategies reported `batch_not_evaluable` and none of the three tests had ever
+executed in anger. Regenerated across **BTC/USDT, ETH/USDT and SOL/USDT** — two at
+minimum, because the gate requires `min_tickers_robust: 2` and promoting a
+single-ticker measurement over a multi-ticker snapshot would have *reduced* the
+fidelity of the gate rather than improving it.
+
+```
+60 entries, 20 strategies x 3 tickers
+universe 60          (clean: no inflation from repeated runs)
+Reality Check  p = 0.0020  reject
+PBO            0.869       495 splits   worse_than_random
+verdict        unstable_selection
+```
+
+PBO holds above 0.5 on three tickers, not one. `gate_status.py` now reports
+`batch_unstable_selection` on every row, and the grades moved from
+`research_only: 20` to `observe_ok: 13, research_only: 7` — the observe grade comes
+from having three tickers of current evidence, while `live_ok` stays empty because
+the batch verdict withholds it.
+
+The old store is kept at `data/phantom/research_clearance.pre-experiment-backup.json`.
+The gate is the thing that decides what trades, so its state is not replaced without
+a way back.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
