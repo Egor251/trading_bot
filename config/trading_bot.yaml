@@ -678,6 +678,22 @@ trading:
     # strategies are independent, which they are not -- they share price data.
     multiplicity_method: holm
     multiplicity_alpha: 0.05
+    # The batch is judged by the whole family of corrections, not one of them:
+    # Holm per hypothesis, White's Reality Check on the maximum, Hansen's SPA on the
+    # same maximum with the erratic alternatives trimmed, and Bailey/Lopez de Prado's
+    # PBO on whether the ranking survives being re-split at all.
+    #
+    # A batch passes only if it survives all four. Taking the most favourable of four
+    # tests would be the same mistake as picking the best of twenty-one strategies,
+    # one level up -- and it is the mistake a system makes most easily, because it
+    # is the one that makes the report look good.
+    require_batch_verdict: true
+    # 0.5 is the coin-flip point and cannot be tuned in the strategy's favour. Above
+    # it the selection is worse than picking at random: the in-sample winner finished
+    # out-of-sample below where it started, more often than not.
+    max_pbo: 0.5
+    pbo_splits: 8
+    batch_bootstrap_samples: 500
   mode: paper
   performance:
     daily_minimum: 100

@@ -438,7 +438,14 @@ def test_evaluate_many_corrects_the_batch(tmp_path):
             p = 0.0033 if i == 3 else 0.60
             _store_record(store, name, ticker, p_value=p, mean=0.85 if i == 3 else 0.01)
 
-    batch = evaluate_many(names, path=store, policy=LiveReadinessPolicy())
+    batch = evaluate_many(
+        names,
+        path=store,
+        # The batch verdict runs on the same rows and also blocks. This test is about
+        # the per-hypothesis correction, so the other mechanism is switched off --
+        # the same isolation `require_multiplicity_correction=False` uses below.
+        policy=LiveReadinessPolicy(require_batch_verdict=False),
+    )
 
     assert batch["multiplicity"]["multiplicity_batch_size"] == 12
     assert batch["multiplicity"]["multiplicity_measured"] == 12
@@ -470,7 +477,10 @@ def test_evaluate_many_can_skip_the_correction(tmp_path):
     skipped = evaluate_many(
         names,
         path=store,
-        policy=LiveReadinessPolicy(require_multiplicity_correction=False),
+        policy=LiveReadinessPolicy(
+            require_multiplicity_correction=False,
+            require_batch_verdict=False,
+        ),
     )
     assert skipped["multiplicity"].get("multiplicity_corrected") is None
     s3 = next(r for r in skipped["rows"] if r["strategy_id"] == "s3")

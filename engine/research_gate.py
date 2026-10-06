@@ -96,6 +96,26 @@ class LiveReadinessPolicy:
     #: correction already accounts for N, so this stays at the conventional 0.05
     #: and does not compound a second, harsher penalty on top.
     multiplicity_alpha: float = 0.05
+    #: Whether the batch is judged by the whole family of corrections -- Holm, White's
+    #: Reality Check, Hansen's SPA and Bailey/Lopez de Prado's PBO -- rather than by
+    #: one of them.
+    #:
+    #: A batch passes only if it survives all of them. Taking the most favourable of
+    #: four tests would be the same mistake as picking the best of twenty-one
+    #: strategies, one level up.
+    require_batch_verdict: bool = True
+    #: Bootstrap size for the batch tests. They run once per batch rather than per
+    #: strategy, so this can be generous; it is the slowest thing on the gate.
+    batch_bootstrap_samples: int = 500
+    #: Folds the CSCV enumeration splits the series into. Fixed at 8 by the paper's
+    #: convention and kept as a knob only so a short series can be reconciled; the
+    #: PBO threshold below is the part that matters and is not tuned from data.
+    pbo_splits: int = 8
+    #: PBO above this means the selection is worse than picking at random and the
+    #: in-sample winner finished out-of-sample below where it started, more often
+    #: than not. Not 0.5 by accident -- that is the coin-flip point, and it is the
+    #: one value that cannot be tuned in the strategy's favour.
+    max_pbo: float = 0.5
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> LiveReadinessPolicy:
@@ -223,6 +243,11 @@ def record_digest_clearance(
         # to correct. Without it the only evidence reaching the gate is the boolean
         # above, and a boolean cannot be corrected -- which is the entire problem.
         "p_value": digest.get("p_value"),
+        # Per-fold OOS P&L. The batch-level tests bootstrap these; a record without
+        # them can be judged one strategy at a time and nothing else.
+        "oos_pnl_by_fold": [
+            float(v) for v in (digest.get("oos_pnl_by_fold") or [])
+        ],
         "profit_factor": digest.get("profit_factor"),
         "total_oos_trades": _i(digest.get("total_oos_trades")),
         "timeframe": digest.get("timeframe"),
@@ -608,6 +633,16 @@ def evaluate_live_readiness(
         # sits at the top level rather than inside `metrics` because it is an input
         # to the batch decision, not a descriptive statistic of this row.
         "p_value": p_value,
+        # Two numbers about how much was tried: this run's grid, and the cumulative
+        # count across every evaluation on record. The second is the honest
+        # denominator for a correction -- the rules were drawn from a space that
+        # includes the attempts that were discarded -- and it existed in the store
+        # being read by nobody.
+        "variants_count": _i(best.get("variants_count")),
+        "variants_tried_lifetime": _i(best.get("variants_tried_lifetime")),
+        "oos_pnl_by_fold": [
+            float(v) for v in (best.get("oos_pnl_by_fold") or [])
+        ],
         "metrics": {
             "holdout_trades": holdout_trades,
             "total_oos_trades": oos_trades,
@@ -670,6 +705,128 @@ def live_promotion_blockers(
             b.setdefault("grade", result.get("grade"))
             b.setdefault("score", result.get("score"))
             out.append(b)
+    return out
+
+
+def batch_research_verdict(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    alpha: float = 0.05,
+    samples: int = 500,
+    seed: int = 42,
+    pbo_splits: int = 8,
+) -> dict[str, Any]:
+    """Run the whole family of corrections over one batch, and report each verdict.
+
+    Four tests, four questions, and the batch is judged on all four rather than on
+    the one that happens to be implemented:
+
+    - **Holm-corrected p-values** (`apply_multiplicity`, applied by the caller) ask
+      "is this strategy significant after paying for having looked at N?"
+    - **Reality Check** asks "would the best of N have beaten zero by chance?"
+      (White 2000).
+    - **SPA** asks the same question with the statistic studentized and the erratic
+      models trimmed, which is more powerful and less sensitive to a single hopeless
+      alternative (Hansen 2005).
+    - **PBO** asks something the other three cannot: is the *ranking* stable? A
+      corrected p-value can pass while the winner is arbitrary, because the
+      in-sample best was chosen out of strategies that are statistically
+      indistinguishable from it. In that case every reported number is correct and
+      the selection is still noise.
+
+    **The universe, not the batch (Sullivan, Timmermann & White 1999).** The
+    denominator here is the strategies *actually present in the batch*, inflated by
+    each record's `variants_tried_lifetime`. That is the point of the Sullivan paper
+    in one line: the correction must cover the whole space the rules were drawn
+    from, including the ones never reported, or it is a correction over a subset and
+    is always too lenient.
+
+    `variants_tried_lifetime` already existed in this store, described in its own
+    comment as "the denominator a deflation argument needs", and nothing read it.
+    It is read here.
+
+    Every method is reported even when it does not apply, with a reason. A silent
+    omission reads as a pass, which is how an unavailable test becomes an
+    acceptable one.
+    """
+    items = [dict(r) for r in rows]
+    series: list[list[float]] = []
+    names: list[str] = []
+    universe = 0
+    for row in items:
+        sid = str(row.get("strategy_id") or "")
+        # The space the rules were drawn from, not the number that survived into
+        # this report. Both matter and they are different numbers.
+        universe += max(
+            1,
+            _i(row.get("variants_tried_lifetime")) or _i(row.get("variants_count")) or 1,
+        )
+        folds = [
+            float(v)
+            for v in (row.get("oos_pnl_by_fold") or [])
+            if v is not None
+        ]
+        if len(folds) >= 4:
+            series.append(folds)
+            names.append(sid)
+
+    out: dict[str, Any] = {
+        "strategies_in_batch": len(items),
+        "strategies_with_series": len(series),
+        "universe": universe,
+    }
+
+    if len(series) < 2:
+        out["reality_check"] = {
+            "ok": False,
+            "reason": "fewer_than_two_series_on_record",
+        }
+        out["spa"] = dict(out["reality_check"])
+        out["pbo"] = dict(out["reality_check"])
+        out["verdict"] = "not_evaluable"
+        return out
+
+    from .simulation import cscv_pbo, reality_check, spa_test
+
+    rc = reality_check(series, samples=samples, seed=seed, alpha=alpha)
+    spa = spa_test(series, samples=samples, seed=seed, alpha=alpha)
+    pbo = cscv_pbo(series, splits=pbo_splits)
+    out["reality_check"] = rc
+    out["spa"] = spa
+    out["pbo"] = pbo
+
+    if rc.get("best_strategy_index") is not None and names:
+        idx = _i(rc["best_strategy_index"])
+        if 0 <= idx < len(names):
+            out["best_strategy"] = names[idx]
+
+    # A batch passes only if the best result survives the whole family. Taking the
+    # most favourable of four tests would be the same mistake as picking the best
+    # of twenty-one strategies, one level up.
+    #
+    # `reject` means the *null* was rejected, i.e. an edge was found. It is named from
+    # the test's point of view, not the strategy's, and reading it the other way round
+    # inverts the whole gate: it declares a batch of noise to have an edge and
+    # declares a dominant strategy to have none. That happened here once and is
+    # pinned by `test_a_dominant_strategy_passes_and_a_noise_batch_does_not`.
+    unstable = bool(pbo.get("ok")) and float(pbo.get("pbo") or 0.0) > 0.5
+    passes = bool(rc.get("ok") and spa.get("ok")) and bool(
+        rc.get("reject") is True and spa.get("reject") is True
+    )
+    if not passes:
+        out["verdict"] = "no_batch_edge"
+    elif unstable:
+        # Significance without a stable ranking: the edge may be real and the
+        # *choice* of which strategy carries it may still be noise.
+        out["verdict"] = "unstable_selection"
+    else:
+        out["verdict"] = "batch_edge_stable"
+
+    out["notes"] = {
+        "universe_uses_lifetime_variants": True,
+        "series_granularity": "per_fold_oos_pnl",
+        "pbo_worse_than_random": unstable,
+    }
     return out
 
 
@@ -866,6 +1023,63 @@ def evaluate_many(
         rows = list(corrected_rows.get("rows") or rows)
         multiplicity = {k: v for k, v in corrected_rows.items() if k != "rows"}
 
+    batch: dict[str, Any] = {}
+    if pol.require_batch_verdict and rows:
+        batch = batch_research_verdict(
+            rows,
+            alpha=pol.multiplicity_alpha,
+            samples=pol.batch_bootstrap_samples,
+            pbo_splits=int(pol.pbo_splits or 8),
+        )
+        verdict = str(batch.get("verdict") or "not_evaluable")
+        passing = verdict == "batch_edge_stable"
+        # Three distinct outcomes, three distinct names. Reporting "not evaluable"
+        # as "no edge" is how a clearance store written before this field existed
+        # turns into twenty negative research results -- the tests were never run,
+        # and the label claims they were and found nothing. It fails closed either
+        # way, but it says what actually happened.
+        reason = {
+            "batch_edge_stable": None,
+            "unstable_selection": "batch_unstable_selection",
+            "no_batch_edge": "batch_no_edge",
+        }.get(verdict, "batch_not_evaluable")
+        detail = {
+            "verdict": verdict,
+            "universe": batch.get("universe"),
+            "strategies_with_series": batch.get("strategies_with_series"),
+            "pbo": (batch.get("pbo") or {}).get("pbo"),
+            "max_pbo": pol.max_pbo,
+            "reality_check_p": (batch.get("reality_check") or {}).get("p_value"),
+            "spa_p": (batch.get("spa") or {}).get("p_value"),
+            "best_strategy": batch.get("best_strategy"),
+        }
+        for row in rows:
+            checks = list(row.get("checks") or [])
+            checks.append(
+                {
+                    "name": reason or "batch_edge_stable",
+                    "ok": passing,
+                    "detail": detail,
+                    "live": True,
+                    "observe": True,
+                }
+            )
+            row["checks"] = checks
+            if not passing:
+                row["live_ok"] = False
+                row["observe_ok"] = False
+                blockers = list(row.get("blockers") or [])
+                blockers.append(
+                    {
+                        "reason": reason,
+                        "detail": detail,
+                        "grade": row.get("grade"),
+                        "score": row.get("score"),
+                    }
+                )
+                row["blockers"] = blockers
+        batch["rows_adjusted"] = len(rows)
+
     rows.sort(
         key=lambda r: (
             bool(r.get("live_ok")),
@@ -885,6 +1099,7 @@ def evaluate_many(
         ],
         "research_only": [r["strategy_id"] for r in rows if not r.get("observe_ok")],
         "multiplicity": multiplicity,
+        "batch": batch,
         "rows": rows,
     }
 

@@ -88,6 +88,13 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         # before this field existed has *unknown* evidence, and treating unknown as
         # "p = 0.05, fails the corrected bar" is the safe direction to be wrong in.
         "p_value": _f(oos.get("p_value")),
+        # The per-fold OOS P&L series. A corrected p-value is not enough for the
+        # batch-level tests -- those bootstrap a series per strategy -- and a
+        # clearance record that carried only a p-value could never be re-examined
+        # with a stronger method without being regenerated.
+        "oos_pnl_by_fold": [
+            _f(v) for v in (oos.get("oos_pnl_by_fold") or [])
+        ],
         "win_rate": _f(oos.get("win_rate")),
         "profit_factor": _f(oos.get("profit_factor")),
         "total_oos_trades": int(oos.get("total_oos_trades") or 0),

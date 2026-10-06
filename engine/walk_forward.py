@@ -859,6 +859,14 @@ def run_walk_forward_offline(
         folds.append(fold_row)
 
     summary = enrich_oos_summary(oos_pnls, cfg=cfg)
+    # The per-fold series behind those aggregates. Without it the batch-level tests
+    # (Reality Check, SPA, PBO) have nothing to bootstrap: a p-value cannot be
+    # corrected across strategies, only a series can, and one per strategy is the
+    # minimum any of them needs. Fold-level rather than bar-level is deliberate --
+    # a fold is the granularity at which the strategy was actually measured, and
+    # inventing bar-level resolution here would be precision the analysis does not
+    # have.
+    summary["oos_pnl_by_fold"] = [float(v) for v in oos_pnls]
     # How many configurations were tried before one was reported. Picking the
     # best of N noisy estimates is optimistically biased, and the bias grows
     # with N -- so the number itself is evidence about how much to trust the

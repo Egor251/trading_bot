@@ -1668,6 +1668,75 @@ Two things the control earned their keep on:
 **So all six registered searches keep their verdicts**, and the floor simply gets a
 clearer number. A higher noise floor does not make a negative result wrong.
 
+### Four corrections, and a denominator that counts what was thrown away
+
+Three of the five leads were meta-statistics about the same problem, and all three are
+now wired into the gate rather than sitting in the engine:
+
+| method | question it answers |
+|---|---|
+| `adjust_pvalues` (Holm) | is this strategy significant after paying for having looked at N? |
+| `reality_check` (White 2000) | would the best of N have beaten zero by chance? |
+| `spa_test` (Hansen 2005) | the same, studentized and trimmed of erratic models |
+| `cscv_pbo` (Bailey & López de Prado) | is the **ranking** stable, at all? |
+
+A batch passes only if it survives all four. Taking the most favourable of four tests
+would be the same mistake as picking the best of twenty-one strategies, one level up
+— and it is the mistake a system makes most easily, because it is the one that makes
+the report look good.
+
+**PBO is the one the gate was blind to.** The other three ask how unlikely the result
+is; PBO asks whether picking this one was a choice at all. A corrected p-value can
+pass while the winner is arbitrary, because the in-sample best was chosen out of
+strategies that are statistically indistinguishable from it — every reported number
+correct, the selection still noise.
+
+### The universe, not the batch — Sullivan, Timmermann & White (1999)
+
+The paper's whole contribution in one line: the correction must cover the *universe*
+the rules were drawn from, including the ones never reported, or it is a correction
+over a subset and always too lenient.
+
+`variants_tried_lifetime` already existed in the clearance store, described in its own
+comment as "the denominator a deflation argument needs", and nothing read it. It is
+read now: eight strategies in a report, each drawn from a grid of twenty, count as a
+universe of **160**, not 8.
+
+### What these needed that the store did not have
+
+None of the three bootstrap tests can run on a p-value; they need a series per
+strategy. `walk_forward` now emits `oos_pnl_by_fold` and it is threaded through the
+digest into the clearance record — fold-level deliberately, because a fold is the
+granularity at which the strategy was actually measured, and bar-level resolution
+would be precision the analysis does not have.
+
+### `not_evaluable` is not `no_batch_edge`
+
+The live clearance snapshot predates `oos_pnl_by_fold`, so no strategy has a series
+and none of the three tests can run. The first version reported that as
+`batch_no_edge` on all twenty strategies — which reads as *twenty refutations* when
+in fact no test had been run at all. A data path that cannot produce evidence must not
+be reported as evidence of absence. Both outcomes fail closed; only one is honest, and
+`tools/gate_status.py` now prints `batch_not_evaluable`.
+
+### The direction was inverted twice, and once it inverted the whole gate
+
+`reject` in these tests is named from the *test's* point of view: the null was
+rejected, which means an edge was found. Read as "the strategy was rejected" it
+inverts everything, and in `batch_research_verdict` it produced a gate that declared a
+batch of noise to have an edge and a batch with one dominant strategy to have none.
+
+It is easy to get wrong because the per-hypothesis correction runs the other way — it
+makes it *harder* to call anything significant, so "noise" and "rejected" feel like
+they belong together. `test_a_dominant_strategy_passes_and_a_noise_batch_does_not`
+now pins both directions in one test, because asserting only the expected direction
+would have let the mistake through twice.
+
+Also recorded from the same work: trimming the *worst performers* is arithmetically a
+no-op, since removing items from the bottom cannot change a maximum. It was
+implemented first, returned byte-identical results at trim 0 and 0.3, and looked like
+a safeguard. Trimming by reliability does something.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
