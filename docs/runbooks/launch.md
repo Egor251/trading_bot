@@ -54,10 +54,15 @@ autouse fixture in `tests/conftest.py` fails any test that writes there.
 
 ### Known flaky: test_quik_fake_path_e2e
 
-Fails intermittently (~5% observed, most often inside a full-suite run; 20/20
-clean in isolation and 3/3 clean full-suite runs at the time of writing). It
-does not use `replay`, `phantom` or `historical_data_service`, so the research
-and execution changes in this repo are not in its path.
+Fails intermittently, most often inside a full-suite run; clean in isolation.
+Observed 2026-10-06: failed twice in full-suite runs and passed 4/4 in
+isolation on the same tree, with the same commit. The full-suite runs that
+failed were the two slowest of the day (800 s and 600 s against a 345 s best),
+which is consistent with the assertion being a deadline under load rather than
+with any change in the code it tests. Rate is load-dependent and the "~5%" in
+the original note should be read as a floor, not a mean. It does not use
+`replay`, `phantom` or `historical_data_service`, so the research and
+execution changes in this repo are not in its path.
 
 Its waits are already deadline-based rather than fixed sleeps, and the fill
 assertion carries the received `fills` so a failure is diagnosable. The cause
@@ -1620,6 +1625,48 @@ Two bugs found while wiring it, both mine:
   the block directly, and the test feeds it a deliberately different config and
   asserts the model changes, because an assertion the fallback also satisfies is
   not a check.
+
+### The noise floor was wrong, and in the direction that flattered us
+
+`tools/null_calibration.py` calibrated every threshold in this project against a
+null of **i.i.d. noise**, which fixes the null's autocorrelation at exactly zero. The
+real series does not: ρ₁ is −0.044 on BTC at 4h and −0.049 at 1d. So the comparison
+the research log describes was not the comparison that was run, and the error runs
+one way — the null was slightly easy to beat.
+
+Injected into the null, the market factor and the strategies alike, with marginal
+variance held fixed by `sqrt(1 - phi^2)` so the only thing that moves is the
+dependence and not the spread. Criterion registered before running: **falsified if
+the measured-φ rate lands inside the binomial standard error of the i.i.d. rate.**
+
+```
+ null phi     rate      se   vs base
+   +0.000    19.0%   0.30     +0.0pp   every prior figure was quoted against this
+   -0.044    21.8%   0.32     +2.8pp
+   -0.049    21.8%   0.32     +2.8pp
+   -0.068    21.8%   0.32     +2.9pp
+   +0.050    21.8%   0.32     +2.9pp   positive control
+```
+
+**Supported: the floor was 2.8 pp too low, at roughly nine standard errors.** The
+calibration figures in this log need restating — the false-positive floor is 21.8%,
+not 19.5% — and the shortfall was in the direction that flatters a strategy.
+
+Two things the control earned their keep on:
+
+- **The sign does not matter; the dependence does.** +0.050 moves the floor exactly
+  as much as −0.044, and all three negative values are indistinguishable from each
+  other. The recalibration needs only "small dependence exists", not the precise
+  measured value. Anyone quoting −0.044 specifically should say it is not what is
+  doing the work.
+- **The detection floor does not move.** Re-running the whole power ladder against
+  the measured null, φ = 0.05 still clears the registered +5 pp margin (+7.2 pp,
+  slightly better than against the i.i.d. null). That is a property rather than luck:
+  the margin is a difference between two rates measured under the same dependence, so
+  the base rate rises while the sensitivity barely moves.
+
+**So all six registered searches keep their verdicts**, and the floor simply gets a
+clearer number. A higher noise floor does not make a negative result wrong.
 
 ### The first p-value written here was wrong, and failed silently
 
