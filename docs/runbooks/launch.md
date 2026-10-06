@@ -1737,6 +1737,71 @@ no-op, since removing items from the bottom cannot change a maximum. It was
 implemented first, returned byte-identical results at trim 0 and 0.3, and looked like
 a safeguard. Trimming by reliability does something.
 
+### The lineup's ranking is noise — measured on the product's own strategies
+
+`tools/lineup_verdict.py` runs the whole correction family over the twenty strategies
+the gate actually judges, using the same walk-forward that produces clearance. Every
+negative result in this log is a statement about individual strategies. None of them
+was ever a statement about the **ranking** — whether the best-scoring strategy is
+best, or is just whichever one suited the window.
+
+Registered before running, three hypotheses. H1: the batch becomes evaluable. H2: no
+strategy clears. H3: **PBO above 0.5.** Result:
+
+```
+universe: 246          strategies with series: 20
+Reality Check   p = 0.0020   reject       (there IS a detectable batch effect)
+SPA             p = 0.0020   18 strategies after reliability trimming
+PBO             0.933        495 splits   worse_than_random
+verdict: unstable_selection
+```
+
+**PBO = 0.933.** The in-sample winner finished out-of-sample below where it started
+in 93% of re-splits. Half would be a coin toss. The ordering is very close to
+actively misleading.
+
+The finding is not "nothing cleared", which was already known. It is that the batch
+**simultaneously** shows a detectable aggregate effect *and* an unusable ranking —
+and those are different failures with different remedies. Aggregate-only strategies
+might still be worth trading as a portfolio; anything driven by the ranking (best
+gets live, best gets capital, top-1 promoted) is trading a coin flip.
+
+### The stronger evidence is in the two runs' disagreement
+
+The first run used 5 folds, the second 12, changing nothing else. Every mean moved
+enormously and most flipped sign:
+
+| strategy | 5 folds | 12 folds |
+|---|---|---|
+| momentum_roc | −28.33 | **+61.06** |
+| volume_impulse_example | −110.91 (p=0.001) | −48.94 (p=0.429) |
+| turtle_breakout | +74.12 (p=0.050) | +100.80 (p=0.005) |
+| macd_trend | +79.08 | +35.42 |
+| best strategy | turtle_breakout | **dual_thrust** |
+
+Same strategies, same data, one parameter different — and the winner changes. That is
+PBO made visible without any statistics: the ranking is a property of the window, not
+of the strategy.
+
+**Why the fold count was raised, recorded so it is not read as tuning.** PBO needs at
+least 8 observations per strategy because that is how many the CSCV enumeration
+splits into. At 5 folds it returned `insufficient_series` and H3 could not run at all.
+`FOLDS` went 5 → 12 for measurement resolution. The registered bar — PBO > 0.5 — was
+not touched, and neither was anything else. Widening a window until a test can run is
+different from widening it until it passes; the distinction is easy to lose after the
+fact, so it is written down here.
+
+**Caveat worth stating.** These are 12 fold-level observations per strategy, which is
+thin for a bootstrap. The Reality Check's p = 0.002 should be read as "a batch effect
+is worth pursuing", not as a claim of an edge. The PBO figure rests on the same short
+series but only needs the *ranking* to be unstable, and 93% against a coin flip is not
+a marginal result.
+
+This is also the first time the batch machinery has run on anything but synthetic
+series, and H1 is the reason that mattered: before this, every strategy on the live
+snapshot reported `batch_not_evaluable` and none of the three tests had ever executed
+on product data.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
