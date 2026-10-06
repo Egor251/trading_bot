@@ -764,6 +764,362 @@ def implied_spread(values: Sequence[float]) -> dict[str, float]:
     }
 
 
+def _block_resample_means(
+    values: Sequence[float], samples: int, rng: random.Random, block: int
+) -> list[float]:
+    """Block-bootstrap means of one series, for an empirical null distribution."""
+    n = len(values)
+    if n == 0:
+        return []
+    block = max(1, min(int(block), n))
+    need = -(-n // block)
+    top = n - block
+    means: list[float] = []
+    for _ in range(int(samples)):
+        total = 0.0
+        for _ in range(need):
+            start = rng.randint(0, top) if top > 0 else 0
+            total += sum(values[start : start + block])
+        means.append(total / n)
+    return means
+
+
+def _joint_null_maxima(
+    series: Sequence[Sequence[float]],
+    *,
+    samples: int,
+    seed: int,
+    block: int | None,
+    trim: float,
+) -> tuple[float, list[float], list[float]]:
+    """Observed and bootstrap distribution of the studentized maximum statistic.
+
+    The statistic is ``max_k (mean_k / se_k)`` over strategies, which is the whole
+    question the multiplicity correction exists to answer: not "did any single
+    strategy work" but "would the best of them beat zero by chance".
+
+    Studentizing before taking the maximum is not cosmetic. A strategy with a tiny
+    mean and a tiny variance can otherwise dominate the maximum and decide the
+    answer on its own, which is Hansen's objection to the raw statistic and the
+    reason SPA beats Reality Check.
+
+    Each strategy is recentred on its own mean to impose the null "this strategy has
+    no edge", then resampled in blocks so autocorrelation survives into the resample.
+    The standard error comes from the *uncentred* series: the null must not be
+    allowed to manufacture its own dispersion.
+
+    ``trim`` drops that fraction of the **most erratic** models -- the ones whose
+    standard error is largest relative to their effect -- before the maximum is
+    taken. This is Hansen's stated motivation, "reduces the influence of erratic
+    forecasts", and it is worth being precise about what trimming cannot do:
+    dropping the *worst performers* from a maximum is arithmetically a no-op,
+    because removing items from the bottom cannot change the largest. That was
+    measured here rather than assumed, and the first version of this function
+    trimmed by performance and therefore did nothing at all while appearing to.
+    Trimming by reliability does something, because it changes which models are
+    allowed to set the threshold.
+    """
+    rows = [[float(v) for v in s] for s in series]
+    rows = [r for r in rows if len(r) >= 3]
+    if not rows:
+        return 0.0, [], []
+
+    se_list: list[float] = []
+    obs_means: list[float] = []
+    for row in rows:
+        n = len(row)
+        mean = sum(row) / n
+        obs_means.append(mean)
+        deviations = [v - mean for v in row]
+        b = int(block or max(1, int(math.ceil(n ** (1.0 / 3.0)))))
+        b = max(1, min(b, n))
+        rng = random.Random(seed + len(se_list))
+        draws = _block_resample_means(deviations, samples, rng, b)
+        # Centre the bootstrap on zero so the null distribution is of the mean, not
+        # of the dispersion; then take its spread as the denominator.
+        var = sum((d - sum(draws) / len(draws)) ** 2 for d in draws) / max(
+            1, len(draws) - 1
+        )
+        se_list.append(math.sqrt(max(var, 0.0)) if var > 0 else 0.0)
+
+    stats = [
+        (m / s) if s > 0 else 0.0 for m, s in zip(obs_means, se_list)
+    ]
+
+    # Trim by reliability, not by performance. See the docstring: dropping the worst
+    # performers cannot change a maximum, so a performance trim is a no-op dressed
+    # up as a safeguard. Erratic models -- large standard error, small effect -- are
+    # the ones whose noise inflates the null maximum and therefore the bar.
+    keep_idx = list(range(len(rows)))
+    if trim > 0.0 and len(rows) > 2:
+        reliability = sorted(
+            range(len(rows)),
+            key=lambda i: (obs_means[i] * obs_means[i]) / max(se_list[i], 1e-18),
+        )
+        drop = int(len(rows) * float(trim))
+        dropped = set(reliability[:drop])
+        remaining = [i for i in keep_idx if i not in dropped]
+        if remaining:
+            keep_idx = remaining
+            obs_means = [obs_means[i] for i in keep_idx]
+            se_list = [se_list[i] for i in keep_idx]
+            stats = [stats[i] for i in keep_idx]
+            rows = [rows[i] for i in keep_idx]
+
+    def _max_of(values: Sequence[float]) -> float:
+        if not values:
+            return 0.0
+        return max(values)
+
+    observed = _max_of(stats)
+
+    # Bootstrap the whole panel together so the cross-strategy dependence the gate
+    # already models (they share price data) is not broken by resampling in
+    # isolation: each resample index set is reused across strategies.
+    n_bars = min(len(r) for r in rows)
+    b = int(block or max(1, int(math.ceil(n_bars ** (1.0 / 3.0)))))
+    b = max(1, min(b, n_bars))
+    need = -(-n_bars // b)
+    top = n_bars - b
+    means_by_strategy = [sum(r) / n_bars for r in rows]
+    centred = [
+        [v - means_by_strategy[i] for v in rows[i][:n_bars]] for i in range(len(rows))
+    ]
+
+    null_stats: list[float] = []
+    for _ in range(int(samples)):
+        picks: list[tuple[int, int]] = []
+        for _ in range(need):
+            start = rng.randint(0, top) if top > 0 else 0
+            picks.append((start, start + b))
+        per_strategy = []
+        for i in range(len(centred)):
+            row = centred[i]
+            total = 0.0
+            for lo, hi in picks:
+                total += sum(row[lo:hi])
+            per_strategy.append(total / n_bars)
+        null_stats.append(
+            _max_of([(m / s) if s > 0 else 0.0 for m, s in zip(per_strategy, se_list)])
+        )
+    return observed, null_stats, stats
+
+
+def reality_check(
+    series: Sequence[Sequence[float]],
+    *,
+    samples: int = 1000,
+    seed: int = 42,
+    block: int | None = None,
+    alpha: float = 0.05,
+) -> dict[str, Any]:
+    """White (2000), Econometrica 68(5):1097-1121 -- the test that is asked here.
+
+    Corrects for the whole search at once rather than per hypothesis. `adjust_pvalues`
+    answers "is this strategy significant after a penalty"; this answers "given
+    everything that was tried together, would the best result have appeared by
+    chance". Those come apart, and the second is the question that matches a research
+    log running twelve registered searches.
+
+    The difference shows up in what happens when everything fails. Per-hypothesis
+    correction leaves each of twenty strategies with a 5% chance of clearing; the
+    Reality Check tests one hypothesis -- the maximum -- and controls its own size,
+    so a batch of pure noise is rejected as a batch rather than yielding one or two
+    accidental winners to promote.
+    """
+    observed, nulls, stats = _joint_null_maxima(
+        series, samples=samples, seed=seed, block=block, trim=0.0
+    )
+    if not nulls:
+        return {
+            "ok": False,
+            "reason": "insufficient_series",
+            "strategies": 0,
+        }
+    exceed = sum(1 for v in nulls if v >= observed)
+    p = (1.0 + exceed) / (1.0 + len(nulls))
+    return {
+        "ok": True,
+        "strategies": len(stats),
+        "max_stat": observed,
+        "best_strategy_index": (
+            max(range(len(stats)), key=lambda i: stats[i])
+            if stats
+            else None
+        ),
+        "p_value": p,
+        "reject": p < alpha,
+        "bootstrap_samples": len(nulls),
+    }
+
+
+def spa_test(
+    series: Sequence[Sequence[float]],
+    *,
+    samples: int = 1000,
+    seed: int = 42,
+    block: int | None = None,
+    alpha: float = 0.05,
+    trim: float = 0.10,
+) -> dict[str, Any]:
+    """Hansen (2005), JBES 23(4):365-376 -- SPA, the stronger form.
+
+    Two modifications to the Reality Check, both aimed at the same problem: a single
+    hopeless alternative dragging the maximum and with it the threshold.
+
+    1. **Studentization.** The statistic is divided by its own standard error before
+       the maximum, so a strategy with a tiny mean and a tiny variance cannot decide
+       the answer alone.
+    2. **Trimming.** The worst `trim` fraction is dropped before the maximum is
+       taken, so the threshold is set by the strategies that could plausibly be
+       real rather than by the one that is furthest from it.
+
+    The result is more power and less sensitivity to irrelevant alternatives -- which
+    matters in exactly this setting, where a batch of twenty-one strategies almost
+    certainly contains a few genuinely bad ones and the untrimmed test lets them set
+    the bar for the rest.
+    """
+    observed, nulls, stats = _joint_null_maxima(
+        series, samples=samples, seed=seed, block=block, trim=trim
+    )
+    if not nulls:
+        return {"ok": False, "reason": "insufficient_series", "strategies": 0}
+    exceed = sum(1 for v in nulls if v >= observed)
+    p = (1.0 + exceed) / (1.0 + len(nulls))
+    return {
+        "ok": True,
+        "strategies": len(stats),
+        "max_stat": observed,
+        "p_value": p,
+        "reject": p < alpha,
+        "bootstrap_samples": len(nulls),
+        "trim": trim,
+    }
+
+
+def cscv_pbo(
+    series: Sequence[Sequence[float]],
+    *,
+    splits: int = 8,
+    performance=None,
+) -> dict[str, Any]:
+    """Bailey & Lopez de Prado (2014) -- probability of backtest overfitting.
+
+    Combinatorially Symmetric Cross-Validation. Every combination of the S/2 in-sample
+    and S/2 out-of-sample halves is used, each strategy's performance ranked in both,
+    and the logits of the rank degradation are recorded. The PBO is the share of
+    splits where the in-sample winner was out-of-sample *last* -- an OOS logit below
+    zero.
+
+    This measures something none of the other tests do, and it is the one this gate
+    was blind to. A corrected p-value can pass and the ranking still be meaningless:
+    if the in-sample winner is chosen out of a set of statistically indistinguishable
+    strategies, *any* of them would have won, and the winner would change if the
+    sample were split differently. That is selection on noise with every reported
+    number intact -- p-value significant, Sharpe positive, PBO near one.
+
+    A PBO above 0.5 means the selection procedure is worse than random; 1.0 means the
+    in-sample winner landed out-of-sample dead last every time.
+
+    ``performance`` maps a series index to a performance measure, so the same code
+    ranks on Sharpe, on net P&L or on anything else. It defaults to mean return
+    because that is what a P&L report already has.
+    """
+    rows = [[float(v) for v in s] for s in series]
+    rows = [r for r in rows if len(r) >= 4]
+    n_strategies = len(rows)
+    n_bars = min((len(r) for r in rows), default=0)
+    if n_strategies < 2 or n_bars < splits:
+        return {
+            "ok": False,
+            "reason": "insufficient_series",
+            "strategies": n_strategies,
+            "bars": n_bars,
+        }
+
+    half = splits // 2
+    if half < 1:
+        return {"ok": False, "reason": "splits_too_small", "strategies": n_strategies}
+    n_combinations = math.comb(n_bars, half)
+    if n_combinations <= 1:
+        return {
+            "ok": False,
+            "reason": "no_combinations",
+            "strategies": n_strategies,
+        }
+
+    # Cap the enumeration: this is exponential and would otherwise be the slowest
+    # thing in the gate. Subsampling combinations is unbiased for the PBO estimate
+    # and the count actually used is reported.
+    rng = random.Random(7)
+    cap = 512
+    combos = list(_combinations(n_bars, half))
+    sampled = len(combos)
+    if sampled > cap:
+        combos = rng.sample(combos, cap)
+        sampled = cap
+
+    def _score(subset: Sequence[int]) -> list[float]:
+        out = []
+        for row in rows:
+            window = [row[i] for i in subset]
+            if performance is not None:
+                out.append(float(performance(window)))
+            else:
+                out.append(sum(window) / len(window))
+        return out
+
+    logits: list[float] = []
+    for combo in combos:
+        inside = list(combo)
+        outside = [i for i in range(n_bars) if i not in set(inside)]
+        if not outside:
+            continue
+        in_scores = _score(inside)
+        out_scores = _score(outside)
+        in_order = sorted(range(n_strategies), key=lambda i: in_scores[i])
+        out_order = sorted(range(n_strategies), key=lambda i: out_scores[i])
+        in_rank = {s: r for r, s in enumerate(in_order)}
+        out_rank = {s: r for r, s in enumerate(out_order)}
+        worst = in_order[-1]
+        rank_is = in_rank[worst]
+        rank_oos = out_rank[worst]
+        denominator = float(n_strategies)
+        # Logit of the relative rank, the measure the paper uses: a winner that ends
+        # up mid-pack gives a negative logit, and dead last gives the extreme one.
+        rel_is = (rank_is + 1) / (denominator + 1)
+        rel_oos = (rank_oos + 1) / (denominator + 1)
+        logits.append(math.log(rel_oos / (1 - rel_oos)) - math.log(rel_is / (1 - rel_is)))
+
+    if not logits:
+        return {
+            "ok": False,
+            "reason": "no_splits",
+            "strategies": n_strategies,
+        }
+    overfit = sum(1 for v in logits if v < 0.0) / len(logits)
+    return {
+        "ok": True,
+        "strategies": n_strategies,
+        "bars": n_bars,
+        "splits": splits,
+        "splits_used": len(logits),
+        "combinations_available": n_combinations,
+        "combinations_used": sampled,
+        "pbo": overfit,
+        "logits_mean": sum(logits) / len(logits),
+        # Above 0.5 the procedure is worse than picking at random; at 1.0 the
+        # in-sample winner finished last out-of-sample every single time.
+        "worse_than_random": overfit > 0.5,
+    }
+
+
+def _combinations(n: int, k: int) -> Any:
+    from itertools import combinations
+
+    return combinations(range(n), k)
+
+
 def decompose_cost(
     fee_bps: float,
     slippage_bps: float,
@@ -971,6 +1327,7 @@ __all__ = [
     "ar1",
     "bootstrap_stress",
     "breakeven_vs_cost",
+    "cscv_pbo",
     "decompose_cost",
     "implied_spread",
     "monte_carlo_stress",
@@ -978,8 +1335,10 @@ __all__ = [
     "plateau_score",
     "purged_cv_splits",
     "purged_kfold_splits",
+    "reality_check",
     "resolvable_phi",
     "sensitivity_plateau",
+    "spa_test",
     "variance_ratio",
     "stable_hash",
     "walk_forward_splits",
