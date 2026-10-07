@@ -77,6 +77,12 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         "provider_resolved": str(prov.get("provider_resolved") or ""),
         "variant_mode": str(prov.get("variant_mode") or ""),
         "variants_count": int(prov.get("variants_count") or report.get("variants") or 0),
+        # How much configuration space was *available*, as against how much was
+        # explored. The reported configuration is a maximum over a search whose reach
+        # was arbitrary, so the Sullivan correction has to be computed over the
+        # available space. Absent on reports written before this field existed, in
+        # which case the gate falls back to the explored count and says so.
+        "variants_available": int(prov.get("variants_available") or 0),
         "folds": int(oos.get("folds") or len(report.get("folds") or [])),
         "chosen": dict(chosen),
         "mean_oos_pnl": mean,

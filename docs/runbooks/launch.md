@@ -1858,6 +1858,62 @@ The old store is kept at `data/phantom/research_clearance.pre-experiment-backup.
 The gate is the thing that decides what trades, so its state is not replaced without
 a way back.
 
+### The universe, measured — and the measurement is incomplete
+
+Sullivan's rule is that the correction must cover the space the rules were drawn
+from, not the part that got explored. Here the reported configuration is a maximum
+over a search whose reach was arbitrary: the same pipeline with `max_variants=36`
+returns a different winner than with 3.
+
+`walk_forward` now records `variants_available` alongside `variants_count` in
+provenance, the clearance store accumulates it as `variants_available_lifetime`, and
+`batch_research_verdict` uses `max(available, explored, count)` — `max`, not a chain
+of `or`, so a stale or wrong available count can never make the correction *smaller*
+than what was demonstrably explored. A bad field must tighten the gate, not loosen it.
+
+### What the measurement actually found, and what it did not
+
+Inventoried all 23 plugins. For the **16 that expose a `CONFIG_SCHEMA`**:
+
+```
+variants searched per strategy      3
+variants available per strategy    16 (4 fields) or 36 (5-6 fields), capped
+untried                            290, about 6x what was explored
+```
+
+Two thirds of the strategies declare 4–6 numeric parameters and walk-forward
+evaluates **3** combinations. That is the gap the Sullivan correction is about.
+
+**The other 7 plugins expose no schema at all.** An earlier inventory reported their
+parameter count as `0` and the `untried` column as **−2**, which is impossible and was
+my extraction failing rather than a finding. Most of the repo simply does not publish
+a `CONFIG_SCHEMA`, so `variants_available` falls back to the explored count for them.
+
+**So the universe is currently honest for 16 of 23 strategies.** The fallback is the
+right behaviour — fabricating a configuration space for a strategy that declares none
+would inflate the denominator on no evidence — but it means the denominator is smaller
+than the `universe_basis: available` setting implies.
+
+And a number that looks like progress and is not: reading the live store after the
+change showed the universe go from 60 to 234. That is **not** the schema space. It is
+`variants_available_lifetime` falling back to the explored count and accumulating it
+across four runs of the experiment — 4 × 3 = 12 per strategy, 12 × 20 = 234. It is
+the repeat-experiment pollution described above, reappearing through the new field.
+
+To close this properly each plugin needs to publish a `CONFIG_SCHEMA`, which is a
+per-plugin change rather than a gate change. Until then the honest statement is: *the
+universe is measured for 16 strategies and understated for 7*, not *the universe is
+234*.
+
+### Three plugins outside the measured lineup
+
+- **`random_baseline` — the control.** `trade_probability: 0.08`, no edge by
+  construction. It belongs in the store and it must never clear; a batch containing
+  it is a batch that can report whether the machinery manufactures edges.
+- **`time_series_momentum` — a real strategy that was never measured.** It sits in
+  the repo untested, which is the one gap here that is not about arithmetic.
+- **`test_strategy` — a fixture.** Not a strategy, and should not be in the lineup.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as

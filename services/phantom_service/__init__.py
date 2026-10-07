@@ -1190,7 +1190,10 @@ class PhantomService(BaseService):
             resolve_walk_forward_bars,
             run_walk_forward_offline,
         )
-        from host.phantom_variants import variants_for_mode
+        from host.phantom_variants import (
+            schema_search_variants,
+            variants_for_mode,
+        )
 
         strategy_id = resolve_strategy_id_via_core(self.core, strategy_id)
         plugin = self.core.plugin_manager.get(strategy_id)
@@ -1296,6 +1299,16 @@ class PhantomService(BaseService):
                 max_variants=max_v,
                 schema=schema,
             )
+        # How much configuration space was *available*, as distinct from how much
+        # was explored. Sullivan/Timmermann/White's point is that a correction must
+        # cover the space the rules were drawn from, and the reported configuration
+        # is a maximum over a search whose reach was arbitrary -- the same pipeline
+        # with `max_variants=36` returns a different winner. Correcting over the
+        # explored count alone is therefore lenient by exactly the ratio between
+        # them, which for these strategies is about 6x.
+        variants_available = len(
+            schema_search_variants(schema, max_variants=max_v)
+        ) if schema else len(vars_)
 
         series: dict[str, list[float]]
         source = feed_mode
@@ -1547,6 +1560,7 @@ class PhantomService(BaseService):
                     ),
                     "variant_mode": resolved_variant_mode,
                     "variants_count": len(vars_),
+                    "variants_available": variants_available,
                     "max_variants": max_v,
                     "quantity": hint_qty,
                     "quantity_source": "sizing" if use_sizing else "explicit",

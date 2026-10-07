@@ -692,6 +692,22 @@ trading:
     # it the selection is worse than picking at random: the in-sample winner finished
     # out-of-sample below where it started, more often than not.
     max_pbo: 0.5
+    # Which denominator the multiplicity correction is computed over.
+    # `available` uses the configuration space the strategy's schema permits;
+    # `explored` uses only what walk-forward actually searched.
+    #
+    # `available` is the default because the reported configuration is a maximum
+    # over a search whose reach was arbitrary: the same pipeline with
+    # `max_variants=36` returns a different winner than with 3. Correcting over the
+    # explored count is lenient by that ratio.
+    #
+    # CAVEAT, measured: most plugins expose no CONFIG_SCHEMA, so for them
+    # `available` falls back to the explored count and the denominator is smaller
+    # than this setting implies. The fallback is deliberate -- inventing a space for
+    # a strategy that declares none would inflate the denominator on no evidence --
+    # but it means the universe is currently honest for only the plugins that
+    # publish a schema. See `tools/` for the per-plugin exposure measurement.
+    universe_basis: available
     pbo_splits: 8
     batch_bootstrap_samples: 500
   mode: paper

@@ -116,6 +116,21 @@ class LiveReadinessPolicy:
     #: than not. Not 0.5 by accident -- that is the coin-flip point, and it is the
     #: one value that cannot be tuned in the strategy's favour.
     max_pbo: float = 0.5
+    #: Which denominator the universe is computed over: ``available`` uses the
+    #: configuration space the schema permits, ``explored`` uses only what was
+    #: actually searched.
+    #:
+    #: ``available`` is the default because the reported configuration is a maximum
+    #: over a search whose reach was arbitrary. These strategies declare 4-6 numeric
+    #: parameters and walk-forward evaluates 3 combinations out of the 16 or 36
+    #: available, so an analyst running the same pipeline with ``max_variants=36``
+    #: gets a different winner. Correcting over the explored count is lenient by
+    #: exactly that ratio, measured at about 6x on this repo.
+    #:
+    #: This is a judgement rather than a fact, which is why it is a setting rather
+    #: than a constant: the narrower reading stays available and is named in the
+    #: report so a reader can see which one produced a number.
+    universe_basis: str = "available"
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> LiveReadinessPolicy:
@@ -228,6 +243,9 @@ def record_digest_clearance(
     lifetime_variants = _i(prior.get("variants_tried_lifetime")) + _i(
         digest.get("variants_count")
     )
+    lifetime_available = _i(prior.get("variants_available_lifetime")) + _i(
+        digest.get("variants_available") or digest.get("variants_count")
+    )
     entries[key] = {
         "strategy_id": sid,
         "ticker": ticker,
@@ -262,6 +280,11 @@ def record_digest_clearance(
         # the number of discarded attempts.
         "evaluations_count": evaluations,
         "variants_tried_lifetime": lifetime_variants,
+        # Cumulative *available* configuration space, which is the number the
+        # multiplicity correction should use. `variants_tried_lifetime` is kept
+        # because it answers a different and still useful question: how much was
+        # actually looked at.
+        "variants_available_lifetime": lifetime_available,
         "chosen": dict(digest.get("chosen") or {}),
         "recorded_at": datetime.now(UTC).isoformat(),
         # When the evidence was *produced*, i.e. the last bar the analysis saw.
@@ -640,6 +663,7 @@ def evaluate_live_readiness(
         # being read by nobody.
         "variants_count": _i(best.get("variants_count")),
         "variants_tried_lifetime": _i(best.get("variants_tried_lifetime")),
+        "variants_available_lifetime": _i(best.get("variants_available_lifetime")),
         "oos_pnl_by_fold": [
             float(v) for v in (best.get("oos_pnl_by_fold") or [])
         ],
@@ -715,6 +739,7 @@ def batch_research_verdict(
     samples: int = 500,
     seed: int = 42,
     pbo_splits: int = 8,
+    universe_basis: str = "available",
 ) -> dict[str, Any]:
     """Run the whole family of corrections over one batch, and report each verdict.
 
@@ -756,11 +781,35 @@ def batch_research_verdict(
     for row in items:
         sid = str(row.get("strategy_id") or "")
         # The space the rules were drawn from, not the number that survived into
-        # this report. Both matter and they are different numbers.
-        universe += max(
-            1,
-            _i(row.get("variants_tried_lifetime")) or _i(row.get("variants_count")) or 1,
-        )
+        # this report, and not the number that happened to be explored either.
+        #
+        # The reported configuration is a maximum over a search whose reach was
+        # arbitrary: these strategies declare 4-6 numeric parameters, and walk-forward
+        # evaluates 3 combinations out of the 16 or 36 the schema permits. An analyst
+        # running the same pipeline with `max_variants=36` gets a different winner,
+        # so the reproducible denominator is the *available* space. Measured on this
+        # repo it is about 6x the explored one.
+        #
+        # `universe_basis` exists because this is a judgement and not a fact: set it
+        # to "explored" for the narrower, more permissive reading.
+        if universe_basis == "explored":
+            per_strategy = (
+                _i(row.get("variants_tried_lifetime"))
+                or _i(row.get("variants_count"))
+                or 1
+            )
+        else:
+            # `max`, not a chain of `or`: a record whose available count is stale
+            # or simply wrong must never make the correction *smaller* than what was
+            # demonstrably explored, or a bad field would loosen the gate rather
+            # than tightening it.
+            per_strategy = max(
+                1,
+                _i(row.get("variants_available_lifetime")),
+                _i(row.get("variants_tried_lifetime")),
+                _i(row.get("variants_count")),
+            )
+        universe += max(1, per_strategy)
         folds = [
             float(v)
             for v in (row.get("oos_pnl_by_fold") or [])
@@ -824,6 +873,7 @@ def batch_research_verdict(
 
     out["notes"] = {
         "universe_uses_lifetime_variants": True,
+        "universe_basis": universe_basis,
         "series_granularity": "per_fold_oos_pnl",
         "pbo_worse_than_random": unstable,
     }
@@ -1030,6 +1080,7 @@ def evaluate_many(
             alpha=pol.multiplicity_alpha,
             samples=pol.batch_bootstrap_samples,
             pbo_splits=int(pol.pbo_splits or 8),
+            universe_basis=str(pol.universe_basis or "available"),
         )
         verdict = str(batch.get("verdict") or "not_evaluable")
         passing = verdict == "batch_edge_stable"
