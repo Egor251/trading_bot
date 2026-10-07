@@ -1927,6 +1927,88 @@ explored**, not *the universe is 234*.
   the repo untested, which is the one gap here that is not about arithmetic.
 - **`test_strategy` — a fixture.** Not a strategy, and should not be in the lineup.
 
+### Deferred: an ML model over user-selected features
+
+Noted from the MISIS Hilbert Space GO ALGO backend (2023): train CatBoost or
+LightGBM over a user-chosen feature subset rather than picking one indicator. As a
+*remedy* for the finding above it is the right shape — a model pools information
+across features instead of selecting the best of twenty interchangeable ones, which
+is precisely what PBO = 0.869 says is broken here.
+
+**Deferred, with a precondition rather than a date.** CatBoost and LightGBM over
+user-chosen subsets is a textbook generator of multiple comparisons. This project
+currently cannot count its own search space: at least 87% of the discoverable
+configuration space has never been explored, and schema discovery is inconsistent
+enough that the denominator the gate uses is smaller than the measurement. Adding a
+model family with a feature-subset dimension before the denominator is honest would
+produce a machine for manufacturing PBO, and the resulting report would look better
+than anything in this log while being less true.
+
+Sequence, when it is taken:
+
+1. A reliable universe count, verified against a plugin known to publish a schema.
+2. Then the model, with the feature-subset space counted in the same denominator as
+   the parameter grids.
+3. Then PBO on the model against the same bar, not against a fresh one.
+
+The frontend, the block constructor and the strategy marketplace are not remedies
+for anything measured here. This project does not have a shortage of strategies —
+it has twenty and a ranking that is noise.
+
+### Is the negative autocorrelation crypto-specific? Asked on MOEX equities
+
+Every number in this project was measured on one venue. The 4h ρ₁ = −0.044, the
+1.19 bps spread at 1m, the 7 bps per-fill cost, the 21.8% floor — all properties of
+Binance, not of markets. The question that had never been asked: run the same
+estimators on a different exchange with different microstructure and say whether the
+answer changes.
+
+`tools/moex_replication.py`, read-only, `aiomoex` against TQBR board history.
+
+```
+SBER   n=3402  sigma= 2.13%  rho1=+0.0046  t= +0.24
+GAZP   n=3099  sigma= 2.12%  rho1=+0.0142  t= +0.28
+LKOH   n=3402  sigma= 1.89%  rho1=-0.0089  t= -0.31
+GMKN   n=3095  sigma= 8.48%  rho1=-0.0149  t= -8.54
+ROSN   n=3099  sigma= 2.09%  rho1=+0.0567  t= +1.72
+```
+
+**H1 partially holds, on one name out of five.** Four liquid MOEX blue chips show
+nothing: |t| between −0.31 and +1.72. The exception is GMKN at t = −8.54 — a stock
+that fell from 7029 to 118 over the window, on 8.5% daily sigma.
+
+That is the more interesting reading, and it is not "markets are negatively
+autocorrelated". It is consistent with what EDGE_ROLL already concluded about crypto:
+the negative first-order covariance is **bounce after a sharp move**, and it appears
+in proportion to how violent the series is. BTC at 4h has modest daily sigma and a
+t of −3.4; GMKN has 8.5% daily sigma and a t of −8.5. Same mechanism, different
+magnitude, and the magnitude tracks the violence.
+
+**So the crypto searches do not transfer to equities as a general claim** — the
+predictability ceiling has to be argued per venue, and per regime within a venue. And
+the bounce reading gains an independent venue's support.
+
+### The criterion was wrong first, and the data said so
+
+The first run reported **0 of 5** — no reproduction at all — and was wrong on GMKN.
+Its |ρ₁| = 0.0149 sat *below* the `resolvable_phi` floor of 0.0352 while its |t| was
+8.54, and those cannot both be true: a |t| of 8.5 means the standard error is about
+0.0017, ten times smaller than 1/√n.
+
+`resolvable_phi` returns `1.96/sqrt(n)`, which assumes the AR(1) standard error
+behaves like `1/sqrt(n)`. That holds for homoskedastic data. Equity returns are fat-
+tailed, and on this data the assumption is wrong by an order of magnitude — so using
+the resolution floor as the significance test **discards exactly the series the
+direct t-statistic finds most significant.** The tool now gates on |t| and prints
+both criteria plus the disagreement, so it stays visible rather than being resolved by
+picking one.
+
+A measurement that contradicts a stated assumption is information; a criterion that
+quietly absorbs the contradiction is a defect. This one announced itself.
+
+**No costs were applied**, and MOEX charges a commission schedule plus a rate in price
+units. Nothing here says whether a rule would pay on this venue.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
