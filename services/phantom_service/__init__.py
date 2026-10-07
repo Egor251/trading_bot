@@ -1287,7 +1287,12 @@ class PhantomService(BaseService):
             max_v = 36 if resolved_variant_mode == "optimize" else 12
         max_v = max(1, min(120, max_v))
         schema = getattr(plugin, "CONFIG_SCHEMA", None)
-        if not isinstance(schema, dict):
+        if not isinstance(schema, dict) or not schema:
+            # `StrategyPlugin` declares `CONFIG_SCHEMA = {}` as a placeholder, so an
+            # empty dict means "this class did not declare one", not "the parameter
+            # space is empty". Treating the placeholder as a real schema produced
+            # `variants_available == 1` for every strategy and quietly disabled the
+            # Sullivan denominator for the whole repo.
             schema = None
         if variants is not None:
             vars_ = [dict(v or {}) for v in variants]

@@ -2009,6 +2009,41 @@ quietly absorbs the contradiction is a defect. This one announced itself.
 **No costs were applied**, and MOEX charges a commission schedule plus a rate in price
 units. Nothing here says whether a rule would pay on this venue.
 
+### The empty base-class schema was hiding strategies alphabetically
+
+The reason schema discovery was inconsistent, found and fixed.
+
+`StrategyPlugin` declares `CONFIG_SCHEMA = {}` as a placeholder. Discovery code took
+**the first class whose `CONFIG_SCHEMA` is a dict**, and `dir()` on a module is
+alphabetical — so the loop stopped on the base class and never reached
+`SupertrendFollowPlugin`, which sorts *after* it and which defines a real four-field
+schema. `if not schema` then read `{}` as "this strategy declares none".
+
+The consequence was that **which strategies were missed depended on whether their
+class name sorted before `StrategyPlugin`.** Two passes over the same plugins
+disagreed (16 and 14) for exactly that reason, and I could not explain it from the
+data alone.
+
+`phantom_service` had the same defect, and worse: it accepted the empty dict as a
+real schema, so `variants_available` came out as 1 for every strategy — which quietly
+disabled the Sullivan denominator for the entire repo while looking like a working
+number.
+
+Corrected on both sides, and the measurement changes:
+
+```
+before (14 of 23 schemas found)     332 available, 290 unsearched = 87%
+after  (20 of 23 schemas found)     488 available, 428 unsearched = 88%
+```
+
+The three still without a schema are exactly the three that should be: `random_baseline`
+(the control), `test_strategy` (a fixture), and `time_series_momentum` — which is the
+real strategy that has never been measured *or* declared a parameter surface.
+
+So the deferred ML lead's precondition is now concrete rather than rhetorical: at
+least **88% of the configuration space of this repo has never been searched**, and
+the one real strategy that was skipped is also the one with no declared surface.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as

@@ -34,17 +34,31 @@ PLUGINS = sorted(p.name for p in STRATS.iterdir() if (p / "plugin.py").exists())
 
 
 def _schema_for(name: str):
-    """The CONFIG_SCHEMA a plugin exposes, however it exposes it."""
+    """The CONFIG_SCHEMA a plugin *actually declares*, skipping the empty base.
+
+    `StrategyPlugin` defines `CONFIG_SCHEMA = {}` as a placeholder, and `dir()` on a
+    module is alphabetical, so a loop that takes the first class whose
+    `CONFIG_SCHEMA` is a dict lands on the base class and stops -- before reaching
+    `SupertrendFollowPlugin`, which sorts later and which defines a real four-field
+    schema. `if not schema` then reads `{}` as "no schema".
+
+    That is the whole inconsistency this file exists to correct, and it hid
+    strategies **by alphabetical position**: which ones were missed depended on
+    whether their class name sorted before `StrategyPlugin`. Two passes over the
+    same plugins disagreed for exactly this reason.
+    """
     mod = importlib.import_module(f"strategies.{name}.plugin")
-    direct = getattr(mod, "CONFIG_SCHEMA", None)
-    if isinstance(direct, dict):
-        return direct
-    for attr in dir(mod):
-        obj = getattr(mod, attr)
+    best: dict | None = None
+    for obj in vars(mod).values():
+        if not isinstance(obj, type):
+            continue
         found = getattr(obj, "CONFIG_SCHEMA", None)
         if isinstance(found, dict) and found:
-            return found
-    return None
+            # A subclass wins over a base class, so keep looking only if we have
+            # nothing yet; the real declaration is always a non-empty dict.
+            best = found
+            break
+    return best
 
 
 def test_schema_discovery_is_a_known_unreliable_reader():
