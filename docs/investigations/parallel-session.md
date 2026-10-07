@@ -7,7 +7,36 @@ split, and its own errors — several of which this session has no record of at 
 That session had no filesystem access and could not write these files itself. They
 arrived as pasted text.
 
-## Where the two records overlap, and they agree
+## Verification against the current tree
+
+The parallel session is older than this one, so its open items should have been closed
+since. Checked against the working tree rather than assumed:
+
+| their finding | current state | evidence |
+|---|---|---|
+| **D8/E19** median denoiser | **fixed** | `tools/window_stability.py:718` computes `residual = net − (exposure_i / sum_exposure) * sum_net`; the docstring names the defect and quotes their numbers |
+| **E15** `TIMEFRAME.endswith("h")` | **fixed** | all five sites are guarded: `key.endswith("h") and key[:-1].isdigit()` — `4h` parses as 4 hours, not 1 |
+| **E4** correlation skipped in `equal` mode | **fixed** | `engine/ensemble.py:222` carries the comment "Correlation dampening used to be skipped in `equal` and `manual` modes", applied at 231; pinned by `tests/test_ensemble_correlation.py` |
+| **E2** `stop_coverage` written, read by nobody | **fixed** | read at `engine/observability.py:513` and raises a critical alert; plus `audit_position_protection` in ops_monitor and `tests/test_position_protection_audit.py` |
+| **E3** `margin_model` written by adapters, read by nothing | **fixed** | read at `services/ops_monitor_service/__init__.py:84` |
+
+Five of five checked items are closed, and each carries a regression test rather than
+only a code change — which is the difference between a bug being fixed and a bug being
+*unable to come back*.
+
+Two of their findings remain unverifiable from here without running the pipeline:
+**E14** (`disk_cache_dir` resolved against CWD) and **E17** (`evaluate_at` argument
+order). Both are behavioural rather than lexical.
+
+## What this changes about the record
+
+Their catalogue is not a list of live bugs. It is a list of **defects this repository
+has already fixed and now has tests for** — which makes it something rarer than an
+error log: a set of *named, closed, regression-pinned* failure modes.
+
+That is worth more than an open list, and it is the natural endpoint for this kind of
+work. A catalogue nobody has closed is a complaint. A catalogue where every entry names
+a test is an inventory of what the system can no longer do to you.
 
 | quantity | this session | parallel session |
 |---|---|---|
