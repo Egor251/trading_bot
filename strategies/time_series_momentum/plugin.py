@@ -50,6 +50,27 @@ class TimeSeriesMomentumPlugin(StrategyPlugin):
     PLUGIN_ID = "time_series_momentum"
     PLUGIN_NAME = "Time Series Momentum (12m, vol-scaled)"
     RUN_MODE = PluginRunMode.CONTINUOUS
+    #: Declared so the search space is countable.
+    #:
+    #: This plugin read three numeric parameters and published no schema, so
+    #: `variants_available` fell back to the explored count and its configuration
+    #: space entered the multiplicity denominator as 1 -- silently, because an
+    #: absent schema and a schema permitting one variant look identical downstream.
+    #: It was also the one real strategy never measured. Both trace to the same
+    #: omission.
+    #:
+    #: Bounds are the standard time-series-momentum range (1-12 months for the
+    #: lookback, a monthly-ish volatility window) and 1%-50% annualised target
+    #: volatility, which brackets what a volatility-scaled book would use. They are
+    #: a judgement about the strategy, stated here rather than buried, because the
+    #: size of this schema is what sets the denominator.
+    CONFIG_SCHEMA = {
+        "lookback": {"type": "int", "default": 252, "min": 20, "max": 504},
+        "vol_window": {"type": "int", "default": 30, "min": 5, "max": 120},
+        "target_vol": {"type": "float", "default": 0.10, "min": 0.01, "max": 0.50},
+        "quantity": {"type": "float", "default": 0.01},
+        "class_code": {"type": "str", "default": "CRYPTO"},
+    }
 
     def warmup_bars(self) -> int:
         return int(self.config.get("lookback", 252) or 252) + 2

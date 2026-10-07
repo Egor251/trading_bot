@@ -71,6 +71,14 @@ DEFAULT_LINEUP = (
     "parabolic_sar_follow", "stochastic_reversion",
     "volatility_breakout_example", "volume_impulse_example", "vwap_reversion",
     "mean_reversion_example",
+    # The control. `random_baseline` has no edge by construction
+    # (`trade_probability: 0.08`), so it belongs in the store and must never clear.
+    # A batch containing it can report whether the machinery manufactures edges --
+    # which is the one check no synthetic fixture in the test suite provides.
+    "random_baseline",
+    # The one real strategy that was never measured, and the only one besides the
+    # fixture that published no CONFIG_SCHEMA. Both facts were the same omission.
+    "time_series_momentum",
 )
 
 #: Tickers, from `clearance_table.py`'s default and the shipped snapshot. Two at

@@ -2044,6 +2044,58 @@ So the deferred ML lead's precondition is now concrete rather than rhetorical: a
 least **88% of the configuration space of this repo has never been searched**, and
 the one real strategy that was skipped is also the one with no declared surface.
 
+### The control passes its check — and one piece of plumbing is still dead
+
+`time_series_momentum` now declares a `CONFIG_SCHEMA`: `lookback` (20–504),
+`vol_window` (5–120), `target_vol` (1%–50% annualised). Those are the three numeric
+parameters it reads, and the bounds are the standard time-series-momentum range —
+stated in the plugin rather than buried, because the size of that schema is what sets
+the denominator.
+
+Both missing strategies are now measured, bringing the lineup to 22:
+
+```
+universe 247   (2 new strategies x 3 tickers)
+PBO        0.895   495 splits   worse_than_random
+verdict    unstable_selection
+RC p       0.0020   reject
+best       heikin_ashi_trend
+```
+
+**`random_baseline` — the control — fails, which is the point of including it.** It
+has no edge by construction (`trade_probability: 0.08`), and the gate blocks it on six
+checks: `ci_excludes_zero`, `profit_factor`, `mean_oos_pnl`, `tickers_robust`,
+`multiplicity`, `batch_unstable_selection`. `live_ok=False`, `observe_ok=False`.
+
+It returned a *positive* mean out-of-sample (+15.38, p = 0.153). That is not a
+failure — it is the noise floor behaving as the null calibration says it should, and
+six independent checks catching it is the machinery doing exactly its job. If the
+control ever clears, every number in this log is void, and now that check runs on
+every regeneration rather than living in a synthetic fixture.
+
+### What is still broken: `variants_available` does not reach the record
+
+The empty-base-class fix stopped the placeholder being *accepted*, and the standalone
+inventory now finds 20 of 23 schemas with **488 available / 428 unsearched = 88%**.
+But after a full regeneration with the corrected `phantom_service`, every stored
+entry still has `variants_available: None` and
+`variants_available_lifetime: 12` — which is the **explored** count accumulated over
+four runs, not the schema space.
+
+So the field is computed in `phantom_service` and does not survive into the digest's
+provenance. The trace was not finished. Consequences, stated rather than assumed:
+
+- The gate's universe is **still** the explored count, not the 488 available.
+- `universe: 247` is strategies × tickers × accumulated explored variants, and it is
+  not the number the Sullivan correction wants.
+- The 88% figure above comes from the standalone inventory, which reads the schema
+  directly and is correct. The *gate's* denominator is not.
+
+This is the same class of failure as the one just fixed, one level downstream: a
+value computed in the right place and not arriving where it is read. Until it lands,
+`universe_basis: available` is a setting with no effect on the number, and the runbook
+should not pretend otherwise.
+
 ### The first p-value written here was wrong, and failed silently
 
 The bootstrap p-value added to `block_bootstrap_mean_ci` was first computed as
