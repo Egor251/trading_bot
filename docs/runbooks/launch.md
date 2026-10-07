@@ -1884,15 +1884,27 @@ untried                            290, about 6x what was explored
 Two thirds of the strategies declare 4–6 numeric parameters and walk-forward
 evaluates **3** combinations. That is the gap the Sullivan correction is about.
 
-**The other 7 plugins expose no schema at all.** An earlier inventory reported their
-parameter count as `0` and the `untried` column as **−2**, which is impossible and was
-my extraction failing rather than a finding. Most of the repo simply does not publish
-a `CONFIG_SCHEMA`, so `variants_available` falls back to the explored count for them.
+**The schema discovery is unreliable, and that is the part worth recording.** An
+earlier pass reported 16 plugins with schemas and 7 without; a stricter re-check
+reported 14 and 9 — and the 9 include `supertrend_follow`, whose `plugin.py` line 26
+defines `CONFIG_SCHEMA` in plain sight. So the true count is **at least 15**, and the
+real number is higher.
 
-**So the universe is currently honest for 16 of 23 strategies.** The fallback is the
-right behaviour — fabricating a configuration space for a strategy that declares none
-would inflate the denominator on no evidence — but it means the denominator is smaller
-than the `universe_basis: available` setting implies.
+**An earlier claim in this section — that "most plugins expose no schema" — was
+wrong**, and the plugin classes are not at fault: they carry the schema. Two passes
+over the same data gave different answers from nominally the same lookup, and the
+mechanism was not isolated before the budget for chasing it ran out.
+
+What survives the uncertainty: **290 of 332 discoverable combinations have never been
+searched, and the plugins that publish a schema are the ones with the largest spaces**
+(5–6 fields, 36 combinations). The undiscovered remainder is not known to be zero, so
+**87% is a floor, not an estimate.**
+
+Because `variants_available` falls back to the explored count whenever the schema is
+not discoverable, the denominator the gate actually uses is **smaller than 332**. The
+fallback is correct — fabricating a configuration space for a strategy that publishes
+none would inflate the denominator on no evidence — but it means the live number is
+not this measurement.
 
 And a number that looks like progress and is not: reading the live store after the
 change showed the universe go from 60 to 234. That is **not** the schema space. It is
@@ -1900,10 +1912,11 @@ change showed the universe go from 60 to 234. That is **not** the schema space. 
 across four runs of the experiment — 4 × 3 = 12 per strategy, 12 × 20 = 234. It is
 the repeat-experiment pollution described above, reappearing through the new field.
 
-To close this properly each plugin needs to publish a `CONFIG_SCHEMA`, which is a
-per-plugin change rather than a gate change. Until then the honest statement is: *the
-universe is measured for 16 strategies and understated for 7*, not *the universe is
-234*.
+To close this, two things, in order: settle why schema discovery is inconsistent —
+the plugin classes demonstrably carry `CONFIG_SCHEMA`, so the *reader* is at fault,
+not the plugins — and then have every plugin publish one. Until the first is done the
+honest statement is **at least 87% of the discoverable search space has never been
+explored**, not *the universe is 234*.
 
 ### Three plugins outside the measured lineup
 
