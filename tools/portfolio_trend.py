@@ -65,11 +65,26 @@ from host.bootstrap import ensure_code_base_path  # noqa: E402
 
 ensure_code_base_path()
 
-#: Liquid majors plus the higher-beta names the repo already trades, so the
-#: portfolio spans regimes rather than three versions of one asset.
+#: Fixed before any result was seen, chosen for *asset-class* coverage rather than
+#: for performance: US sectors, developed ex-US, emerging, long Treasuries, gold,
+#: dollar strength, and the index itself.
+#:
+#: The cohort is survivorship-free in the way that matters and the check is worth
+#: stating: every member begins on the same date, 2010-12-03, because that is when
+#: the ETFs begin. So there is no earlier history to select on, and no delisted
+#: name quietly missing from the list. The survivorship trap that rules out using
+#: current S&P constituents back to 1990 does not apply here.
+#:
+#: XLRE is excluded: it begins 2015-10-08 and is 2768 bars, short of the registered
+#: 3502. Including it would mean shortening the design after seeing the data.
 INSTRUMENTS = (
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT",
-    "ADA/USDT", "AVAX/USDT", "LINK/USDT",
+    "^GSPC",   # US large-cap equity
+    "XLK", "XLE", "XLF", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB",
+    "EFA",     # developed ex-US
+    "EEM",     # emerging
+    "TLT",     # long Treasuries -- the diversifier TSMOM lives on
+    "GLD",     # gold
+    "UUP",     # dollar strength
 )
 
 LOOKBACK = 252          # 12 months, the paper's default
@@ -108,8 +123,17 @@ async def main() -> int:
         (work / "data").mkdir(parents=True, exist_ok=True)
         _seed_sandbox_rules(work / "data")
         cfg = build_sandbox_config(
-            work / "config" / "trading_bot.yaml", data_root=work / "data",
-            enable_plugins=("time_series_momentum",),
+            work / "config" / "trading_bot.yaml",
+            data_root=work / "data",
+            extra_overrides={
+                # `_SANDBOX_DISABLED_SERVICES` contains `historical_data_service`.
+                # Without this override every fetch fails with "yahoo adapter
+                # unavailable (yfinance)" -- which reads as a missing package and
+                # is not one. It cost a wrong diagnosis the first time.
+                "services.historical_data_service.enabled": True,
+                "services.historical_data_service.auto_start": True,
+                "services.historical_data_service.disk_cache_ttl_sec": 60,
+            },
         )
         os.environ["TRADING_DATA_DIR"] = str(work / "data")
         core = TradingBotCore(cfg)
@@ -121,27 +145,24 @@ async def main() -> int:
         for sym in INSTRUMENTS:
             try:
                 bars = await hist.fetch(
-                    sym, class_code="CRYPTO", provider="ccxt",
-                    timeframe="1d", limit=1500,
+                    sym, class_code="INDEX", provider="yahoo",
+                    timeframe="1d", limit=5000,
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"{sym:12} fetch failed ({type(exc).__name__})")
+                print(f"{sym:8} fetch failed ({type(exc).__name__})")
                 continue
             closes = [float(b.close) for b in (bars or []) if float(b.close or 0) > 0]
             series[sym] = closes
-            print(f"{sym:12} {len(closes):>5} bars  "
+            print(f"{sym:8} {len(closes):>5} bars  "
                   f"{closes[0]:.4g} -> {closes[-1]:.4g}")
 
-        # The registered design does not fit the available history, and the
-        # honest move is to say so rather than shrink the windows until it runs.
         need = LOOKBACK + VOL_WINDOW + BARS_PER_WINDOW * WINDOWS + 2
         have = min((len(c) for c in series.values()), default=0)
         print()
         print(f"  registered design needs {need} daily bars per instrument "
               f"({LOOKBACK} signal + {VOL_WINDOW} vol + "
               f"{BARS_PER_WINDOW * WINDOWS} evaluation)")
-        print(f"  available: {have}. Binance daily depth is ~3336 and this fetch "
-              f"returned {have}.")
+        print(f"  available: {have}")
 
         if have <= need:
             print()
@@ -204,11 +225,11 @@ async def main() -> int:
 
     windows = [port[i:i + BARS_PER_WINDOW] for i in range(0, need, BARS_PER_WINDOW)]
     member_windows = {
-        s: [w for i, w in enumerate(members[s]) if i < need][
-            j * BARS_PER_WINDOW:(j + 1) * BARS_PER_WINDOW
-        ][0:BARS_PER_WINDOW]
+        s: [
+            members[s][j * BARS_PER_WINDOW:(j + 1) * BARS_PER_WINDOW]
+            for j in range(WINDOWS)
+        ]
         for s in syms
-        for j in range(WINDOWS)
     }
 
     rng = random.Random(20261013)
