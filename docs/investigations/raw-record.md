@@ -588,18 +588,65 @@ adx_di_trend     searched 3 of 16   untried 13
 `time_series_momentum` schema added: lookback (20–504), vol_window (5–120),
 target_vol (0.01–0.50), quantity, class_code.
 
-**Universe reading that is not progress:**
+**Universe readings, in the order they were taken — two of them wrong:**
 
 ```
-universe_basis=explored    universe 60
-universe_basis=available   universe 234
+(1) universe_basis=explored    universe 60
+(2) universe_basis=available   universe 234      ← wrong, twice
+(3) universe_basis=explored    universe 64
+(4) universe_basis=available   universe 727      ← correct
 ```
 
-234 is not the schema space. It is `variants_available_lifetime` falling back to the
-explored count and accumulating it across four runs (4 × 3 = 12, × 20 = 234).
+Reading (2) was not the schema space. `variants_available` was absent from the record,
+so `variants_available_lifetime` fell back to the explored count and accumulated it
+across four runs (4 × 3 = 12, × 20 = 234). Then — after the field landed — it was
+computed under the run's own `max_variants` cap of 12, so it reported **12 for every
+strategy** while the schemas permit 16 or 36, and 12 × 22 ≈ 247.
 
-**Still dead:** `variants_available` is None on every stored entry. The gate's
-denominator is the explored count.
+Corrected to size the available space at the schema's own bound (36). Reading (4) is
+the real one, and it is **11.4× the explored denominator**.
+
+## S2-14b · `variants_available` — CLOSED
+
+Two faults, both found only by checking the record on disk rather than trusting the
+arithmetic:
+
+1. **Written nowhere.** `record_digest_clearance` accumulated the cumulative field and
+   never stored the per-run value. Computed → read → consumed → absent.
+2. **Sized by the wrong cap.** `max_variants` is the caller's speed choice, so the
+   available space could never exceed the explored one. A field that always equals the
+   searched count is worse than no field: it looks measured.
+
+Pinned by tests asserting the value is on disk and survives a reload — the batch
+arithmetic worked the entire time the record was empty.
+
+## S2-19 · Error catalogue, final
+
+| # | error | how it surfaced |
+|---|---|---|
+| 1 | `_interval_days("1d")` = 1.0 → 300 requested, ~206 returned | silent truncation |
+| 2 | cost total reset per position open → net == gross, +120% on a zero-ρ series | known-answer check |
+| 3 | research 10 bps/fill vs product 7 | decomposing costs |
+| 4 | bootstrap p from observed mean's position in its own bootstrap | p=0.975 for mean 3.0 |
+| 5 | `t < BAR` with positive bar, negative t | column passed every negative reading |
+| 6 | spread divided by σ again | 4175 bps = 42% |
+| 7 | `var**2` vs registered `var` | contradicted registered text |
+| 8 | verdict direction inverted | noise batch passed |
+| 9 | trimming worst performers from a maximum | byte-identical at trim 0 and 0.3 |
+| 10 | `not_evaluable` reported as `no_batch_edge` | live snapshot, 20 strategies |
+| 11 | `phantom_service` writes to live gate unconditionally | inspected store before promoting |
+| 12 | passing the config block returned the fallback | values identical to shipped |
+| 13 | `config.get()` with no key → TypeError | service load test |
+| 14 | `CONFIG_SCHEMA = {}` placeholder, discovery alphabetical | two passes disagreed |
+| 15 | `resolvable_phi` as significance test on fat tails | t=8.54 below a 0.0352 floor |
+| 16 | per-fill compared with per-trade | 12.8× vs 25.6× |
+| 17 | **`variants_available` never written** | **CLOSED — entry had None** |
+| 18 | **`variants_available` sized by the run's cap** | **CLOSED — reported 12, schema permits 36** |
+
+**Shared signature:** wrong in a plausible direction, plausible units, exactly where a
+reader would not look twice. Errors 17 and 18 are the purest instance — both invisible
+to any test that exercised the arithmetic, and both only visible by reading the
+persisted record.
 
 ## S2-15 · MOEX
 
@@ -683,7 +730,8 @@ f69c39f  Measure the universe: available space, not explored space
 | 14 | `CONFIG_SCHEMA = {}` placeholder, discovery alphabetical | two passes disagreed |
 | 15 | `resolvable_phi` used as significance test on fat tails | t=8.54 below a 0.0352 floor |
 | 16 | per-fill compared with per-trade | 12.8× vs 25.6× |
-| 17 | `variants_available` computed, never reaches the record | still open |
+| 17 | `variants_available` computed, never written to the record | **CLOSED** — see S2-14b |
+| 18 | `variants_available` sized by the run's `max_variants` cap | **CLOSED** — reported 12, schema permits 36 |
 
 **Shared signature:** wrong in a plausible direction, plausible units, exactly where a
 reader would not look twice.

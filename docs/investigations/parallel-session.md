@@ -146,7 +146,10 @@ work, or evidence that nobody looked at the other's work.
 
 ## Still open, across both records
 
-1. **`variants_available` does not reach the record** — this session, unresolved.
+1. ~~**`variants_available` does not reach the record**~~ — **CLOSED.** Two faults:
+   never written to the clearance entry, and sized by the run's own `max_variants`
+   cap so it could never exceed the explored count. Correct denominator on the
+   product's own lineup: **727 against 64**.
 2. **`disk_cache_dir` against CWD** — parallel session's E14, status in this tree
    unverified.
 3. **A config knob shipped under the wrong section** — parallel session's E21; this

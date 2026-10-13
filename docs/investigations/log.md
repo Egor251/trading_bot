@@ -339,14 +339,15 @@ direction, with plausible units, right where a reader would not look twice.**
 - Not that 88% of the search space is worthless. Only that it was never searched.
 - Not that these are all the errors. Only that these are the ones that were caught.
 
-## Open when the log was started
+## Open when the log was started, and its current state
 
-1. **`variants_available` does not reach the record.** Computed in `phantom_service`,
-   absent from the provenance the digest sees, `variants_available_lifetime` carrying
-   the *explored* count instead. Narrowed to two candidates — a second provenance block
-   on another path, or an allow-list in `digest_walk_forward` / `record_digest_clearance`
-   — and **not resolved**. Until it lands, `universe_basis: available` is a setting with
-   no effect on the number.
+1. ~~**`variants_available` does not reach the record.**~~ — **CLOSED.** It was two
+   faults, not one: the field was computed and read but never written to the clearance
+   entry, and it was sized by the run's own `max_variants` cap, so it could never
+   exceed the explored count and always looked measured while being the searched
+   number. Correct denominator on the product's lineup: **727 against 64**, a factor
+   of 11.4 that the gate had been ignoring. Both were invisible to any test that
+   exercised the arithmetic rather than the persisted record.
 2. **Signed order flow is unobtainable.** `ccxt.fetch_ohlcv` returns six columns;
    Binance's taker-buy volume (raw kline fields 9–10) is discarded. The permanent-vs-
    temporary impact split is untestable without an exchange-specific raw endpoint.

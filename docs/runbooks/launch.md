@@ -2073,28 +2073,43 @@ six independent checks catching it is the machinery doing exactly its job. If th
 control ever clears, every number in this log is void, and now that check runs on
 every regeneration rather than living in a synthetic fixture.
 
-### What is still broken: `variants_available` does not reach the record
+### `variants_available` reached the record, and it was wrong twice on the way
 
-The empty-base-class fix stopped the placeholder being *accepted*, and the standalone
-inventory now finds 20 of 23 schemas with **488 available / 428 unsearched = 88%**.
-But after a full regeneration with the corrected `phantom_service`, every stored
-entry still has `variants_available: None` and
-`variants_available_lifetime: 12` — which is the **explored** count accumulated over
-four runs, not the schema space.
+Two distinct faults, both leaving the Sullivan denominator silently incorrect.
 
-So the field is computed in `phantom_service` and does not survive into the digest's
-provenance. The trace was not finished. Consequences, stated rather than assumed:
+**First: the field was computed, read, and never written.** `record_digest_clearance`
+accumulated `variants_available_lifetime` but never stored the per-run value, so every
+entry had `variants_available: None` and the cumulative field fell back to the
+explored count. Computed in `phantom_service`, read by `research_digest`, consumed by
+the batch verdict, absent from the record — the same shape as `adjust_pvalues`:
+reachable, correct, and not connected to where the number is read from.
 
-- The gate's universe is **still** the explored count, not the 488 available.
-- `universe: 247` is strategies × tickers × accumulated explored variants, and it is
-  not the number the Sullivan correction wants.
-- The 88% figure above comes from the standalone inventory, which reads the schema
-  directly and is correct. The *gate's* denominator is not.
+**Second, and worse: it was computed under the run's own cap.** `max_variants` is a
+speed choice made by the caller, so sizing the available space by it guarantees the
+answer equals the explored count and can never report that more was reachable — which
+is the only question the field exists to answer. It reported **12 for every strategy**
+while the schemas permit 16 or 36. A field that always equals the searched count is
+worse than no field, because it looks measured.
 
-This is the same class of failure as the one just fixed, one level downstream: a
-value computed in the right place and not arriving where it is read. Until it lands,
-`universe_basis: available` is a setting with no effect on the number, and the runbook
-should not pretend otherwise.
+Both fixed. Measured on the product's own lineup, 22 strategies × 3 tickers:
+
+```
+universe_basis = explored     universe 64
+universe_basis = available    universe 727      11.4x larger
+verdict unstable_selection    PBO 0.895          unchanged
+```
+
+**The gate was correcting over 64 when the reachable space is 727.** Every p-value it
+reported was optimistic by that factor, in the direction that flatters a strategy.
+
+The verdict does not move — an unstable selection was already failing on PBO alone,
+and no amount of extra correction can rescue a batch whose ranking is a coin flip.
+What changes is that the correction is now honest about its denominator instead of
+being optimistic by an order of magnitude and silent about it.
+
+The tests assert the field is **on disk and survives a reload**, not that the batch
+arithmetic works — the arithmetic worked the whole time the record was empty, which is
+exactly how this survived two sessions.
 
 ### The first p-value written here was wrong, and failed silently
 
