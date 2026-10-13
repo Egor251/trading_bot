@@ -280,6 +280,14 @@ def record_digest_clearance(
         # the number of discarded attempts.
         "evaluations_count": evaluations,
         "variants_tried_lifetime": lifetime_variants,
+        # This run's available space. It was computed in `phantom_service` and read
+        # by `research_digest`, and then never written here — so every stored entry
+        # had `variants_available: None` while `variants_available_lifetime` silently
+        # fell back to the explored count and accumulated it. The field looked alive
+        # in the code and was absent from the data, which is the same failure as
+        # `adjust_pvalues`: correct, reachable, and not connected to where the number
+        # is actually read from.
+        "variants_available": _i(digest.get("variants_available")),
         # Cumulative *available* configuration space, which is the number the
         # multiplicity correction should use. `variants_tried_lifetime` is kept
         # because it answers a different and still useful question: how much was

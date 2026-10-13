@@ -114,6 +114,81 @@ def test_available_basis_uses_the_wider_number():
     assert out["notes"]["universe_basis"] == "available"
 
 
+def test_the_available_count_is_actually_written_to_the_record(tmp_path):
+    """The bug this file exists beside: computed, read, and never stored.
+
+    `variants_available` was produced in `phantom_service`, read by
+    `research_digest`, used by `batch_research_verdict` — and absent from the
+    clearance entry, because `record_digest_clearance` wrote the cumulative
+    `variants_available_lifetime` and not the per-run value it accumulates. Every
+    stored entry had `None`, and the cumulative field silently fell back to the
+    explored count.
+
+    Asserting the number the *batch* computes is not enough: that worked while the
+    record was empty, which is exactly how it survived. This asserts the field is on
+    disk.
+    """
+    import json
+
+    from engine.research_digest import digest_walk_forward
+    from engine.research_gate import load_clearance, record_digest_clearance
+
+    store = tmp_path / "clearance.json"
+    digest = digest_walk_forward({
+        "provenance": {
+            "strategy_id": "s1", "ticker": "BTCUSDT", "class_code": "crypto",
+            "timeframe": "4h", "variants_count": 3, "variants_available": 36,
+            "data_end": "2026-10-01", "data_start": "2024-01-01",
+        },
+        "oos": {
+            "mean_oos_pnl": 1.0, "ci_low": 0.0, "ci_high": 2.0, "p_value": 0.2,
+            "folds": 8, "total_oos_trades": 60, "win_rate": 0.5,
+            "profit_factor": 1.3,
+        },
+        "holdout": {"pnl": 5.0, "trades": 14, "bars": 120},
+        "chosen": {},
+    })
+    assert digest["variants_available"] == 36
+    assert record_digest_clearance(digest, path=store) is not None
+
+    on_disk = json.loads(store.read_text(encoding="utf-8"))
+    entry = next(iter(on_disk["entries"].values()))
+    assert entry["variants_available"] == 36
+    assert entry["variants_available_lifetime"] == 36
+    # And the value survives a reload, not just the write.
+    assert load_clearance(store)["entries"]["s1::BTCUSDT"][
+        "variants_available"
+    ] == 36
+
+
+def test_the_gate_row_exposes_it_too(tmp_path):
+    """The batch reads the row, so the row has to carry it."""
+    from engine.research_digest import digest_walk_forward
+    from engine.research_gate import (
+        evaluate_live_readiness,
+        record_digest_clearance,
+    )
+
+    store = tmp_path / "clearance.json"
+    digest = digest_walk_forward({
+        "provenance": {
+            "strategy_id": "s2", "ticker": "BTCUSDT", "class_code": "crypto",
+            "timeframe": "4h", "variants_count": 3, "variants_available": 36,
+            "data_end": "2026-10-01", "data_start": "2024-01-01",
+        },
+        "oos": {
+            "mean_oos_pnl": 1.0, "ci_low": 0.0, "ci_high": 2.0, "p_value": 0.2,
+            "folds": 8, "total_oos_trades": 60, "win_rate": 0.5,
+            "profit_factor": 1.3,
+        },
+        "holdout": {"pnl": 5.0, "trades": 14, "bars": 120},
+        "chosen": {},
+    })
+    record_digest_clearance(digest, path=store)
+    row = evaluate_live_readiness("s2", ticker="BTCUSDT", path=store)
+    assert row["variants_available_lifetime"] == 36
+
+
 def test_explored_basis_is_available_and_narrower():
     """A judgement rather than a fact, so it stays a setting and is named in the
     report -- a reader has to be able to see which reading produced a number."""

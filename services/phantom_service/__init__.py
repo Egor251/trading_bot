@@ -1311,8 +1311,19 @@ class PhantomService(BaseService):
         # with `max_variants=36` returns a different winner. Correcting over the
         # explored count alone is therefore lenient by exactly the ratio between
         # them, which for these strategies is about 6x.
+        # At the schema's own bound, NOT at this run's `max_variants`. The cap is a
+        # speed choice made by the caller, so computing the available space under it
+        # guarantees the answer is exactly the explored count and can never report
+        # that more was reachable -- which is the entire question. With the run's cap
+        # of 12 this reported 12 for every strategy while the schemas permit 16 or 36,
+        # and a field that always equals the searched count is worse than no field:
+        # it looks measured.
+        #
+        # 36 is walk_forward's own documented default and the bound used by the
+        # standalone inventory, so the two agree.
+        _AVAILABILITY_CAP = 36
         variants_available = len(
-            schema_search_variants(schema, max_variants=max_v)
+            schema_search_variants(schema, max_variants=_AVAILABILITY_CAP)
         ) if schema else len(vars_)
 
         series: dict[str, list[float]]
