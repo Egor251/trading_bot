@@ -87,6 +87,42 @@ Worth noting what it is *not*: it appeared alongside changes to
 `historical_data_service` and after they were reverted, so it does not correlate
 with any specific edit made in this line of work.
 
+## Registering a hypothesis — read this before writing the criterion
+
+Full index with verdicts: `docs/investigations/REGISTER.md` (R-01…R-32). This
+section is the checklist that index is meant to be read alongside.
+
+**1. A relative test cannot be a profitability criterion without a zero benchmark.**
+R-19 passed 4 of 4 windows at p90 on a portfolio whose total was **−1.70**, with all
+fifteen members negative. "Beats random timing" measures losing less than a
+neighbour. If the criterion is relative, pair it with an absolute one or it will pass
+on a losing strategy.
+
+**2. Validate the instrument on a known-answer case before reporting from it.** Every
+expensive wrong number in this log came from a tool nobody checked against a case
+whose answer was already known: `p = 0.975` for a mean of 3.0 with an interval
+excluding zero; `+120%` on a zero-autocorrelation series; `+901 bps` at p95 to a
+strategy with zero trades; a Reality Check passing 4/4 on a losing portfolio. None
+would have been caught by reading the code.
+
+**3. Report evaluations *and* distinct candidates.** They answer different questions
+and diverge whenever a search re-evaluates correlated candidates. Trivial for a grid;
+the whole difficulty for evolution.
+
+**4. Census the space before searching it.** A search failing to find a signal that is
+not there proves nothing. Enumerate the space first, establish that a good answer
+exists, and only then does a search failure mean something.
+
+**5. Correct over the *available* space, not the explored one.** 64 against 727 here —
+a factor of 11.4 the gate was silently ignoring. Both numbers belong on the page.
+
+**6. Distinguish "not evaluable" from "negative".** Twenty strategies once read as
+twenty refutations when no test had run.
+
+**7. When two readers disagree about the same data, the disagreement is about a
+reader.** It was the alphabetical position of an empty base class, and neither session
+could have explained it alone.
+
 ## Research gate
 
 `trading.live_readiness` is **enforced** at Consilium start-up. Any member of

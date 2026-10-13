@@ -1,6 +1,7 @@
 # Raw record: every registration, criterion, number and output
 
-The evidentiary layer. `log.md` is the summary, `narrative.md` is the reasoning.
+The evidentiary layer. [`REGISTER.md`](REGISTER.md) is the index and carries the
+verdict for each row here; `log.md` is the summary, `narrative.md` is the reasoning.
 This file is what was actually registered and what came back, in order, without
 compression — so that nothing rests on a retelling.
 
@@ -732,6 +733,99 @@ f69c39f  Measure the universe: available space, not explored space
 | 16 | per-fill compared with per-trade | 12.8× vs 25.6× |
 | 17 | `variants_available` computed, never written to the record | **CLOSED** — see S2-14b |
 | 18 | `variants_available` sized by the run's `max_variants` cap | **CLOSED** — reported 12, schema permits 36 |
+| 19 | **portfolio null built by permuting the window it tests** — `_costed` depends only on `sum(legs)` and the count of non-zero legs, both permutation-invariant, so all 40 draws are one number and `w >= p90` is arithmetic | portfolio and p90 columns **identical to 4 dp in all four windows**; known-answer test with a flat −50%/bar series also scores 4/4 |
 
 **Shared signature:** wrong in a plausible direction, plausible units, exactly where a
-reader would not look twice.
+reader would not look twice. #19 is the purest instance of it in the catalogue: the
+table looked right because `portfolio` and `p90 of null` agreeing is exactly what a
+passing test looks like.
+
+---
+
+## S2-20 · Portfolio TSMOM on 15 ETFs — and a null that could not fail
+
+**This section was missing.** The experiment ran, was committed (`b8b602e` registered
+it, `871f2bf` recorded the result), and its numbers appeared only in a commit message
+and a tool docstring. No document held them. That is catalogue error #17's class —
+computed, committed, never persisted — committed by the same session that catalogued
+#17. Found while writing `REGISTER.md`, which required a number no document contained.
+
+Re-run to recover the record rather than reconstruct it from memory.
+
+Registered: `tools/portfolio_trend.py` docstring. 252-bar signal, 252-bar vol window,
+40% target vol, equal weight, the product's own 7 bps/fill read from config, 15 ETFs,
+4 windows × 749 bars, 40 null seeds.
+
+```
+  window    portfolio   p90 of null
+       1      -0.5955       -0.5955  Y
+       2      -0.1516       -0.1516  Y
+       3      -0.4292       -0.4292  Y
+       4      -0.5242       -0.5242  Y
+
+  portfolio windows at or above p90: 4/4
+  portfolio total : -1.7005
+  best member     : XLK -0.0479
+  equal-weight of members: -1.1858
+
+  H1 FAILS / H2 FAILS / H3 FAILS
+```
+
+All 15 members negative, from XLK −0.0479 to XLE −2.5070.
+
+### The two columns should not have been equal
+
+They are equal to four decimal places in **every** window. A p90 drawn from 40
+permutations of a 749-bar window does not reproduce that window's total to 4 dp four
+times running. The first read of this table — recorded in commit `871f2bf` and in
+`narrative.md` before this section existed — was that the *criterion* was defective,
+because "beats random timing" is a relative test that a losing portfolio can pass.
+
+That diagnosis was **incomplete, and wrong about the cause**. The relative-test
+objection is real and general. It is not what happened here. The null had no variance
+at all:
+
+```python
+def _costed(legs):
+    gross  = sum(legs)                    # invariant under permutation
+    active = sum(1 for x in legs if x != 0)  # invariant under permutation
+    return gross - active * COST_BPS / 1e4
+```
+
+Shuffling `legs` reorders the window without changing either term. So
+`_costed(shuffled) == _costed(window)` for every permutation, all 40 draws in a window
+are the same number, `p90` of a constant is that constant, and `w >= p90` is `True` for
+**any** portfolio whatsoever.
+
+### Known-answer check
+
+`tests/test_portfolio_null_degenerate.py`, four tests, all pass:
+
+| check | result |
+|---|---|
+| `_costed` invariant under permutation | exhaustive over 8 elements, 500 sampled shuffles of 700 |
+| variance of the 40 null draws | exactly 0.0 |
+| a flat −50%-per-bar portfolio vs its null | scores 4/4 |
+| the 4/4 figure at three different seeds | 4, 4, 4 |
+
+A criterion that passes a strategy engineered to lose is not a weak test. It is no
+test. H1 could not have failed, so **H1 is NOT EVALUABLE** and the 4/4 is withdrawn.
+
+### What stands
+
+The portfolio total, all fifteen member totals, and H2/H3 are unaffected — none of them
+touch the null. The experiment is a clean negative: TSMOM as a portfolio on these ETFs
+lost money, and diversification did not rescue it.
+
+### The null was not replaced
+
+Swapping a null after seeing that it degenerates is the criterion-shopping registered
+against in `portfolio_trend.py` and `narrative.md`. A corrected null — resampling
+*which* bars are held, so the cost term can vary — is a different hypothesis and has to
+be registered as one. It is not run.
+
+The earlier finding survives in corrected form. The lesson is not "relative tests are
+weak" but stronger and less comfortable: **a null that is invariant under the
+transformation it applies cannot reject anything, and its agreement with the observed
+value looks exactly like a pass.** That is a visibility failure of the same family as
+#1, #5, #10 and #17 — right in the place nobody checks twice, because the numbers agree.

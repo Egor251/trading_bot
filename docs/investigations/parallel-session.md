@@ -3,6 +3,7 @@
 Material from a second session working the same repository. Kept separate because it
 is a **different conversation** with its own provenance, its own direct/second-hand
 split, and its own errors — several of which this session has no record of at all.
+Its hypotheses are indexed as **R-26…R-32** in [`REGISTER.md`](REGISTER.md).
 
 That session had no filesystem access and could not write these files itself. They
 arrived as pasted text.

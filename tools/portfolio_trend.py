@@ -271,8 +271,11 @@ async def main() -> int:
         ok = w >= p90
         cleared += 1 if ok else 0
         print(f"  {j + 1:>7} {w:>+12.4f} {p90:>13.4f}  {'Y' if ok else '.'}")
+    spread = max(nulls[0]) - min(nulls[0])
     print(f"\n  portfolio windows at or above p90: {cleared}/{WINDOWS}  "
           f"(calibrated floor is 21.8%, nominal would be 0.4/4)")
+    print(f"  null spread in window 1: {spread:.10f}  "
+          f"-- see the H1 verdict below before reading that as a result")
     print()
     for s in sorted(syms):
         m = sum(member_net[s])
@@ -287,21 +290,33 @@ async def main() -> int:
     print("=" * 72)
     print("REGISTERED VERDICT")
     print("=" * 72)
-    h1 = cleared >= 2
     h2 = sum(port_net) > sum(member_net[best_member])
     h3 = sum(port_net) > sum(
         sum(member_net[s]) for s in syms
     ) / len(syms)
-    print(f"  H1 beats random timing ({cleared}/{WINDOWS}): "
-          f"{'HOLDS' if h1 else 'FAILS'}")
     print(f"  H2 beats its best member: {'HOLDS' if h2 else 'FAILS'}")
     print(f"  H3 beats the average member: {'HOLDS' if h3 else 'FAILS'}")
-    if not h1:
-        print()
-        print("  The portfolio rule does not clear its own null. The single-asset")
-        print("  result was the whole of it, and the diversification is not doing")
-        print("  anything here. Parameters were the registered ones and were not")
-        print("  tuned, so this is a refutation rather than a failure to find.")
+    print()
+    print("  H1 beats random timing: NOT EVALUABLE")
+    print()
+    print("    The registered null is degenerate. `_costed` uses only the sum of a")
+    print("    window and the count of its non-zero legs, and both are invariant")
+    print("    under permutation -- so shuffling the window returns the window. All")
+    print(f"    {SEEDS} draws in a window are the same number, p90 of a constant is")
+    print("    that constant, and the comparison holds by arithmetic for any")
+    print("    portfolio. A flat -50%-per-bar series also scores 4/4.")
+    print()
+    print("    So the 4/4 reported on the first run was not evidence about this")
+    print("    portfolio; it is what the test prints when it cannot fail. The null")
+    print("    is NOT redefined here: swapping it after seeing that it degenerates")
+    print("    is the criterion-shopping this project registered against. A")
+    print("    corrected null -- resampling which bars are held, so the cost term")
+    print("    can vary -- has to be registered and run as its own hypothesis.")
+    print()
+    print("    What is left of this experiment is unaffected and is a negative:")
+    print(f"    portfolio total {sum(port_net):+.4f}, all {len(syms)} members")
+    print("    negative, and H2/H3 both fail. Diversification is not adding")
+    print("    anything here.")
     return 0
 
 

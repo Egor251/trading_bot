@@ -1,8 +1,9 @@
 # Investigation narrative: the reasoning chain, not the results
 
-Companion to `log.md`. That file says what was measured. This one says **what we were
-thinking between the measurements**, why each next step was chosen, and what made a
-result change our mind or fail to.
+Companion to `log.md`, and indexed by [`REGISTER.md`](REGISTER.md) — every hypothesis
+below carries an R-number there. This file says **what we were thinking between the
+measurements**, why each next step was chosen, and what made a result change our mind
+or fail to.
 
 Same sourcing rule. Session 2 is direct. Session 1 is reconstructed from its summary
 and is marked where the reasoning is second-hand — the *decisions* survive, the
@@ -450,6 +451,64 @@ t-statistic finds most significant.
 
 ---
 
+## The portfolio test, and the first diagnosis we got wrong
+
+MOEX closed the crypto question by showing the effect was venue-specific. That left
+one honest reason to keep looking: **maybe the finding is not in the market but in the
+combination.** The paper's claim is about diversification — that a time-series momentum
+rule applied across many instruments beats the same rule on one. Testing it on one
+asset would test a different claim.
+
+So: 15 survivorship-free ETFs, 2010–2026, registered parameters taken from the paper
+and not tuned — 252-bar signal, 252-bar volatility window, 40% target, equal weight, the
+product's own 7 bps/fill read from config rather than assumed. H1 beat random timing,
+H2 beat its best member, H3 beat its average member.
+
+The result came back 4/4 on H1 with a portfolio total of **−1.7005** and all fifteen
+members negative. That contradiction was noticed immediately, and diagnosed as what it
+superficially resembles: a relative test that a losing strategy can pass. "Beats random
+timing" measures losing less than a neighbour, which is not the same as paying. We wrote
+that down as rule 1 of the register, generically enough to apply, and moved on.
+
+**That diagnosis was wrong about the cause, and the rule built on it was not sound.**
+
+The re-run that recovered the numbers showed `portfolio` and `p90 of null` agreeing to
+four decimal places in all four windows. A p90 from 40 permutations of a 749-bar window
+does not reproduce that window's total four times running. The columns agreed because
+the null could not differ from the thing it was testing:
+
+```python
+gross  = sum(legs)                      # permutation-invariant
+active = sum(1 for x in legs if x != 0) # permutation-invariant
+```
+
+Shuffling the window reorders returns without changing either term. All 40 draws in a
+window are the same number; p90 of a constant is that constant; `observed >= p90` holds
+for **any** portfolio. A flat −50%-per-bar series also scores 4/4 — pinned now in
+`tests/test_portfolio_null_degenerate.py`.
+
+So H1 was never a relative test with a weakness. It was a test that could not fail, and
+the relative-test rule was inferred from an instrument that had no variance to be
+relative in. Had the numbers been copied from a commit message instead of re-derived —
+which is exactly what they were about to be — the whole finding would have been
+committed intact: a correct-sounding methodological warning, resting on nothing.
+
+**What we did not do is redefine the null.** Replacing it after seeing that it degenerates
+is the criterion-shopping this project registered against in the first place. A corrected
+null has to resample *which bars are held*, so the cost term can vary, and it has to be
+registered and run as its own hypothesis. It has not been written.
+
+H2 and H3 never touched the null. Both fail: −1.7005 against a best member of −0.0479
+and an equal-weight average of −1.1858. TSMOM as a portfolio lost money on this data and
+diversification did not rescue it. That is a clean negative and it stands.
+
+The generalisable lesson is not the one we first wrote down. It is the first rule in the
+register now: **check that the null can vary before reading anything against it.** A
+null invariant under the transformation it applies cannot reject anything, and its
+agreement with the observed value looks exactly like a pass.
+
+---
+
 ## The through-line
 
 Six registered searches found nothing. Then we spent the rest of the effort finding out
@@ -458,3 +517,12 @@ own instruments were wrong, one of them rewrote the gate without saying so, and 
 tool hid half the repository's search space by alphabetical accident.
 
 Not one of the six verdicts changed. Almost everything underneath them did.
+
+The portfolio test is the one that closes this out, and not in the way it was meant to.
+It was run to find out whether diversification could rescue a negative result, and what
+it found instead was a criterion that reported success for two sessions while being
+incapable of reporting failure — alongside a real, standing negative about TSMOM on
+equities that nobody had recorded.
+
+The last finding was obtained by looking for a number a document should have contained
+and did not. The gap was the defect's only remaining trace.

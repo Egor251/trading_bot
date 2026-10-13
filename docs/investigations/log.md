@@ -1,5 +1,19 @@
 # Investigation log: how this system concluded nothing was there
 
+**Start with [`REGISTER.md`](REGISTER.md)** — it indexes every hypothesis registered
+across both sessions with its criterion and verdict. This file is the narrative
+summary; the register is the table you look things up in.
+
+| document | what it is |
+|---|---|
+| [`REGISTER.md`](REGISTER.md) | every hypothesis, criterion, verdict — the index |
+| `log.md` | this file: the summary |
+| [`narrative.md`](narrative.md) | the reasoning between the measurements |
+| [`raw-record.md`](raw-record.md) | the data as printed, including wrong runs |
+| [`parallel-session.md`](parallel-session.md) | a second session, and the conflicts |
+| [`HOW-TO-REGENERATE.md`](HOW-TO-REGENERATE.md) | prompt to produce this from a transcript |
+| [`HANDOFF-neuroevolution.md`](HANDOFF-neuroevolution.md) | registration for an unfinished check |
+
 Not a paper. Not a conclusion. A record of an attempt to find an edge in crypto
 markets that failed, kept in the order it failed, including the parts where the
 instrument was wrong.

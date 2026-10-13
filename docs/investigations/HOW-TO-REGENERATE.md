@@ -1,7 +1,7 @@
 # Prompt: how to produce this kind of investigation journal
 
 Copy the block below into a fresh session, attach the raw dialogue, and it should
-produce the same three-layer artifact. The notes after the block explain what each
+produce the same four-layer artifact. The notes after the block explain what each
 part is for and why the failure list is the part that matters.
 
 ---
@@ -19,7 +19,7 @@ NOT the results — it is the record of how the reasoning moved and how the inst
 were repeatedly wrong.
 
 YOUR TASK
-Produce three files, in order, from the transcript only. Do not add anything you
+Produce four files, in order, from the transcript only. Do not add anything you
 cannot point at in the transcript. Where you are inferring, say so.
 
 === FILE 1: log.md — the summary ===
@@ -36,7 +36,8 @@ Built around DECISION MOMENTS, not results. The shape of each entry:
   - therefore what was decided next, and what was ruled out
 Critical: include the moments where nothing moved. Six consecutive negative results
 that did not change anyone's mind is more informative than a list of the results.
-Also include moments where a confident answer was later withdrawn.
+Also include moments where a confident answer was later withdrawn — and moments
+where the first diagnosis of a failure was itself wrong about the cause.
 Mark clearly anywhere you are reconstructing reasoning that the transcript only
 summarises. Decisions survive a summary; hesitations do not. Do not invent them.
 
@@ -44,7 +45,20 @@ summarises. Decisions survive a summary; hesitations do not. Do not invent them.
 Every registration with its criterion as fixed in advance. Every measurement with
 its actual output, including runs that were wrong. Numbers exactly, not rounded into
 smoothness. If a run printed something absurd, print it absurd — that is often how it
-was caught.
+was caught. If a result exists only in a commit message or a docstring and in no
+document, say so: that gap is itself a finding, and recovering the numbers means
+RE-RUNNING the tool, not citing the summary.
+
+=== FILE 4: REGISTER.md — the index ===
+One row per hypothesis: id, statement, criterion as fixed in advance, denominator
+(explored AND available — these differ enormously), data, verdict. Fix the verdict
+vocabulary first and use it for every row: HOLDS / FAILS / NOT EVALUABLE / ANSWER /
+CLOSED, plus HOLDS-CRITERION-DEFECTIVE for the case where the criterion was met but
+would have passed on a losing result. Then the derived rules — each must name the
+experiment that paid for it — and a status count. Then a CORRECTION LOG for the
+register itself: every error caught in it during assembly, with what was written,
+what was actual, and how it was wrong. A register built by reading other registers
+drifts from them; the log is what makes the drift visible.
 
 DISCIPLINE RULES — these are the point, not the formatting
 1. Pre-registration. Every test records the criterion that was fixed BEFORE data was
@@ -86,6 +100,18 @@ document. Check specifically for these, which is where this domain actually fail
     reader, and the cause is usually iteration order or an early exit that stops on a
     base class or a placeholder
   - a cost total reset inside a loop, so net equals gross
+  - a null that cannot vary: built by transforming the data with a statistic that is
+    invariant under that transformation (e.g. permuting a window while comparing a
+    statistic that depends only on the window's sum and active count). All draws are
+    one number, the comparison holds by arithmetic for ANY input including a
+    deliberately catastrophic one, and the agreement of the two columns IS the
+    defect — it looks exactly like a pass. The check is the spread of the null,
+    printed before any comparison is read
+  - a withdrawn result edited quietly: a verdict that is retracted must stay in the
+    record with its reason, and NOT EVALUABLE is neither a soft FAILS nor a pass
+  - a result that exists nowhere except a commit message or a docstring: computed,
+    committed, never persisted. Recovering it means re-running the tool, and the
+    re-run — not the summary — is what the record cites
 
 STYLE
 - Prefer the specific number over the adjective.
@@ -106,10 +132,14 @@ mark it as inference and continue. Marking is free; being wrong is not.
 
 ## Notes on the prompt
 
-**Why three files rather than one.** The summary answers "what was measured", the
-narrative answers "why that came next", and the raw record answers "show me". A
-reader who distrusts a claim can go straight to the numbers; a reader who wants the
-reasoning gets the reasoning without the tables in the way.
+**Why four files rather than one.** The summary answers "what was measured", the
+narrative answers "why that came next", the raw record answers "show me", and the
+register answers "what was tested, with what criterion, and what happened" in one
+table. A reader who distrusts a claim can go straight to the numbers; a reader who
+wants the reasoning gets the reasoning without the tables in the way; a reader who
+wants the state of the whole investigation gets it without reading anything else.
+The register was added after the portfolio test showed that three documents could
+all lack a result that two sessions believed was recorded.
 
 **Why the error catalogue extraction is mandated rather than suggested.** The
 headline result of a session like this is nearly always "nothing was found", which is

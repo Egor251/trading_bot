@@ -15,6 +15,13 @@ TASK
 Finish a verification that was started and abandoned mid-implementation. Nothing was
 concluded; do not treat any of it as settled.
 
+READ FIRST
+`docs/investigations/REGISTER.md` — the index of all 32 registered hypotheses with
+verdicts (R-01…R-32), the 9 derived rules, and the correction log. The rules are
+**preconditions for the next registration**, not lessons: rules 1 (check the null can
+vary), 4 (report evaluations AND distinct candidates) and 5 (census the space before
+searching it) apply directly to this task. Read them before touching code.
+
 WHAT IS ALREADY ESTABLISHED
 The neural-architecture search space for a small model over 6 features is finite and
 enumerable. Enumeration gives exactly 50 architectures from:
@@ -78,16 +85,33 @@ numerically stable primitive (finite differences, or numpy if it is available). 
 hand-roll more than necessary: the deliverable is the counting result, not the trainer.
 
 THE FAILURE MODE THIS SESSION EXISTS TO AVOID
-At least five bugs in this repository were plausible-looking numbers that were wrong:
+At least six bugs in this repository were plausible-looking numbers that were wrong:
 a bootstrap p-value of 0.975 for a mean of 3.0 with a tight interval excluding zero; a
 cost model reporting +120% on a zero-autocorrelation series; a denoiser crediting +901
 bps at p95 to a strategy with zero trades; a Reality Check passing at 4/4 windows
-while the portfolio lost money in all of them. Every one was caught by a KNOWN-ANSWER
-test — a series whose correct output is not in doubt.
+while the portfolio lost money in all of them; and a portfolio null that printed 4/4
+with its two columns agreeing to four decimal places in every window — because the
+null was built by permuting the window while the statistic compared depended only on
+the window's sum and non-zero count, both permutation-invariant. All 40 draws were one
+number; the comparison held for ANY portfolio, including a flat -50%-per-bar series.
+Every one was caught by a KNOWN-ANSWER test — a series whose correct output is not in
+doubt.
+
+The sixth one carries an extra warning. It was found only because the register
+required numbers that no document contained, which forced a RE-RUN of the tool instead
+of citing a summary. Had the numbers been copied from a commit message, the finding
+would have been committed intact: a correct-sounding methodological warning about a
+test that could not reject anything. So: re-derive, do not cite. And when this task
+produces its numbers, write them into `raw-record.md` and `REGISTER.md` immediately
+(rule 9) — R-19's numbers lived for two sessions in a commit message and a docstring,
+and that gap was the only reason the defect was still findable.
 
 So: before reporting anything from this instrument, run it on a case whose answer is
 known. Fit a pure-noise panel and a pure-signal panel; a broken trainer produces
-plausible scores on both, and a real one does not.
+plausible scores on both, and a real one does not. AND: print the spread of the null
+before reading any comparison against it. Agreement between the observed value and the
+null is indistinguishable from a pass when the null cannot vary — the table agreeing
+to four decimal places WAS the defect (rule 1).
 
 DO NOT
 - Present fitness, loss or accuracy as a result without an out-of-sample number and a
@@ -129,3 +153,11 @@ the condition under which that happens.
 rather than deferred — which is a better outcome than a plugin, because a plugin
 whose fitness curve looks good is precisely the thing this project has been refusing
 to build for two days.
+
+**Status at handoff.** 32 hypotheses registered; error catalogue 19 entries this
+session (23 parallel, 5 of those verified closed here — the catalogues are not
+additive). No hypothesis has returned a tradable edge. R-19 is `NOT EVALUABLE` with
+its 4/4 withdrawn, NOT counted as pass or failure — withdrawn results stay in the
+record with their reason (rule 7). If this task produces a verdict, it enters
+`REGISTER.md` as R-33 or R-34 with the same vocabulary, and any correction to this
+file's own claims goes in that file's correction log, not as a silent edit.
