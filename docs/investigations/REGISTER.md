@@ -231,6 +231,24 @@ where it must, the other only where the answer was planted.
 
 ---
 
+## Session 10 — gate hardening (engineering, not a hypothesis)
+
+`raw-record.md` S11. No new verdict: these are defects in the instrument and
+the enforcement path, fixed and pinned. Missing evidence no longer defaults to
+a pass (p=0.0, clean CI, unavailable PBO); `max_pbo` is live; and the two paths
+that decide what actually trades — Consilium startup and `SET_ENSEMBLE` — now
+call `evaluate_many`, so Holm/RC/SPA/PBO reach the live lineup. A one-member
+lineup has no batch to fail and is reported `not_applicable`, not blocked.
+
+This changes the meaning of the existing verdicts, not their sign: the batch
+was already `unstable_selection`; now the product obeys it. Full suite 1062
+passed; ruff clean. Remaining known defects from the audit, not yet fixed:
+PBO's rank-loss formula inflates the estimate; `universe` (234/727) is computed
+but never enters the correction; canary quantity is a no-op; `gate_status`
+uses default policy instead of the shipped one.
+
+---
+
 ## Rules derived, written down so they are not rediscovered the hard way
 
 Each cost a real experiment to learn. Each is a **precondition for the next

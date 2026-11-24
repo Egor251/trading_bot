@@ -1356,3 +1356,51 @@ first evaluable answer the portfolio-timing question has ever received, and it
 is negative. The portfolio-corrected-null open item is now CLOSED: same-activity
 timing has no variance to test (R-36), and cross-sectional selection loses to
 random (R-37).
+
+---
+
+## S11 · Gate hardening — engineering record (no new hypothesis)
+
+Re-derived from code after the whole-project audit, not from the register. One
+premise produced four defects: *an uncomputable statistic may be replaced by a
+neutral default*. At the gate the neutral default was a pass.
+
+```
+research_digest.py   p_value missing -> 0.0 (most significant possible value)
+research_digest.py   ci missing      -> ci_crosses_zero=False (clean interval)
+research_gate.py     pbo.ok=False    -> "not unstable" -> batch_edge_stable
+research_gate.py     max_pbo from YAML never passed into the verdict
+```
+
+Red-first tests in `tests/test_gate_fail_closed.py` — all four failed for the
+expected reason, then passed after the fix:
+missing p stays None and is blocked by `apply_multiplicity`; missing interval
+reads as crossing zero; an unmeasurable PBO yields `not_evaluable`; `max_pbo`
+is honoured. `evaluate_many` now threads `pol.max_pbo` into the batch verdict.
+
+Second defect: **the decision path did not call the batch gate at all.**
+`_enforce_research_gate` called `evaluate_live_readiness` per id — a function
+that cannot see the set, so Holm/RC/SPA/PBO never applied to what trades.
+`SET_ENSEMBLE` used `live_promotion_blockers`, the same limitation.
+
+```
+disk fixture: 8 interchangeable strategies, 40 folds each
+evaluate_live_readiness per id  -> live_ok True, no blockers
+evaluate_many (batch)           -> PBO 0.965, verdict unstable_selection, live_ok []
+before fix: startup kept all 8; after fix: demotes all 8 with batch_unstable_selection
+```
+
+Both paths now call `evaluate_many`. An N=1 lineup has no selection to correct,
+so the batch family is `not_applicable` there rather than blocking the shipped
+single-strategy config (pinned by a fixture that clears per-strategy).
+
+Also de-timebombed three test fixtures whose hardcoded `data_end: 2026-10-01`
+had become 54 days stale against `max_age_days: 30`, making `live_ok`
+assertions fail for a reason unrelated to the logic under test.
+
+Verification: full suite **1062 passed**, ruff clean, four red-first gate tests
+plus two decision-path tests. Commits `ee42315`, `9c306c1`.
+
+What this does NOT do: it cannot create an edge. It makes the measurement and
+the enforcement honest — after these fixes a strategy can only trade if the
+whole batch family clears, and the batch family still says the ranking is noise.
