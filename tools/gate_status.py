@@ -10,13 +10,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(r"C:\Users\Egor\PycharmProjects\trading_bot")
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from host.bootstrap import ensure_code_base_path  # noqa: E402
 
 ensure_code_base_path()
 
-from engine.research_gate import LiveReadinessPolicy, evaluate_many  # noqa: E402
+from engine.research_gate import evaluate_many, policy_from_config  # noqa: E402
+
+CONFIG_PATH = ROOT / "config" / "trading_bot.yaml"
 
 LINEUP = [
     "adx_di_trend",
@@ -43,7 +45,13 @@ LINEUP = [
 
 
 def main() -> int:
-    policy = LiveReadinessPolicy()
+    import yaml
+
+    # The report must use the shipped policy. Running it with
+    # LiveReadinessPolicy() silently reported the defaults, which differ from
+    # the thresholds the gate actually enforces.
+    raw_cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    policy = policy_from_config(raw_cfg)
     out = evaluate_many(LINEUP, policy=policy)
     rows = out.get("rows") or []
     print(f"{'strategy':26} {'grade':14} {'live':>5}  failing checks (live)")

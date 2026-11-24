@@ -121,11 +121,7 @@ class Position:
     def unrealized_pnl(self) -> float:
         if abs(self.quantity) <= 1e-12:
             return 0.0
-        return (
-            self.quantity
-            * (self.mark_price - self.avg_price)
-            * self.contract_multiplier
-        )
+        return self.quantity * (self.mark_price - self.avg_price) * self.contract_multiplier
 
     def apply_fill(self, signed_qty: float, price: float) -> None:
         if abs(signed_qty) <= 1e-12:
@@ -315,9 +311,7 @@ class OrderManager:
         """Net carry charged (positive = paid out, negative = received)."""
         return float(self._carry_charged)
 
-    def _record_execution_observation(
-        self, intent: Any, record: Any, *, raw: Any = None
-    ) -> None:
+    def _record_execution_observation(self, intent: Any, record: Any, *, raw: Any = None) -> None:
         """Capture what this fill actually cost, so the model can be checked.
 
         Without this the cost model is never tested against reality: every fill
@@ -354,8 +348,9 @@ class OrderManager:
         # Bounded: calibration needs a recent window, and an unbounded list
         # here would grow for the life of the process.
         if len(self._exec_observations) > self._exec_observation_limit:
-            del self._exec_observations[: len(self._exec_observations)
-                                         - self._exec_observation_limit]
+            del self._exec_observations[
+                : len(self._exec_observations) - self._exec_observation_limit
+            ]
 
     def execution_observations(self) -> list[ExecutionObservation]:
         """Recent fills with expected-versus-actual costs, for calibration."""
@@ -492,24 +487,23 @@ class OrderManager:
         kept = [
             f
             for f in ledger
-            if _fill_symbol(f) not in set(targets)
-            and _fill_symbol(f).split(":")[-1] != sym_tail
+            if _fill_symbol(f) not in set(targets) and _fill_symbol(f).split(":")[-1] != sym_tail
         ]
         self.fill_ledger = kept
         pruned_hist: list[Any] = []
         for h in self.history:
             h_sym = str(
-                getattr(h, "symbol", "")
-                or (h.get("symbol") if isinstance(h, dict) else "")
-                or ""
+                getattr(h, "symbol", "") or (h.get("symbol") if isinstance(h, dict) else "") or ""
             )
             if h_sym in set(targets) or h_sym.split(":")[-1] == sym_tail:
                 continue
             pruned_hist.append(h)
         self.history = pruned_hist
-        removed_fills = [
-            f for f in ledger if f not in set(id(x) for x in kept)
-        ]
+        # Identity, not equality against a set of ints: the old predicate
+        # compared each fill object with `id()` values, was always true, and
+        # reversed the cash of fills belonging to positions that stayed open.
+        kept_ids = {id(x) for x in kept}
+        removed_fills = [f for f in ledger if id(f) not in kept_ids]
         # `cash` is a Decimal running total of every fill's cash_delta, while
         # `equity` is recomputed from starting_equity + realised + unrealized -
         # costs. Dropping fills without returning their cash deltas left
@@ -523,7 +517,11 @@ class OrderManager:
         realized = sum(float(p.realized_pnl) for p in self.positions.values())
         unrealized = sum(float(p.unrealized_pnl) for p in self.positions.values())
         self.equity = (
-            float(self.starting_equity) + realized + unrealized - float(self.total_costs)
+            float(self.starting_equity)
+            + realized
+            + unrealized
+            - float(self.total_costs)
+            - float(self.carry_costs)
         )
         self.peak_equity = max(float(self.peak_equity), float(self.equity))
         return {
@@ -593,9 +591,7 @@ class OrderManager:
     ) -> FillRecord:
         """Apply one execution through the shared Decimal cost/fill pipeline."""
         instrument = self._instrument_for(intent)
-        multiplier = Decimal(
-            str(getattr(instrument, "contract_multiplier", Decimal("1")))
-        )
+        multiplier = Decimal(str(getattr(instrument, "contract_multiplier", Decimal("1"))))
         currency = str(getattr(instrument, "currency", self.base_currency))
         venue = str(getattr(instrument, "venue", self.mode or "paper"))
         asset_class = str(
@@ -785,9 +781,7 @@ class OrderManager:
         # kill-switch spam blocks the consilium from normal reduce/rebalance.
         if max_lev > 0 and equity > 0 and not reduces_risk:
             if current_lev > max_lev + 1e-9:
-                return _reject(
-                    f"no_leverage_headroom={current_lev:.3f}>{max_lev:.3f}"
-                )
+                return _reject(f"no_leverage_headroom={current_lev:.3f}>{max_lev:.3f}")
 
         # Snapshot halt without calling check_portfolio_drawdown (it can halt).
         if self.risk.halted and not reduces_risk:
@@ -824,7 +818,8 @@ class OrderManager:
                 dry_run=bool(dry_run),
                 # Day-start equity, not the boot capital. See _roll_day_if_needed.
                 day_start_equity=float(
-                    self._day_start_equity if self._day_start_equity > 0
+                    self._day_start_equity
+                    if self._day_start_equity > 0
                     else self.equity_ex_unrealized
                 ),
                 daily_turnover=float(self._daily_turnover),
@@ -879,9 +874,7 @@ class OrderManager:
         )
         return None, qty
 
-    def preview_risk(
-        self, intent: OrderIntent, *, mark_price: float
-    ) -> dict[str, Any]:
+    def preview_risk(self, intent: OrderIntent, *, mark_price: float) -> dict[str, Any]:
         """Dry-run risk check — no fill, no emergency halt persistence."""
         reject, qty = self._risk_qty(intent, mark_price=mark_price, dry_run=True)
         last = self.risk_trace[-1] if self.risk_trace else {}
@@ -981,9 +974,7 @@ class OrderManager:
         )
         fill_qty = max(0.0, cumulative_qty - previous_qty)
         fill_px = (
-            (cumulative_notional - previous_notional) / fill_qty
-            if fill_qty > 0
-            else reported_px
+            (cumulative_notional - previous_notional) / fill_qty if fill_qty > 0 else reported_px
         )
         if fill_qty > 0:
             fill = self._record_fill(

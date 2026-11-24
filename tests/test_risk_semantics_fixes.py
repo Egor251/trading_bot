@@ -49,9 +49,7 @@ def _manager(equity: float = 100_000.0, **kw) -> OrderManager:
     )
 
 
-def _intent(
-    symbol: str, class_code: str, side: OrderSide, qty: float, price: float
-) -> OrderIntent:
+def _intent(symbol: str, class_code: str, side: OrderSide, qty: float, price: float) -> OrderIntent:
     return OrderIntent(
         symbol=symbol,
         class_code=class_code,
@@ -491,6 +489,27 @@ def test_negative_broker_fee_does_not_abort_the_fill() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_clear_symbol_keeps_cash_of_fills_it_does_not_remove() -> None:
+    """A per-symbol reset must return only that symbol's cash deltas.
+
+    `removed_fills` compared each fill object against a set of `id()` ints, so
+    the predicate was always true and clearing one symbol reversed the cash
+    of every fill in the ledger, including the positions that stayed open.
+    """
+    m = _manager()
+    sber = _intent("SBER", "TQBR", OrderSide.BUY, 10, 285.0)
+    gazp = _intent("GAZP", "TQBR", OrderSide.BUY, 5, 165.0)
+    m._record_fill(sber, quantity=10, price=285.0, raw={})  # noqa: SLF001
+    m._record_fill(gazp, quantity=5, price=165.0, raw={})  # noqa: SLF001
+    kept_delta = sum(float(f.cash_delta) for f in m.fill_ledger if "GAZP" in str(f.symbol))
+    expected = float(m.starting_equity) + kept_delta
+
+    m.clear_symbol("SBER")
+
+    assert float(m.cash) == pytest.approx(expected, abs=1.0)
+    assert m.positions, "the other symbol must remain open"
+
+
 def test_clear_symbol_keeps_cash_consistent() -> None:
     m = _manager()
     intent = _intent("SBER", "TQBR", OrderSide.BUY, 10, 285.0)
@@ -528,9 +547,7 @@ def test_record_fill_is_atomic_on_overfill(tmp_path) -> None:
         capabilities = BrokerCapabilities(native_stop=False, native_oco=False)
 
         async def place(self, order):
-            return replace(
-                order, state=OrderState.ACCEPTED, broker_order_id=f"b-{order.client_id}"
-            )
+            return replace(order, state=OrderState.ACCEPTED, broker_order_id=f"b-{order.client_id}")
 
         async def cancel(self, order, *, idempotency_key):
             return replace(order, state=OrderState.CANCELLED)
@@ -568,8 +585,17 @@ def test_record_fill_is_atomic_on_overfill(tmp_path) -> None:
             )
         )
         over = Fill(
-            "f-1", "b-1", placed.client_id, "bitget", "default", "BTC/USDT",
-            "buy", Decimal("5"), Decimal("100"), datetime.now(UTC), Decimal("0"),
+            "f-1",
+            "b-1",
+            placed.client_id,
+            "bitget",
+            "default",
+            "BTC/USDT",
+            "buy",
+            Decimal("5"),
+            Decimal("100"),
+            datetime.now(UTC),
+            Decimal("0"),
         )
         with pytest.raises(ValueError, match="cumulative"):
             await router.record_fill(over)
@@ -581,8 +607,17 @@ def test_record_fill_is_atomic_on_overfill(tmp_path) -> None:
 
         # A legitimate partial fill does persist, with the order updated together.
         ok = Fill(
-            "f-2", "b-1", placed.client_id, "bitget", "default", "BTC/USDT",
-            "buy", Decimal("1"), Decimal("100"), datetime.now(UTC), Decimal("0"),
+            "f-2",
+            "b-1",
+            placed.client_id,
+            "bitget",
+            "default",
+            "BTC/USDT",
+            "buy",
+            Decimal("1"),
+            Decimal("100"),
+            datetime.now(UTC),
+            Decimal("0"),
         )
         updated = await router.record_fill(ok)
         assert updated.filled_quantity == Decimal("1")
@@ -659,8 +694,13 @@ def test_preview_risk_does_not_mutate_position_marks() -> None:
     key = intent.exposure_key
     assert key in m.positions, list(m.positions)
     before = m.positions[key]
-    before_state = (before.quantity, before.avg_price, before.mark_price,
-                    before.realized_pnl, before.unrealized_pnl)
+    before_state = (
+        before.quantity,
+        before.avg_price,
+        before.mark_price,
+        before.realized_pnl,
+        before.unrealized_pnl,
+    )
     gross_before = m.gross_exposure
 
     m._risk_qty(  # noqa: SLF001

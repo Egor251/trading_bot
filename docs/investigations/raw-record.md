@@ -1438,3 +1438,34 @@ would move every verdict.
 
 Verification: offline 112 passed + 3 self-tests; `--live` PASS; full suite
 **1067 passed**; ruff clean.
+
+---
+
+## S13 · Product ordering — three more wiring defects
+
+No new hypothesis. Three defects from the whole-project audit, each red-first
+and pinned, with the standing verification loop run after every change.
+
+1. **`clear_symbol` corrupted cash (D9 follow-up).** `removed_fills` compared
+   each fill object against a set of `id()` integers — always true — so clearing
+   one symbol reversed the cash deltas of *every* fill, including positions that
+   stayed open. Red test with two symbols: cash restored to 100000 instead of
+   keeping GAZP's −825.58. Fixed by identity comparison against `kept`; the
+   recomputed equity now also includes `carry_costs`, which was omitted.
+2. **Proxy PnL entered the money path.** `estimate_fill_pnl`'s directional
+   fallback (+1 bps on BUY, −1 bps on SELL of notional) was fed by
+   `OpsMonitorService` into `performance.record_trade` and the daily P&L
+   accumulator — a round trip recorded 0 while the account paid two fills.
+   Added `actual_fill_pnl` (explicit fields only, unknown stays unknown) for
+   the money path; the proxy stays for display/LLM callers.
+3. **`gate_status` reported default thresholds.** It used
+   `LiveReadinessPolicy()` instead of `policy_from_config(shipped YAML)`, so
+   the operator report judged against a policy the gate did not enforce. Fixed
+   with an injectable `CONFIG_PATH` and a test that feeds a different config
+   and asserts the captured policy changes.
+
+Verification after the increment: `run_verification.py` offline **141 passed**
++ 3 known-answer self-tests, full suite **1072 passed**, ruff clean. The
+historical re-derivation from S12 is unchanged — none of these fixes can
+manufacture an edge; they stop the product from reporting and enforcing the
+wrong thing.

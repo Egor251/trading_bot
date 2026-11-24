@@ -42,6 +42,8 @@ def _quarantine_policy(raw: dict) -> QuarantinePolicy:
         consecutive_failures=max(1, int(raw.get("consecutive_failures", 3))),
         min_samples=max(1, int(raw.get("min_samples", 20))),
     ).validated()
+
+
 from engine.runtime import get_runtime
 from host.events import publish_ops_alert
 from engine.paths import data_dir, data_path
@@ -51,6 +53,7 @@ def _log():
     import logging
 
     return logging.getLogger("ops_monitor")
+
 
 if TYPE_CHECKING:
     from microkernel_core import MicrokernelCore
@@ -168,10 +171,12 @@ class OpsMonitorService(BaseService):
     async def on_initialize(self) -> None:
         root = Path(__file__).resolve().parents[2]
         alerts_path = root / str(
-            self.config.get("alerts_path") or data_path("ops", "alerts.jsonl").relative_to(data_dir())
+            self.config.get("alerts_path")
+            or data_path("ops", "alerts.jsonl").relative_to(data_dir())
         )
         journal_path = root / str(
-            self.config.get("journal_path") or data_path("ops", "trades.jsonl").relative_to(data_dir())
+            self.config.get("journal_path")
+            or data_path("ops", "trades.jsonl").relative_to(data_dir())
         )
         self.alerts = AlertBus(path=alerts_path)
         tg_token = str(self.config.get("telegram_bot_token") or "").strip()
@@ -206,16 +211,12 @@ class OpsMonitorService(BaseService):
             self.config.get("cost_reconcile_every_sec") or 3600.0
         )
         self._last_cost_reconcile_ts = 0.0
-        self._cost_reconcile_min_samples = int(
-            self.config.get("cost_reconcile_min_samples") or 30
-        )
+        self._cost_reconcile_min_samples = int(self.config.get("cost_reconcile_min_samples") or 30)
         # The cost model is the plugin's own block, read by dotted path the way the
         # rest of this service reads config -- `config.get()` takes a key and
         # passing none is a TypeError, not "give me everything".
         self._cost_model = cost_model_from_config(
-            dict(
-                (await self.core.config.get("services.phantom_service", {})) or {}
-            )
+            dict((await self.core.config.get("services.phantom_service", {})) or {})
         )
         # Bounded, because this is a sample of recent fills and an unbounded list
         # in a long-running process is a leak dressed as a feature.
@@ -223,9 +224,7 @@ class OpsMonitorService(BaseService):
             maxlen=int(self.config.get("cost_reconcile_window") or 500)
         )
         self._cost_report: dict[str, Any] | None = None
-        self._protection_audit_sec = float(
-            self.config.get("protection_audit_sec") or 30.0
-        )
+        self._protection_audit_sec = float(self.config.get("protection_audit_sec") or 30.0)
         # The Prometheus exporter existed but nothing imported it, so all ten
         # alerts in ops/prometheus/alerts.yml could never fire.
         from engine.observability import OperationsObservability
@@ -245,9 +244,7 @@ class OpsMonitorService(BaseService):
         # cut weights and scale risk; a member at 0.25 weight is still trading.
         # This is the actuator that can actually take a degraded strategy out of
         # the live lineup while leaving it observable.
-        self.quarantine = StrategyQuarantine(
-            _quarantine_policy(dict(perf.get("quarantine") or {}))
-        )
+        self.quarantine = StrategyQuarantine(_quarantine_policy(dict(perf.get("quarantine") or {})))
         setattr(self.core, "ops", self)
 
     async def start(self) -> None:
@@ -358,9 +355,7 @@ class OpsMonitorService(BaseService):
         if alert is None:
             return
         try:
-            instance_id = str(
-                await self.core.config.get("instance.id", "local") or "local"
-            )
+            instance_id = str(await self.core.config.get("instance.id", "local") or "local")
         except Exception:
             instance_id = "local"
         body = alert.to_dict() if hasattr(alert, "to_dict") else dict(alert or {})
@@ -488,10 +483,7 @@ class OpsMonitorService(BaseService):
             self._fill_samples.append(
                 ExecutionObservation(
                     fill_id=str(
-                        payload.get("fill_id")
-                        or payload.get("trade_id")
-                        or payload.get("id")
-                        or ""
+                        payload.get("fill_id") or payload.get("trade_id") or payload.get("id") or ""
                     ),
                     venue=str(payload.get("venue") or order.get("venue") or ""),
                     symbol=symbol,
@@ -549,50 +541,23 @@ class OpsMonitorService(BaseService):
     async def _on_fill(self, event: KernelEvent) -> None:
         payload = event.payload or {}
         order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
-        status = str(
-            payload.get("status") or order.get("status") or ""
-        ).lower()
+        status = str(payload.get("status") or order.get("status") or "").lower()
         success = payload.get("success")
         if status not in {"filled", "partial", "accepted"} and success is not True:
             return
-        symbol = str(
-            payload.get("symbol")
-            or payload.get("ticker")
-            or order.get("ticker")
-            or ""
-        )
-        side = str(
-            payload.get("side")
-            or payload.get("action")
-            or order.get("action")
-            or ""
-        )
+        symbol = str(payload.get("symbol") or payload.get("ticker") or order.get("ticker") or "")
+        side = str(payload.get("side") or payload.get("action") or order.get("action") or "")
         try:
             qty = float(
-                payload.get("filled_qty")
-                or payload.get("quantity")
-                or order.get("quantity")
-                or 0
+                payload.get("filled_qty") or payload.get("quantity") or order.get("quantity") or 0
             )
             price = float(
-                payload.get("avg_price")
-                or payload.get("price")
-                or order.get("price")
-                or 0
+                payload.get("avg_price") or payload.get("price") or order.get("price") or 0
             )
-            fee = float(
-                payload.get("fee")
-                or payload.get("cost")
-                or order.get("cost")
-                or 0
-            )
+            fee = float(payload.get("fee") or payload.get("cost") or order.get("cost") or 0)
         except (TypeError, ValueError):
             qty, price, fee = 0.0, 0.0, 0.0
-        sid = str(
-            payload.get("strategy_id")
-            or order.get("strategy_id")
-            or ""
-        )
+        sid = str(payload.get("strategy_id") or order.get("strategy_id") or "")
         if self.journal is not None:
             self.journal.record(
                 symbol=symbol,
@@ -612,10 +577,12 @@ class OpsMonitorService(BaseService):
             payload=payload,
             order=order,
         )
-        # Rough signed trade pnl proxy for performance monitor.
-        from engine.research import estimate_fill_pnl
+        # Only an explicitly reported PnL belongs in the performance record.
+        # The directional proxy used for display would net a round trip to
+        # zero while the account paid both fills of fees.
+        from engine.research import actual_fill_pnl
 
-        pnl = estimate_fill_pnl(payload)
+        pnl = actual_fill_pnl(payload)
         if pnl is not None and self.performance is not None:
             self.performance.record_trade(float(pnl))
             self._bump_day_pnl(float(pnl))
@@ -699,11 +666,7 @@ class OpsMonitorService(BaseService):
             prev = str((getattr(ens, "_last_diagnosis", None) or {}).get("regime") or "")
             if regime and prev and regime != prev:
                 regime_changed = True
-        if (
-            not force
-            and not self.performance.needs_diagnostics()
-            and phantom_pnl is None
-        ):
+        if not force and not self.performance.needs_diagnostics() and phantom_pnl is None:
             return {"ok": True, "skipped": True}
         diagnosis = self.performance.classify(
             phantom_pnl=phantom_pnl,
@@ -757,26 +720,18 @@ class OpsMonitorService(BaseService):
         protection = getattr(runtime, "protection", None)
         if protection is None:
             return {"skipped": "no_protection_layer"}
-        unprotected = [
-            key for key in open_keys if not protection.has_protection(key)
-        ]
+        unprotected = [key for key in open_keys if not protection.has_protection(key)]
         # A stop the venue will not honour as reduce-only protects against loss
         # but can reverse the book if it triggers flat. That is not the same as
         # having no stop, and it is not the same as having a good one, so it is
         # counted separately rather than folded into coverage as if equal.
-        weak = [
-            key
-            for key in open_keys
-            if key in getattr(runtime, "_native_stop_weak_spots", {})
-        ]
+        weak = [key for key in open_keys if key in getattr(runtime, "_native_stop_weak_spots", {})]
         coverage = (len(open_keys) - len(unprotected)) / len(open_keys)
         # Strict coverage excludes weak stops. Reported next to the plain number
         # rather than instead of it: both are true, and the gap between them is
         # the size of the reversal risk.
         full_coverage = (
-            (len(open_keys) - len(unprotected) - len(weak)) / len(open_keys)
-            if open_keys
-            else 1.0
+            (len(open_keys) - len(unprotected) - len(weak)) / len(open_keys) if open_keys else 1.0
         )
         # Cross margin shares collateral, so a per-slice stop bounds one
         # position only while the rest of the account is calm. The protection
@@ -805,14 +760,12 @@ class OpsMonitorService(BaseService):
             # stop at all" and "a stop with a known hole".
             alert = self.alerts.emit(
                 "weak_protective_stop",
-                f"{len(weak)} of {len(open_keys)} stops cannot guarantee "
-                "reduce-only at the venue",
+                f"{len(weak)} of {len(open_keys)} stops cannot guarantee reduce-only at the venue",
                 severity=AlertSeverity.WARNING,
                 details={
                     "weak": weak,
                     "reasons": {
-                        key: getattr(runtime, "_native_stop_weak_spots", {})[key]
-                        for key in weak
+                        key: getattr(runtime, "_native_stop_weak_spots", {})[key] for key in weak
                     },
                     "full_coverage": full_coverage,
                 },

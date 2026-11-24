@@ -127,18 +127,35 @@ def _contributor_ids(payload: dict[str, Any], order: dict[str, Any] | None = Non
     return []
 
 
-def estimate_fill_pnl(payload: dict[str, Any]) -> float | None:
-    """Best-effort signed PnL for one execution / phantom fill."""
+def actual_fill_pnl(payload: dict[str, Any]) -> float | None:
+    """PnL the venue or the engine actually reported. Unknown stays unknown.
+
+    No directional fallback: a BUY is not +1 bps of profit and a SELL is not
+    -1 bps. The money path must not invent numbers where none were reported.
+    """
     for key in ("pnl", "realized_pnl", "attributed_pnl"):
         if payload.get(key) not in (None, ""):
             try:
                 return float(payload[key])
             except (TypeError, ValueError):
-                pass
+                continue
+    return None
+
+
+def estimate_fill_pnl(payload: dict[str, Any]) -> float | None:
+    """Best-effort signed PnL for one execution / phantom fill.
+
+    The directional fallback is a DISPLAY proxy, not cash PnL: a BUY scores
+    +1 bps of notional and a SELL -1 bps, so a round trip nets to zero while
+    the account paid two fills of fees. Display callers use this; anything
+    that feeds a performance or daily-PnL accumulator must use
+    `actual_fill_pnl` instead.
+    """
+    explicit = actual_fill_pnl(payload)
+    if explicit is not None:
+        return explicit
     order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
-    action = str(
-        payload.get("action") or (order or {}).get("action") or ""
-    ).upper()
+    action = str(payload.get("action") or (order or {}).get("action") or "").upper()
     try:
         qty = float(payload.get("quantity") or (order or {}).get("quantity") or 0)
         price = float(payload.get("price") or (order or {}).get("price") or 0)
@@ -147,11 +164,7 @@ def estimate_fill_pnl(payload: dict[str, Any]) -> float | None:
     if qty <= 0 or price <= 0:
         return None
     direction = (
-        1.0
-        if action in {"BUY", "LONG"}
-        else -1.0
-        if action in {"SELL", "SHORT", "CLOSE"}
-        else 0.0
+        1.0 if action in {"BUY", "LONG"} else -1.0 if action in {"SELL", "SHORT", "CLOSE"} else 0.0
     )
     if direction == 0.0:
         return None
@@ -195,9 +208,7 @@ def walk_forward_windows(
     return out
 
 
-def slice_series(
-    series: dict[str, list[float]], start: int, end: int
-) -> dict[str, list[float]]:
+def slice_series(series: dict[str, list[float]], start: int, end: int) -> dict[str, list[float]]:
     return {k: list(v[start:end]) for k, v in series.items()}
 
 
@@ -387,9 +398,7 @@ def buy_hold_oos_metrics(
             if atr_series is not None and 0 <= i < len(atr_series):
                 val = atr_series[i]
                 a = float(val) if val is not None else None
-            q = size_quantity(
-                equity=float(start_equity), price=px, config=sizing, atr=a
-            )
+            q = size_quantity(equity=float(start_equity), price=px, config=sizing, atr=a)
             return float(q) if q > 0 else 0.0
         return float(quantity) if quantity is not None else 1.0
 
@@ -462,14 +471,10 @@ def offline_variant_metrics(
         position_mode=position_mode,
     )
     mark_price = float(closes[-1]) if closes else None
-    metrics = equity_pnl(
-        fills, start_equity=float(start_equity), mark_price=mark_price
-    )
+    metrics = equity_pnl(fills, start_equity=float(start_equity), mark_price=mark_price)
     metrics["fills"] = len(fills)
     metrics["exposure"] = exposure_from_fills(fills, total_bars=len(closes))
-    metrics["notional_exposure"] = notional_exposure_from_fills(
-        fills, total_bars=len(closes)
-    )
+    metrics["notional_exposure"] = notional_exposure_from_fills(fills, total_bars=len(closes))
     metrics["config"] = dict(config or {})
     return metrics
 
@@ -612,13 +617,9 @@ def aggregate_journal(
 
     by_strategy = {sid: expectancy_metrics(v) for sid, v in sorted(pnls_by_sid.items())}
     by_regime = {r: expectancy_metrics(v) for r, v in sorted(pnls_by_regime.items())}
-    by_strategy_regime = {
-        k: expectancy_metrics(v) for k, v in sorted(pnls_by_sid_regime.items())
-    }
+    by_strategy_regime = {k: expectancy_metrics(v) for k, v in sorted(pnls_by_sid_regime.items())}
     all_pnls = [x for xs in pnls_by_sid.values() for x in xs]
-    contribution = {
-        sid: float(stats.get("total_pnl") or 0.0) for sid, stats in by_strategy.items()
-    }
+    contribution = {sid: float(stats.get("total_pnl") or 0.0) for sid, stats in by_strategy.items()}
     total_abs = sum(abs(v) for v in contribution.values()) or 1.0
     contribution_share = {sid: v / total_abs for sid, v in contribution.items()}
 
