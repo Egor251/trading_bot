@@ -43,17 +43,13 @@ from engine.simulation import (  # noqa: E402
 
 def _noise(n_strategies: int, n_bars: int, seed: int = 0) -> list[list[float]]:
     rng = random.Random(seed)
-    return [
-        [rng.gauss(0, 1) for _ in range(n_bars)] for _ in range(n_strategies)
-    ]
+    return [[rng.gauss(0, 1) for _ in range(n_bars)] for _ in range(n_strategies)]
 
 
 def _signal(n_strategies: int, n_bars: int, seed: int = 0, drift: float = 0.4):
     """Every strategy carries a real edge."""
     rng = random.Random(seed)
-    return [
-        [rng.gauss(drift, 1.0) for _ in range(n_bars)] for _ in range(n_strategies)
-    ]
+    return [[rng.gauss(drift, 1.0) for _ in range(n_bars)] for _ in range(n_strategies)]
 
 
 def _one_winner(n_strategies: int, n_bars: int, seed: int = 0, drift: float = 0.4):
@@ -142,9 +138,7 @@ def test_reality_check_handles_degenerate_input():
 
 def test_reality_check_is_deterministic():
     series = _noise(10, 400, seed=8)
-    assert reality_check(series, samples=200, seed=9) == reality_check(
-        series, samples=200, seed=9
-    )
+    assert reality_check(series, samples=200, seed=9) == reality_check(series, samples=200, seed=9)
 
 
 # --- SPA -------------------------------------------------------------------
@@ -259,6 +253,26 @@ def test_pbo_flags_instability_that_a_corrected_p_value_cannot_see():
     assert out["strategies"] == 10
     assert out["pbo"] > 0.0
     assert out["logits_mean"] < 0.0
+
+
+def test_pbo_is_rank_degradation_not_the_papers_median_rule():
+    """Pin what this instrument actually measures, including its limitation.
+
+    Ten strategies; the two best are nearly tied and swap halves, the other
+    eight are far behind. The winner stays in the top two in every split. The
+    rank-degradation PBO still reports ~0.30, while the paper's median-based
+    PBO would report 0. This is a documented definition gap, not a passing
+    grade: replacing the metric would lower the interchangeable-batch reading
+    from 0.965 to 0.42 and make the gate pass the instability it exists to
+    catch. Any change has to be pre-registered.
+    """
+    rng = random.Random(31)
+    drifts = [5.0, 4.95] + [3.0 - 0.3 * i for i in range(8)]
+    series = [[rng.gauss(d, 0.15) for _ in range(40)] for d in drifts]
+    out = cscv_pbo(series, splits=8)
+    assert out["ok"] is True
+    assert 0.2 < out["pbo"] < 0.5, f"expected the swap-rate reading: {out['pbo']}"
+    assert out["logits_mean"] < 0.0, "the winner's rank fell on every swap"
 
 
 def test_pbo_reports_how_many_splits_it_actually_used():

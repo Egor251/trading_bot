@@ -1469,3 +1469,36 @@ Verification after the increment: `run_verification.py` offline **141 passed**
 historical re-derivation from S12 is unchanged — none of these fixes can
 manufacture an edge; they stop the product from reporting and enforcing the
 wrong thing.
+
+---
+
+## S14 · PBO definition gap — found, documented, deliberately NOT changed
+
+`cscv_pbo` claimed Bailey & López de Prado's PBO = P(OOS logit < 0), i.e. the
+in-sample winner lands in the bottom half. The code instead compares the OOS
+logit to the IS logit and counts **any** rank drop. Red-first measurement on
+ten strategies whose winner only ever swapped 1st↔2nd:
+
+```
+rank-degradation PBO (as implemented)   0.296875
+paper's median-based PBO                0.0   (winner never left the top two)
+```
+
+Changing the implementation to the paper's definition was tried in full:
+```
+interchangeable batch (8 strategies)   0.965 -> 0.367
+interchangeable batch (10 strategies)  ~0.42
+dominant strategy                      0.0   (unchanged)
+```
+At the gate's fixed `max_pbo: 0.5`, the corrected measure would let those
+interchangeable batches pass as `batch_edge_stable` — it would disable the
+exact check R-18/R-22 were built to provide. With no threshold change allowed
+after seeing results, that is not an acceptable silent fix.
+
+Decision: **keep the statistic, correct the false description, pin the actual
+semantics with a test.** The docstring now states the definition gap and the
+measured magnitudes; `tests/test_reality_check_spa_pbo.py::
+test_pbo_is_rank_degradation_not_the_papers_median_rule` pins the 1st↔2nd
+reading. All PBO numbers in the register (0.895, 0.965, 0.822 …) keep their
+meaning as rank-degradation rates. Switching definitions is a NEW registered
+hypothesis with its own threshold fixed before the run — not a repair.

@@ -243,9 +243,12 @@ lineup has no batch to fail and is reported `not_applicable`, not blocked.
 This changes the meaning of the existing verdicts, not their sign: the batch
 was already `unstable_selection`; now the product obeys it. Full suite 1062
 passed; ruff clean. Remaining known defects from the audit, not yet fixed:
-PBO's rank-loss formula inflates the estimate; `universe` (234/727) is computed
-but never enters the correction; canary quantity is a no-op; `gate_status`
-uses default policy instead of the shipped one.
+PBO's rank-loss formula inflates the estimate (definition gap measured and
+documented in S14; deliberately not changed — switching it would disable the
+instability check at the fixed 0.5 threshold and needs its own registration);
+`universe` (234/727) is computed but never enters the default correction
+(the capability now exists but enabling it would move every verdict); research
+measures on 1d bars while execution runs on 1m forming bars.
 
 ---
 

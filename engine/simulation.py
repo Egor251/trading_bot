@@ -1014,9 +1014,11 @@ def cscv_pbo(
 
     Combinatorially Symmetric Cross-Validation. Every combination of the S/2 in-sample
     and S/2 out-of-sample halves is used, each strategy's performance ranked in both,
-    and the logits of the rank degradation are recorded. The PBO is the share of
-    splits where the in-sample winner was out-of-sample *last* -- an OOS logit below
-    zero.
+    and the logits of the relative rank are recorded in both halves. PBO is the
+    share of splits where the in-sample winner's OOS logit fell BELOW its own
+    in-sample logit -- any rank degradation counts, including a 1st-to-2nd
+    swap. This is a rank-degradation rate, not the median-based PBO of the
+    paper the name refers to; see the note below.
 
     This measures something none of the other tests do, and it is the one this gate
     was blind to. A corrected p-value can pass and the ranking still be meaningless:
@@ -1025,8 +1027,16 @@ def cscv_pbo(
     sample were split differently. That is selection on noise with every reported
     number intact -- p-value significant, Sharpe positive, PBO near one.
 
-    A PBO above 0.5 means the selection procedure is worse than random; 1.0 means the
-    in-sample winner landed out-of-sample dead last every time.
+    A PBO above 0.5 means the in-sample winner finished below its in-sample rank
+    in more than half the splits; 1.0 means it happened every time.
+    NOTE: Bailey & Lopez de Prado define PBO as P(OOS logit < 0), i.e. the winner
+    landed in the bottom half. This implementation compares the OOS logit to
+    the IS logit instead, so it counts every rank drop and reads systematically
+    higher (measured: 0.297 against 0.0 when the winner only swapped 1st/2nd).
+    The numbers recorded in the investigation register use THIS definition.
+    Replacing it changes every verdict and must be a pre-registered hypothesis,
+    not a silent edit -- it would lower an interchangeable batch from 0.965 to
+    0.42 and make the gate pass the very instability it exists to catch.
 
     ``performance`` maps a series index to a performance measure, so the same code
     ranks on Sharpe, on net P&L or on anything else. It defaults to mean return
@@ -1088,12 +1098,13 @@ def cscv_pbo(
         out_order = sorted(range(n_strategies), key=lambda i: out_scores[i])
         in_rank = {s: r for r, s in enumerate(in_order)}
         out_rank = {s: r for r, s in enumerate(out_order)}
-        worst = in_order[-1]
-        rank_is = in_rank[worst]
-        rank_oos = out_rank[worst]
+        winner = in_order[-1]
+        rank_is = in_rank[winner]
+        rank_oos = out_rank[winner]
         denominator = float(n_strategies)
-        # Logit of the relative rank, the measure the paper uses: a winner that ends
-        # up mid-pack gives a negative logit, and dead last gives the extreme one.
+        # Relative rank in each half. The difference is negative when the
+        # winner's OOS rank fell; every drop counts, not just a fall below the
+        # median. See the definition note in the docstring.
         rel_is = (rank_is + 1) / (denominator + 1)
         rel_oos = (rank_oos + 1) / (denominator + 1)
         logits.append(math.log(rel_oos / (1 - rel_oos)) - math.log(rel_is / (1 - rel_is)))
