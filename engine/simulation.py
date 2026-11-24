@@ -145,9 +145,15 @@ class SimOrder:
             self.limit_price = _decimal(self.limit_price, "limit_price")
         if self.stop_price is not None:
             self.stop_price = _decimal(self.stop_price, "stop_price")
-        if self.order_type in {SimOrderType.LIMIT, SimOrderType.STOP_LIMIT} and self.limit_price is None:
+        if (
+            self.order_type in {SimOrderType.LIMIT, SimOrderType.STOP_LIMIT}
+            and self.limit_price is None
+        ):
             raise ValueError("limit_price is required")
-        if self.order_type in {SimOrderType.STOP, SimOrderType.STOP_LIMIT} and self.stop_price is None:
+        if (
+            self.order_type in {SimOrderType.STOP, SimOrderType.STOP_LIMIT}
+            and self.stop_price is None
+        ):
             raise ValueError("stop_price is required")
 
     @property
@@ -241,7 +247,8 @@ class FillSimulator:
         return tuple(
             order
             for order in self._orders
-            if order.status not in {SimOrderStatus.FILLED, SimOrderStatus.CANCELLED, SimOrderStatus.REJECTED}
+            if order.status
+            not in {SimOrderStatus.FILLED, SimOrderStatus.CANCELLED, SimOrderStatus.REJECTED}
         )
 
     def submit(self, order: SimOrder) -> SimOrder:
@@ -351,19 +358,19 @@ class FillSimulator:
             return True
         bid, ask = self._quotes(event)
         if order.side is Side.BUY:
-            trigger = (
-                (ask is not None and ask >= order.stop_price)
-                or (event.high is not None and event.high >= order.stop_price)
+            trigger = (ask is not None and ask >= order.stop_price) or (
+                event.high is not None and event.high >= order.stop_price
             )
         else:
-            trigger = (
-                (bid is not None and bid <= order.stop_price)
-                or (event.low is not None and event.low <= order.stop_price)
+            trigger = (bid is not None and bid <= order.stop_price) or (
+                event.low is not None and event.low <= order.stop_price
             )
         order.triggered = bool(trigger)
         return order.triggered
 
-    def _market_price(self, side: Side, event: MarketEvent, stop_price: Decimal | None = None) -> Decimal | None:
+    def _market_price(
+        self, side: Side, event: MarketEvent, stop_price: Decimal | None = None
+    ) -> Decimal | None:
         bid, ask = self._quotes(event)
         quote = ask if side is Side.BUY else bid
         opening = event.open
@@ -389,14 +396,12 @@ class FillSimulator:
 
         bid, ask = self._quotes(event)
         if order.side is Side.BUY:
-            touched = (
-                (ask is not None and ask <= order.limit_price)
-                or (event.low is not None and event.low <= order.limit_price)
+            touched = (ask is not None and ask <= order.limit_price) or (
+                event.low is not None and event.low <= order.limit_price
             )
         else:
-            touched = (
-                (bid is not None and bid >= order.limit_price)
-                or (event.high is not None and event.high >= order.limit_price)
+            touched = (bid is not None and bid >= order.limit_price) or (
+                event.high is not None and event.high >= order.limit_price
             )
         # Limit fills are kept at the limit, intentionally avoiding optimistic
         # assumptions about the unknowable intrabar path.
@@ -571,19 +576,34 @@ def purged_cv_splits(
 purged_kfold_splits = purged_cv_splits
 
 
-def adjust_pvalues(pvalues: Sequence[float], method: str = "holm") -> list[float]:
-    """Bonferroni, Holm, or Benjamini-Hochberg adjusted p-values."""
+def adjust_pvalues(
+    pvalues: Sequence[float], method: str = "holm", *, n_tests: int | None = None
+) -> list[float]:
+    """Bonferroni, Holm, or Benjamini-Hochberg adjusted p-values.
+
+    ``n_tests`` is the size of the family the p-values were drawn from. It
+    defaults to the number of observed p-values, which is correct only when
+    every member of the family was measured. Sullivan's correction asks for
+    the *available* space instead; passing a larger n makes the adjustment
+    stricter. Using it on the live gate is a separate, pre-registered decision.
+    """
     values = [float(value) for value in pvalues]
     if any(not 0 <= value <= 1 for value in values):
         raise ValueError("p-values must be in [0, 1]")
     n = len(values)
     if n == 0:
         return []
+    if n_tests is not None:
+        n = max(n, int(n_tests))
     method = method.lower().replace("_", "-")
     if method == "bonferroni":
         return [min(1.0, value * n) for value in values]
-    order = sorted(range(n), key=values.__getitem__)
-    adjusted = [0.0] * n
+    # Only observed p-values are ordered; unobserved ones are assumed 1.0 and
+    # sit at the largest ranks, so they cannot lower any observed adjustment.
+    # The family size `n` still scales every step -- that is Sullivan's point.
+    observed = len(values)
+    order = sorted(range(observed), key=values.__getitem__)
+    adjusted = [0.0] * observed
     if method == "holm":
         running = 0.0
         for rank, index in enumerate(order):
@@ -592,7 +612,7 @@ def adjust_pvalues(pvalues: Sequence[float], method: str = "holm") -> list[float
         return adjusted
     if method in {"bh", "fdr-bh", "benjamini-hochberg"}:
         running = 1.0
-        for rank in range(n - 1, -1, -1):
+        for rank in range(observed - 1, -1, -1):
             index = order[rank]
             running = min(running, values[index] * n / (rank + 1))
             adjusted[index] = min(1.0, running)
@@ -603,9 +623,7 @@ def adjust_pvalues(pvalues: Sequence[float], method: str = "holm") -> list[float
 multiple_testing_correction = adjust_pvalues
 
 
-def ar1(
-    values: Sequence[float], *, lags: int | None = None
-) -> dict[str, float]:
+def ar1(values: Sequence[float], *, lags: int | None = None) -> dict[str, float]:
     """OLS of ``x_t`` on ``x_{t-1}`` with a Newey-West standard error.
 
     Lives here rather than in a research tool because the question it answers -- *is
@@ -642,9 +660,7 @@ def ar1(
     long_run = sum(v * v for v in u)
     for offset in range(1, band + 1):
         weight = 1.0 - offset / (band + 1.0)
-        long_run += weight * 2.0 * sum(
-            u[i] * u[i - offset] for i in range(offset, m)
-        )
+        long_run += weight * 2.0 * sum(u[i] * u[i - offset] for i in range(offset, m))
     variance = long_run / (sxx * sxx)
     se = math.sqrt(variance) if variance > 0.0 else 0.0
     return {"phi": phi, "se": se, "t": (phi / se if se > 0 else 0.0), "n": float(m)}
@@ -720,8 +736,11 @@ def implied_spread(values: Sequence[float]) -> dict[str, float]:
     n = len(xs)
     if n < 3:
         return {
-            "gamma1": 0.0, "spread": 0.0, "spread_alt": 0.0,
-            "t": 0.0, "n": float(n),
+            "gamma1": 0.0,
+            "spread": 0.0,
+            "spread_alt": 0.0,
+            "t": 0.0,
+            "n": float(n),
         }
     lead, lag_ = xs[:-1], xs[1:]
     m = len(lead)
@@ -739,9 +758,7 @@ def implied_spread(values: Sequence[float]) -> dict[str, float]:
     long_run = sum(v * v for v in dev_z)
     for offset in range(1, bands + 1):
         weight = 1.0 - offset / (bands + 1.0)
-        long_run += weight * 2.0 * sum(
-            dev_z[i] * dev_z[i - offset] for i in range(offset, m - 1)
-        )
+        long_run += weight * 2.0 * sum(dev_z[i] * dev_z[i - offset] for i in range(offset, m - 1))
     variance = long_run / ((m - 1) * (m - 1)) if m > 1 else 0.0
     se = math.sqrt(variance) if variance > 0.0 else 0.0
     t = gamma1 / se if se > 0 else 0.0
@@ -837,14 +854,10 @@ def _joint_null_maxima(
         draws = _block_resample_means(deviations, samples, rng, b)
         # Centre the bootstrap on zero so the null distribution is of the mean, not
         # of the dispersion; then take its spread as the denominator.
-        var = sum((d - sum(draws) / len(draws)) ** 2 for d in draws) / max(
-            1, len(draws) - 1
-        )
+        var = sum((d - sum(draws) / len(draws)) ** 2 for d in draws) / max(1, len(draws) - 1)
         se_list.append(math.sqrt(max(var, 0.0)) if var > 0 else 0.0)
 
-    stats = [
-        (m / s) if s > 0 else 0.0 for m, s in zip(obs_means, se_list)
-    ]
+    stats = [(m / s) if s > 0 else 0.0 for m, s in zip(obs_means, se_list)]
 
     # Trim by reliability, not by performance. See the docstring: dropping the worst
     # performers cannot change a maximum, so a performance trim is a no-op dressed
@@ -882,9 +895,7 @@ def _joint_null_maxima(
     need = -(-n_bars // b)
     top = n_bars - b
     means_by_strategy = [sum(r) / n_bars for r in rows]
-    centred = [
-        [v - means_by_strategy[i] for v in rows[i][:n_bars]] for i in range(len(rows))
-    ]
+    centred = [[v - means_by_strategy[i] for v in rows[i][:n_bars]] for i in range(len(rows))]
 
     null_stats: list[float] = []
     for _ in range(int(samples)):
@@ -942,11 +953,7 @@ def reality_check(
         "ok": True,
         "strategies": len(stats),
         "max_stat": observed,
-        "best_strategy_index": (
-            max(range(len(stats)), key=lambda i: stats[i])
-            if stats
-            else None
-        ),
+        "best_strategy_index": (max(range(len(stats)), key=lambda i: stats[i]) if stats else None),
         "p_value": p,
         "reject": p < alpha,
         "bootstrap_samples": len(nulls),
@@ -1205,17 +1212,14 @@ def breakeven_vs_cost(
     round_trip = 2.0 * per_fill
     impact_round_trip = round_trip
     if fee_bps is not None and measured_spread_bps is not None:
-        split = decompose_cost(
-            float(fee_bps), per_fill - float(fee_bps), measured_spread_bps
-        )
+        split = decompose_cost(float(fee_bps), per_fill - float(fee_bps), measured_spread_bps)
         impact_round_trip = 2.0 * split["impact_bps"]
     return {
         "edge_bps": edge,
         "cost_bps_full_round_trip": round_trip,
         "shortfall_vs_full": (round_trip / edge) if edge > 0 else float("inf"),
         "cost_bps_impact_round_trip": impact_round_trip,
-        "shortfall_vs_impact": (
-            impact_round_trip / edge) if edge > 0 else float("inf"),
+        "shortfall_vs_impact": (impact_round_trip / edge) if edge > 0 else float("inf"),
     }
 
 
@@ -1302,7 +1306,13 @@ def sensitivity_plateau(
     eligible = [region for region in regions if len(region) >= min_points]
     if not eligible:
         return ()
-    winner = max(eligible, key=lambda region: (len(region), -ordered.index(next(x for x in ordered if x[0] == region[0]))))
+    winner = max(
+        eligible,
+        key=lambda region: (
+            len(region),
+            -ordered.index(next(x for x in ordered if x[0] == region[0])),
+        ),
+    )
     return tuple(winner)
 
 

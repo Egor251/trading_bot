@@ -1404,3 +1404,37 @@ plus two decision-path tests. Commits `ee42315`, `9c306c1`.
 What this does NOT do: it cannot create an edge. It makes the measurement and
 the enforcement honest — after these fixes a strategy can only trade if the
 whole batch family clears, and the batch family still says the ranking is noise.
+
+---
+
+## S12 · Standing verification loop — synthetic + historical
+
+`tools/run_verification.py` is now the single feedback command. Offline:
+12 pytest modules (synthetic / on-disk fixtures) + the three known-answer
+self-tests. `--live` adds fresh BTC 1h klines, the real-data ML run, order flow
+and the fill journal. A non-zero exit from `fill_audit` is registered as an
+EXPECTED FINDING (`NOT EVALUABLE`), not a harness failure.
+
+Latest live re-derivation (new kline window, so numbers differ slightly from
+S9-2/S6-2; conclusions unchanged):
+
+```
+BTCUSDT 1h, 6000 klines, 5993 rows (train 3600 / val 1200 / test 1193)
+census mean 0.5111 sd 0.0122   PBO signal 0.998 / noise 1.000
+ensemble test 0.5130 (< 0.53)   net -0.3906  (R-41 still FAILS both bars)
+order flow C0 +0.3647 (fields real); lags t=-0.61 / +0.35 (H still FAILS)
+fill audit: 0 usable observations out of 9718 journal rows
+```
+
+Tooling fixes in this increment: `apply_canary_quantity` now writes back to
+`plugins.<sid>` (the location it reads from) instead of `raw_cfg[sid]` — the
+canary was a no-op. `adjust_pvalues(..., n_tests=)` and
+`apply_multiplicity(..., universe=)` add Sullivan's available-space correction
+as an explicit capability; a red-first test showed the Holm/BH loops indexed
+unobserved p-values and crashed — fixed by ordering only observed values while
+scaling by the full family. **The live gate's default correction is unchanged**:
+switching it to the universe is a separate, pre-registered decision because it
+would move every verdict.
+
+Verification: offline 112 passed + 3 self-tests; `--live` PASS; full suite
+**1067 passed**; ruff clean.

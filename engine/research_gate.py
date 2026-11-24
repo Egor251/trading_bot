@@ -881,6 +881,7 @@ def apply_multiplicity(
     *,
     alpha: float = 0.05,
     method: str = "holm",
+    universe: int | None = None,
 ) -> dict[str, Any]:
     """Correct a batch of per-strategy verdicts for how many were measured.
 
@@ -921,6 +922,7 @@ def apply_multiplicity(
             "multiplicity_alpha": float(alpha),
             "multiplicity_measured": 0,
             "multiplicity_unknown": 0,
+            "multiplicity_universe": int(universe) if universe is not None else 0,
             "multiplicity_ok": [],
             "multiplicity_fail": [],
         }
@@ -937,10 +939,13 @@ def apply_multiplicity(
     method_norm = str(method or "holm").lower().replace("_", "-")
     adjusted: dict[int, float] = {}
     if raw_p:
+        correction_kwargs = {}
+        if universe is not None and int(universe) > len(raw_p):
+            correction_kwargs["n_tests"] = int(universe)
         try:
-            corrected = adjust_pvalues(raw_p, method_norm)
+            corrected = adjust_pvalues(raw_p, method_norm, **correction_kwargs)
         except ValueError:
-            corrected = adjust_pvalues(raw_p, "holm")
+            corrected = adjust_pvalues(raw_p, "holm", **correction_kwargs)
             method_norm = "holm"
         for index, value in zip(known, corrected):
             adjusted[index] = float(value)
@@ -1030,6 +1035,7 @@ def apply_multiplicity(
         "multiplicity_alpha": alpha_f,
         "multiplicity_measured": len(raw_p),
         "multiplicity_unknown": unknown,
+        "multiplicity_universe": int(universe) if universe is not None else len(items),
         "multiplicity_ok": ok_ids,
         "multiplicity_fail": fail_ids,
     }
@@ -1171,13 +1177,32 @@ def apply_canary_quantity(
     scale_f = float(scale)
     if scale_f <= 0 or scale_f >= 1.0:
         return applied
+
+    def container_for(sid: str) -> dict[str, Any] | None:
+        # Same locations `plugin_params_from_config` reads. Writing to
+        # `raw_cfg[sid]` instead used to report an empty map because the real
+        # config keeps plugin blocks under `plugins.<sid>`.
+        top = raw_cfg.get("plugins")
+        if isinstance(top, dict) and isinstance(top.get(sid), dict):
+            return top
+        if isinstance(raw_cfg.get(sid), dict):
+            return raw_cfg
+        trading = raw_cfg.get("trading")
+        if isinstance(trading, dict):
+            for key in ("plugins", "strategies", "strategy_plugins"):
+                block = trading.get(key)
+                if isinstance(block, dict) and isinstance(block.get(sid), dict):
+                    return block
+        return None
+
     for sid in strategy_ids:
         sid_s = str(sid or "").strip()
-        if not sid_s or sid_s not in raw_cfg:
+        if not sid_s:
             continue
-        block = raw_cfg.get(sid_s)
-        if not isinstance(block, dict):
+        container = container_for(sid_s)
+        if container is None:
             continue
+        block = container[sid_s]
         try:
             qty = float(block.get("quantity"))
         except (TypeError, ValueError):
@@ -1186,6 +1211,5 @@ def apply_canary_quantity(
             continue
         new_qty = qty * scale_f
         block["quantity"] = new_qty
-        raw_cfg[sid_s] = block
         applied[sid_s] = {"quantity_before": qty, "quantity_after": new_qty, "scale": scale_f}
     return applied
