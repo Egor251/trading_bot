@@ -90,9 +90,7 @@ class EnsembleService(BaseService):
         #: behind it, and `decision_baseline` is what makes it useful rather than
         #: merely written.
         self.decisions_store: DecisionStore = DecisionStore(
-            hold_sample_rate=float(
-                (self.config or {}).get("decision_hold_sample_rate") or 0.05
-            )
+            hold_sample_rate=float((self.config or {}).get("decision_hold_sample_rate") or 0.05)
         )
         #: Validated envelopes, keyed by strategy id. Empty means "no opinion
         #: yet" and drift checks must not read that as comfort.
@@ -157,9 +155,7 @@ class EnsembleService(BaseService):
                 path=_resolve_decision_path(str(configured)),
                 hold_sample_rate=float(
                     (self.config or {}).get("decision_hold_sample_rate")
-                    or (self._ensemble_cfg or {}).get(
-                        "decision_hold_sample_rate"
-                    )
+                    or (self._ensemble_cfg or {}).get("decision_hold_sample_rate")
                     or 0.05
                 ),
             )
@@ -171,10 +167,9 @@ class EnsembleService(BaseService):
 
     async def _register_rule_checks(self) -> None:
         async def is_trade_decision(_params: dict[str, Any], payload: dict[str, Any]) -> bool:
-            return (
-                payload.get("event_type") == "ensemble.decision"
-                and str(payload.get("action", "")).upper() in {"BUY", "SELL"}
-            )
+            return payload.get("event_type") == "ensemble.decision" and str(
+                payload.get("action", "")
+            ).upper() in {"BUY", "SELL"}
 
         re = getattr(self.core, "rule_engine", None)
         if re is None:
@@ -275,18 +270,19 @@ class EnsembleService(BaseService):
                 "risk_scale": 1.0,
             }
 
-        if (
-            kind == DiagnosisKind.MARKET_WEAK
-            or "pause_risk_parity_rebalance" in actions
-        ):
+        if kind == DiagnosisKind.MARKET_WEAK or "pause_risk_parity_rebalance" in actions:
             self._rebalance_paused = True
 
         changed = False
         already_cut = bool(self._diagnosis_cut_applied)
-        if kind in {
-            DiagnosisKind.PARAMETER_DRIFT,
-            DiagnosisKind.STRUCTURAL_BREAK,
-        } or "disable_strategy" in actions:
+        if (
+            kind
+            in {
+                DiagnosisKind.PARAMETER_DRIFT,
+                DiagnosisKind.STRUCTURAL_BREAK,
+            }
+            or "disable_strategy" in actions
+        ):
             self._risk_scale = float(
                 self.config.get("diagnosis_risk_scale")
                 or self._ensemble_cfg.get("diagnosis_risk_scale")
@@ -306,9 +302,7 @@ class EnsembleService(BaseService):
                         changed = True
             if changed:
                 self.manager.set_weights(weights)
-                if await self._publish_weights_if_changed(
-                    reason="diagnosis_autoweight"
-                ):
+                if await self._publish_weights_if_changed(reason="diagnosis_autoweight"):
                     self._last_published_weights = dict(self.manager.weights)
         self._diagnosis_cut_applied = True
 
@@ -333,7 +327,9 @@ class EnsembleService(BaseService):
                     profile = plug.risk_profile()
                     arch = str(getattr(profile, "archetype", None) or "trend")
                 except Exception:
-                    arch = str((getattr(plug, "RISK_PROFILE", {}) or {}).get("archetype") or "trend")
+                    arch = str(
+                        (getattr(plug, "RISK_PROFILE", {}) or {}).get("archetype") or "trend"
+                    )
             elif plug is not None:
                 arch = str((getattr(plug, "RISK_PROFILE", {}) or {}).get("archetype") or "trend")
             out[sid] = arch.lower()
@@ -344,9 +340,7 @@ class EnsembleService(BaseService):
 
         The first call always publishes, so a startup state is still observable.
         """
-        current = {
-            str(k): round(float(v), 10) for k, v in (self.manager.weights or {}).items()
-        }
+        current = {str(k): round(float(v), 10) for k, v in (self.manager.weights or {}).items()}
         if self._last_published_weights is not None and current == self._last_published_weights:
             return False
         await self._publish_weights(reason=reason)
@@ -384,44 +378,42 @@ class EnsembleService(BaseService):
         if not ids:
             return ids
         try:
-            from engine.research_gate import (
-                LiveReadinessPolicy,
-                evaluate_live_readiness,
-            )
+            from engine.research_gate import LiveReadinessPolicy, evaluate_many
 
             # `policy_from_config` takes the *whole* config and digs out the
             # `trading` section itself; passing the section again silently
             # yields the default policy, i.e. enforce=True.
             trading_cfg = dict(await self.core.config.get("trading", {}) or {})
-            policy = LiveReadinessPolicy.from_mapping(
-                trading_cfg.get("live_readiness")
-            )
+            policy = LiveReadinessPolicy.from_mapping(trading_cfg.get("live_readiness"))
         except Exception:
             # Fail closed: if the policy cannot be read, nobody gets promoted.
             return []
         if not policy.enforce:
             return ids
+        # The set is what decides. `evaluate_live_readiness` alone cannot see
+        # the other members, so it never applies Holm or RC/SPA/PBO -- the
+        # report would say `unstable_selection` while Consilium kept voting.
+        # evaluate_many is the one function that judges the lineup as a batch.
+        try:
+            verdict = evaluate_many(ids, policy=policy)
+        except Exception:
+            # An unusable gate must not silently promote anyone.
+            return []
+        by_id = {str(r.get("strategy_id")): r for r in verdict.get("rows") or []}
         keep: list[str] = []
         demoted: list[dict[str, Any]] = []
         for sid in ids:
-            try:
-                verdict = evaluate_live_readiness(sid, policy=policy)
-            except Exception:
-                # An unusable gate must not silently promote anyone.
-                demoted.append({"strategy_id": sid, "reason": "gate_error"})
-                continue
-            if verdict.get("live_ok"):
+            row = by_id.get(str(sid)) or {}
+            if row.get("live_ok"):
                 keep.append(sid)
             else:
                 demoted.append(
                     {
                         "strategy_id": sid,
-                        "reason": ",".join(
-                            str(b.get("reason")) for b in verdict.get("blockers") or []
-                        )
-                        or f"grade={verdict.get('grade')}",
-                        "grade": verdict.get("grade"),
-                        "score": verdict.get("score"),
+                        "reason": ",".join(str(b.get("reason")) for b in row.get("blockers") or [])
+                        or f"grade={row.get('grade') or 'no_verdict'}",
+                        "grade": row.get("grade"),
+                        "score": row.get("score"),
                     }
                 )
         if not demoted:
@@ -435,9 +427,7 @@ class EnsembleService(BaseService):
             "research gate demoted %d Consilium member(s) from live to observe: %s. "
             "Set trading.live_readiness.enforce=false to override.",
             len(demoted),
-            ", ".join(
-                f"{d['strategy_id']}({d['reason']})" for d in demoted
-            ),
+            ", ".join(f"{d['strategy_id']}({d['reason']})" for d in demoted),
         )
         try:
             await publish_ensemble_reject(
@@ -449,9 +439,7 @@ class EnsembleService(BaseService):
                     "demoted": demoted,
                     "live": list(keep),
                 },
-                instance_id=str(
-                    await self.core.config.get("instance.id", "local") or "local"
-                ),
+                instance_id=str(await self.core.config.get("instance.id", "local") or "local"),
             )
         except Exception:
             pass
@@ -524,9 +512,7 @@ class EnsembleService(BaseService):
         closes = [float(b.close) for b in bars]
         highs = [float(b.high) for b in bars]
         lows = [float(b.low) for b in bars]
-        snap = self.regime.observe(
-            closes, highs=highs, lows=lows, symbol=ticker or key
-        )
+        snap = self.regime.observe(closes, highs=highs, lows=lows, symbol=ticker or key)
         if snap.regime == self._last_regime and (ticker or key) == self._regime_symbol:
             return
         prev = self._last_regime
@@ -628,9 +614,7 @@ class EnsembleService(BaseService):
                     else None
                     for sid in sorted(self._decision_baseline)
                 },
-                "effective_independent_bets": (
-                    self.manager.effective_independent_bets()
-                ),
+                "effective_independent_bets": (self.manager.effective_independent_bets()),
                 "fills_since_rebalance": self._fills_since_rebalance,
                 "regime": self._last_regime,
                 "regime_symbol": self._regime_symbol,
@@ -682,9 +666,7 @@ class EnsembleService(BaseService):
             metrics = view.get("metrics") if isinstance(view.get("metrics"), dict) else {}
             if not metrics and isinstance(sig.get("metrics"), dict):
                 metrics = dict(sig["metrics"])
-            ticker = str(
-                view.get("ticker") or sig.get("ticker") or decision.get("ticker") or ""
-            )
+            ticker = str(view.get("ticker") or sig.get("ticker") or decision.get("ticker") or "")
             strength = view.get("strength")
             if strength is None:
                 strength = sig.get("strength", 0)
@@ -692,9 +674,7 @@ class EnsembleService(BaseService):
                 sig.get("observe_only")
                 or sid in observe_set
                 or (
-                    plug is not None
-                    and hasattr(plug, "is_observe_only")
-                    and plug.is_observe_only()
+                    plug is not None and hasattr(plug, "is_observe_only") and plug.is_observe_only()
                 )
             )
             if sid in live_set:
@@ -996,11 +976,7 @@ class EnsembleService(BaseService):
             )
             return
         try:
-            strength = (
-                float(payload["strength"])
-                if payload.get("strength") is not None
-                else None
-            )
+            strength = float(payload["strength"]) if payload.get("strength") is not None else None
         except (TypeError, ValueError):
             strength = None
         sizing = getattr(runtime, "sizing_config", None)
@@ -1034,9 +1010,7 @@ class EnsembleService(BaseService):
             strategy_id="consilium",
             class_code=str(payload.get("class_code") or ""),
             mark_price=(
-                float(payload["price"])
-                if payload.get("price") not in (None, "")
-                else None
+                float(payload["price"]) if payload.get("price") not in (None, "") else None
             ),
             strength=strength,
         )

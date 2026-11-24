@@ -15,15 +15,18 @@ escape hatch, so it cannot silently regress back to advisory.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from host.bootstrap import ensure_code_base_path
 
 ensure_code_base_path()
 
+from engine.research_digest import digest_walk_forward  # noqa: E402
 from engine.research_gate import (  # noqa: E402
     LiveReadinessPolicy,
     evaluate_live_readiness,
+    record_digest_clearance,
 )
 from services.ensemble_service import EnsembleService  # noqa: E402
 
@@ -120,9 +123,7 @@ def test_empty_lineup_is_a_noop() -> None:
 
 
 def test_existing_observe_roster_is_preserved() -> None:
-    svc, _ = _service(
-        strategies=["trend"], observe=["bollinger_reversion"], enforce=True
-    )
+    svc, _ = _service(strategies=["trend"], observe=["bollinger_reversion"], enforce=True)
     asyncio.run(svc._enforce_research_gate(["trend"]))  # noqa: SLF001
     assert "bollinger_reversion" in svc._ensemble_cfg["observe"]  # noqa: SLF001
     assert "trend" in svc._ensemble_cfg["observe"]  # noqa: SLF001
@@ -154,6 +155,8 @@ def test_cleared_member_is_kept(tmp_path, monkeypatch) -> None:
             "blockers": [],
             "grade": "live_ok",
             "score": 1.0,
+            "strategy_id": sid,
+            "p_value": 0.01,  # a real clearance carries evidence for the batch correction
         },
     )
     assert asyncio.run(svc._enforce_research_gate(["proven"])) == ["proven"]  # noqa: SLF001
@@ -192,9 +195,7 @@ def test_the_audit_finding_still_holds() -> None:
     its verdict as evidence accumulates. Asserting on mutable production state
     made the test measure the research programme, not the gate.
     """
-    verdict = evaluate_live_readiness(
-        "strategy_that_does_not_exist", policy=LiveReadinessPolicy()
-    )
+    verdict = evaluate_live_readiness("strategy_that_does_not_exist", policy=LiveReadinessPolicy())
     assert verdict["live_ok"] is False
     assert verdict["grade"] == "research_only"
     reasons = {b["reason"] for b in verdict["blockers"]}
@@ -300,3 +301,59 @@ def test_stale_evidence_does_not_clear_even_when_recorded_today(tmp_path) -> Non
     assert verdict["live_ok"] is False
     reasons = {b["reason"] for b in verdict["blockers"]}
     assert "clearance_fresh" in reasons, f"got {reasons}"
+
+
+def test_batch_verdict_reaches_the_live_decision_path(tmp_path, monkeypatch):
+    """Eight individually cleared strategies, one unstable ranking: none may trade.
+
+    `_enforce_research_gate` used to call `evaluate_live_readiness` per id. That
+    function cannot see the set, so Holm and RC/SPA/PBO were never applied to
+    the lineup that actually trades. The report said `unstable_selection` while
+    Consilium kept voting. This test builds that exact contrast on disk.
+    """
+    import engine.research_gate as gate
+
+    store = tmp_path / "clearance.json"
+    rng = __import__("random").Random(11)
+    ids = [f"s{i}" for i in range(8)]
+    for sid in ids:
+        series = [0.5 + rng.gauss(0.0, 1.0) for _ in range(40)]
+        mean = sum(series) / len(series)
+        for ticker in ("BTCUSDT", "ETHUSDT"):
+            digest = digest_walk_forward(
+                {
+                    "provenance": {
+                        "strategy_id": sid,
+                        "ticker": ticker,
+                        "variants_count": 4,
+                        "data_end": datetime.now(timezone.utc).date().isoformat(),
+                        "data_start": "2024-01-01",
+                    },
+                    "oos": {
+                        "mean_oos_pnl": mean,
+                        "ci_low": mean - 0.3,
+                        "ci_high": mean + 0.3,
+                        "p_value": 0.001,
+                        "oos_pnl_by_fold": series,
+                        "folds": len(series),
+                        "total_oos_trades": 80,
+                        "profit_factor": 2.0,
+                    },
+                    "holdout": {"pnl": mean, "trades": 14, "bars": 120},
+                }
+            )
+            record_digest_clearance(digest, path=store)
+
+    gate.clear_clearance_cache()
+    # Per-strategy gate alone would promote every one of them.
+    for sid in ids[:2]:
+        assert evaluate_live_readiness(sid, path=store)["live_ok"] is True
+
+    monkeypatch.setattr(gate, "DEFAULT_CLEARANCE_PATH", store)
+    svc, published = _service(strategies=ids, enforce=True)
+    kept = asyncio.run(svc._enforce_research_gate(ids))  # noqa: SLF001
+    assert kept == [], "an unstable batch must demote the whole live lineup"
+
+    rejects = [e for e in published if e.event_type == "ensemble.reject"]
+    reasons = [d.get("reason", "") for e in rejects for d in e.payload["demoted"]]
+    assert any("batch_unstable_selection" in r for r in reasons), reasons

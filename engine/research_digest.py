@@ -37,9 +37,7 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         return {"ok": False, "error": "empty_report"}
     oos = report.get("oos") if isinstance(report.get("oos"), Mapping) else {}
     prov = report.get("provenance") if isinstance(report.get("provenance"), Mapping) else {}
-    baselines = (
-        report.get("baselines") if isinstance(report.get("baselines"), Mapping) else {}
-    )
+    baselines = report.get("baselines") if isinstance(report.get("baselines"), Mapping) else {}
     holdout = report.get("holdout") if isinstance(report.get("holdout"), Mapping) else {}
     chosen = report.get("chosen") if isinstance(report.get("chosen"), Mapping) else {}
     mean = _f(oos.get("mean_oos_pnl"))
@@ -108,18 +106,14 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         # batch-level tests -- those bootstrap a series per strategy -- and a
         # clearance record that carried only a p-value could never be re-examined
         # with a stronger method without being regenerated.
-        "oos_pnl_by_fold": [
-            _f(v) for v in (oos.get("oos_pnl_by_fold") or [])
-        ],
+        "oos_pnl_by_fold": [_f(v) for v in (oos.get("oos_pnl_by_fold") or [])],
         "win_rate": _f(oos.get("win_rate")),
         "profit_factor": _f(oos.get("profit_factor")),
         "total_oos_trades": int(oos.get("total_oos_trades") or 0),
         "mean_oos_trades": _f(oos.get("mean_oos_trades")),
         "mean_oos_max_drawdown": _f(oos.get("mean_oos_max_drawdown")),
         "max_oos_max_drawdown": _f(oos.get("max_oos_max_drawdown")),
-        "edge_vs_buy_hold": _f(baselines.get("edge_vs_buy_hold"))
-        if baselines
-        else None,
+        "edge_vs_buy_hold": _f(baselines.get("edge_vs_buy_hold")) if baselines else None,
         "cost_drag": _f(baselines.get("cost_drag")) if baselines else None,
         "holdout_bars": int(holdout.get("bars") or 0) if holdout else 0,
         "holdout_pnl": _f(holdout_pnl) if holdout_pnl is not None else None,

@@ -179,9 +179,7 @@ def test_measured_and_unmeasured_failures_are_named_apart():
     # Both still block, and both record a blocker under the same reason.
     assert measured["rows"][0]["live_ok"] is False
     assert unknown["rows"][0]["live_ok"] is False
-    assert {b["reason"] for b in unknown["rows"][0]["blockers"]} == {
-        "multiplicity_unknown_p_value"
-    }
+    assert {b["reason"] for b in unknown["rows"][0]["blockers"]} == {"multiplicity_unknown_p_value"}
 
 
 def test_unknown_rows_do_not_inflate_the_correction_for_the_rest():
@@ -222,10 +220,8 @@ def test_holm_is_no_more_harsh_than_bonferroni():
     of the two, which is the property that makes it the better default here.
     """
     ps = [0.041, 0.048, 0.012, 0.30]
-    bonf = apply_multiplicity([_row(f"b{i}", p) for i, p in enumerate(ps)],
-                              method="bonferroni")
-    holm = apply_multiplicity([_row(f"b{i}", p) for i, p in enumerate(ps)],
-                              method="holm")
+    bonf = apply_multiplicity([_row(f"b{i}", p) for i, p in enumerate(ps)], method="bonferroni")
+    holm = apply_multiplicity([_row(f"b{i}", p) for i, p in enumerate(ps)], method="holm")
 
     for b_row, h_row in zip(bonf["rows"], holm["rows"]):
         assert h_row["p_value_adjusted"] <= b_row["p_value_adjusted"] + 1e-12
@@ -290,9 +286,7 @@ def test_p_value_is_small_for_a_real_signal_and_large_for_noise():
     """
     strong = block_bootstrap_mean_ci([1.0, 2, 3, 4, 5] * 40, samples=600, seed=1)
     rng = random.Random(7)
-    noise = block_bootstrap_mean_ci(
-        [rng.gauss(0, 1) for _ in range(4000)], samples=600, seed=2
-    )
+    noise = block_bootstrap_mean_ci([rng.gauss(0, 1) for _ in range(4000)], samples=600, seed=2)
 
     assert strong["bootstrap_mean"] == 3.0
     assert strong["p_value"] < 0.01
@@ -372,32 +366,34 @@ def test_single_observation_is_blocked_after_correction():
 
 
 def _store_record(store, strategy_id: str, ticker: str, *, p_value: float, mean: float):
-    digest = digest_walk_forward({
-        "provenance": {
-            "strategy_id": strategy_id,
-            "ticker": ticker,
-            "class_code": "crypto",
-            "timeframe": "4h",
-            "variants_count": 8,
-            # Relative to now: a hardcoded date turns into an expired clearance
-            # after max_age_days, and these tests assert live_ok. That is a
-            # time-bomb, not a failure of the multiplicity logic under test.
-            "data_end": datetime.now(timezone.utc).date().isoformat(),
-            "data_start": "2024-01-01",
-        },
-        "oos": {
-            "mean_oos_pnl": mean,
-            "ci_low": mean * 0.5,
-            "ci_high": mean * 1.5,
-            "p_value": p_value,
-            "folds": 4,
-            "total_oos_trades": 60,
-            "win_rate": 0.55,
-            "profit_factor": 1.4,
-        },
-        "holdout": {"pnl": mean * 5, "trades": 14, "bars": 120},
-        "chosen": {},
-    })
+    digest = digest_walk_forward(
+        {
+            "provenance": {
+                "strategy_id": strategy_id,
+                "ticker": ticker,
+                "class_code": "crypto",
+                "timeframe": "4h",
+                "variants_count": 8,
+                # Relative to now: a hardcoded date turns into an expired clearance
+                # after max_age_days, and these tests assert live_ok. That is a
+                # time-bomb, not a failure of the multiplicity logic under test.
+                "data_end": datetime.now(timezone.utc).date().isoformat(),
+                "data_start": "2024-01-01",
+            },
+            "oos": {
+                "mean_oos_pnl": mean,
+                "ci_low": mean * 0.5,
+                "ci_high": mean * 1.5,
+                "p_value": p_value,
+                "folds": 4,
+                "total_oos_trades": 60,
+                "win_rate": 0.55,
+                "profit_factor": 1.4,
+            },
+            "holdout": {"pnl": mean * 5, "trades": 14, "bars": 120},
+            "chosen": {},
+        }
+    )
     assert digest.get("ok") is True
     assert digest.get("p_value") == p_value
     assert record_digest_clearance(digest, path=store) is not None
@@ -494,11 +490,13 @@ def test_evaluate_many_can_skip_the_correction(tmp_path):
 
 def test_policy_round_trips_the_multiplicity_settings():
     """These are YAML knobs (`trading.live_readiness`), so they must survive config."""
-    pol = LiveReadinessPolicy.from_mapping({
-        "require_multiplicity_correction": False,
-        "multiplicity_method": "bonferroni",
-        "multiplicity_alpha": 0.01,
-    })
+    pol = LiveReadinessPolicy.from_mapping(
+        {
+            "require_multiplicity_correction": False,
+            "multiplicity_method": "bonferroni",
+            "multiplicity_alpha": 0.01,
+        }
+    )
     assert pol.require_multiplicity_correction is False
     assert pol.multiplicity_method == "bonferroni"
     assert pol.multiplicity_alpha == 0.01

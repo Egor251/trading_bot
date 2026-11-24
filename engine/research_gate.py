@@ -240,9 +240,7 @@ def record_digest_clearance(
     key = _key(sid, ticker)
     prior = entries.get(key) if isinstance(entries.get(key), Mapping) else {}
     evaluations = _i(prior.get("evaluations_count")) + 1
-    lifetime_variants = _i(prior.get("variants_tried_lifetime")) + _i(
-        digest.get("variants_count")
-    )
+    lifetime_variants = _i(prior.get("variants_tried_lifetime")) + _i(digest.get("variants_count"))
     lifetime_available = _i(prior.get("variants_available_lifetime")) + _i(
         digest.get("variants_available") or digest.get("variants_count")
     )
@@ -263,9 +261,7 @@ def record_digest_clearance(
         "p_value": digest.get("p_value"),
         # Per-fold OOS P&L. The batch-level tests bootstrap these; a record without
         # them can be judged one strategy at a time and nothing else.
-        "oos_pnl_by_fold": [
-            float(v) for v in (digest.get("oos_pnl_by_fold") or [])
-        ],
+        "oos_pnl_by_fold": [float(v) for v in (digest.get("oos_pnl_by_fold") or [])],
         "profit_factor": digest.get("profit_factor"),
         "total_oos_trades": _i(digest.get("total_oos_trades")),
         "timeframe": digest.get("timeframe"),
@@ -323,9 +319,7 @@ def clearance_hits_for_strategy(
     )
     want_set: set[str] = set()
     if tickers:
-        want_set = {
-            normalize_research_ticker(t) for t in tickers if str(t or "").strip()
-        }
+        want_set = {normalize_research_ticker(t) for t in tickers if str(t or "").strip()}
     want = normalize_research_ticker(ticker)
     if want:
         want_set.add(want)
@@ -425,9 +419,7 @@ def evaluate_live_readiness(
     pol = policy or LiveReadinessPolicy()
     sid = str(strategy_id or "").strip()
     instant = now or datetime.now(UTC)
-    hits = clearance_hits_for_strategy(
-        sid, ticker=ticker, tickers=tickers, path=path
-    )
+    hits = clearance_hits_for_strategy(sid, ticker=ticker, tickers=tickers, path=path)
     checks: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
 
@@ -439,9 +431,7 @@ def evaluate_live_readiness(
         live: bool = True,
         observe: bool = True,
     ) -> None:
-        checks.append(
-            {"name": name, "ok": ok, "detail": detail, "live": live, "observe": observe}
-        )
+        checks.append({"name": name, "ok": ok, "detail": detail, "live": live, "observe": observe})
         if not ok:
             blockers.append(
                 {
@@ -486,7 +476,7 @@ def evaluate_live_readiness(
     metric_pool = robust_hits or hits
     best = max(
         metric_pool,
-        key=lambda h: (_f(h.get("mean_oos_pnl"), -1e18) or -1e18),
+        key=lambda h: _f(h.get("mean_oos_pnl"), -1e18) or -1e18,
     )
 
     holdout_trades = max(_i(h.get("holdout_trades")) for h in metric_pool)
@@ -532,9 +522,7 @@ def evaluate_live_readiness(
         age_ok,
         detail={
             "max_age_days": pol.max_age_days,
-            "evidence": sorted(
-                oldest_evidence, key=lambda r: -float(r["age_days"])
-            )[:6],
+            "evidence": sorted(oldest_evidence, key=lambda r: -float(r["age_days"]))[:6],
         },
     )
 
@@ -640,11 +628,7 @@ def evaluate_live_readiness(
         grade = GRADE_RESEARCH
 
     live_checks = [c for c in checks if c.get("live", True)]
-    score = (
-        sum(1.0 for c in live_checks if c.get("ok")) / len(live_checks)
-        if live_checks
-        else 0.0
-    )
+    score = sum(1.0 for c in live_checks if c.get("ok")) / len(live_checks) if live_checks else 0.0
 
     return {
         "ok": True,
@@ -672,9 +656,7 @@ def evaluate_live_readiness(
         "variants_count": _i(best.get("variants_count")),
         "variants_tried_lifetime": _i(best.get("variants_tried_lifetime")),
         "variants_available_lifetime": _i(best.get("variants_available_lifetime")),
-        "oos_pnl_by_fold": [
-            float(v) for v in (best.get("oos_pnl_by_fold") or [])
-        ],
+        "oos_pnl_by_fold": [float(v) for v in (best.get("oos_pnl_by_fold") or [])],
         "metrics": {
             "holdout_trades": holdout_trades,
             "total_oos_trades": oos_trades,
@@ -803,9 +785,7 @@ def batch_research_verdict(
         # to "explored" for the narrower, more permissive reading.
         if universe_basis == "explored":
             per_strategy = (
-                _i(row.get("variants_tried_lifetime"))
-                or _i(row.get("variants_count"))
-                or 1
+                _i(row.get("variants_tried_lifetime")) or _i(row.get("variants_count")) or 1
             )
         else:
             # `max`, not a chain of `or`: a record whose available count is stale
@@ -819,11 +799,7 @@ def batch_research_verdict(
                 _i(row.get("variants_count")),
             )
         universe += max(1, per_strategy)
-        folds = [
-            float(v)
-            for v in (row.get("oos_pnl_by_fold") or [])
-            if v is not None
-        ]
+        folds = [float(v) for v in (row.get("oos_pnl_by_fold") or []) if v is not None]
         if len(folds) >= 4:
             series.append(folds)
             names.append(sid)
@@ -871,11 +847,7 @@ def batch_research_verdict(
     # as "not unstable" used to turn a batch whose ranking test could not run
     # into `batch_edge_stable` -- a pass built entirely out of a missing number.
     pbo_value = _f(pbo.get("pbo"))
-    pbo_available = (
-        bool(pbo.get("ok"))
-        and pbo_value is not None
-        and 0.0 <= pbo_value <= 1.0
-    )
+    pbo_available = bool(pbo.get("ok")) and pbo_value is not None and 0.0 <= pbo_value <= 1.0
     max_pbo_f = float(max_pbo)
     unstable = pbo_available and pbo_value is not None and pbo_value > max_pbo_f
     passes = bool(rc.get("ok") and spa.get("ok")) and bool(
@@ -1018,8 +990,7 @@ def apply_multiplicity(
                 # existed reports the unknown case, and if that printed as
                 # `multiplicity` on all twenty rows the name would stop carrying
                 # information and a genuine failure later would be lost in it.
-                "name": known_reason if not passed and p_adjusted is None
-                else "multiplicity",
+                "name": known_reason if not passed and p_adjusted is None else "multiplicity",
                 "ok": passed,
                 "detail": detail,
                 "live": True,
@@ -1098,7 +1069,18 @@ def evaluate_many(
         multiplicity = {k: v for k, v in corrected_rows.items() if k != "rows"}
 
     batch: dict[str, Any] = {}
-    if pol.require_batch_verdict and rows:
+    if pol.require_batch_verdict and len(rows) < 2:
+        # With one candidate there is no selection to correct: Holm over one
+        # hypothesis is the raw p-value, and RC/SPA/PBO ask whether the best of
+        # N is special -- meaningless for N=1. The per-strategy checks below
+        # still decide. Reporting this as `not_evaluable` would make a
+        # one-member live lineup impossible to clear, which is the shipped
+        # configuration.
+        batch = {
+            "verdict": "not_applicable",
+            "reason": "single_strategy_no_batch",
+        }
+    elif pol.require_batch_verdict and rows:
         batch = batch_research_verdict(
             rows,
             alpha=pol.multiplicity_alpha,
@@ -1169,9 +1151,7 @@ def evaluate_many(
         "count": len(rows),
         "live_ok": [r["strategy_id"] for r in rows if r.get("live_ok")],
         "observe_ok": [
-            r["strategy_id"]
-            for r in rows
-            if r.get("observe_ok") and not r.get("live_ok")
+            r["strategy_id"] for r in rows if r.get("observe_ok") and not r.get("live_ok")
         ],
         "research_only": [r["strategy_id"] for r in rows if not r.get("observe_ok")],
         "multiplicity": multiplicity,

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 def _log():
     return get_log("Engine", "UiBridge")
 
+
 _RECENT_EVENTS = (
     "market.candle",
     "strategy.signal",
@@ -112,7 +113,6 @@ _QUARANTINE_KNOBS: dict[str, tuple[float, float]] = {
     "consecutive_failures": (1.0, 30.0),
     "min_samples": (1.0, 10_000.0),
 }
-
 
 
 class UiBridgeService(BaseService):
@@ -194,11 +194,7 @@ class UiBridgeService(BaseService):
         for task in (self._pub_task, self._cmd_task):
             if task and not task.done():
                 task.cancel()
-        pending = [
-            task
-            for task in (self._pub_task, self._cmd_task)
-            if task is not None
-        ]
+        pending = [task for task in (self._pub_task, self._cmd_task) if task is not None]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._pub_task = self._cmd_task = None
@@ -310,9 +306,7 @@ class UiBridgeService(BaseService):
                                 "score": r.get("score"),
                                 "live_ok": r.get("live_ok"),
                                 "observe_ok": r.get("observe_ok"),
-                                "blockers": [
-                                    b.get("reason") for b in (r.get("blockers") or [])
-                                ],
+                                "blockers": [b.get("reason") for b in (r.get("blockers") or [])],
                             }
                             for r in (readiness.get("rows") or [])
                         ],
@@ -335,9 +329,7 @@ class UiBridgeService(BaseService):
                         mgr is not None
                         and getattr(ens.manager, "stats", None) is not None
                         and hasattr(getattr(ens.manager, "stats", None), "snapshot")
-                        and not type(getattr(ens.manager, "stats")).__name__.endswith(
-                            "Mock"
-                        )
+                        and not type(getattr(ens.manager, "stats")).__name__.endswith("Mock")
                     )
                     else {}
                 ),
@@ -419,9 +411,7 @@ class UiBridgeService(BaseService):
             "positions": trading.get("positions") or {},
             "open_positions": trading.get("open_positions") or [],
             "open_orders": trading.get("open_orders") or [],
-            "recent_trades": trading.get("recent_trades")
-            or trading.get("fill_ledger")
-            or [],
+            "recent_trades": trading.get("recent_trades") or trading.get("fill_ledger") or [],
             "protection": trading.get("protection") or {},
             "fill_ledger": trading.get("fill_ledger") or [],
             "equity_curve": list(self._equity_curve),
@@ -702,7 +692,9 @@ class UiBridgeService(BaseService):
         # live plugin still held a stale ``profiles`` blob — merge explicitly.
         cfg = {**raw_cfg, **live_cfg}
         raw_profiles = raw_cfg.get("profiles") if isinstance(raw_cfg.get("profiles"), dict) else {}
-        live_profiles = live_cfg.get("profiles") if isinstance(live_cfg.get("profiles"), dict) else {}
+        live_profiles = (
+            live_cfg.get("profiles") if isinstance(live_cfg.get("profiles"), dict) else {}
+        )
         profiles = {**live_profiles, **raw_profiles}
         cfg["profiles"] = profiles
         profile_ids = list(profiles.keys())
@@ -816,15 +808,18 @@ class UiBridgeService(BaseService):
                 if raw == "SET_ENSEMBLE" and "ensemble" not in result:
                     result["ensemble"] = dict(snap.get("ensemble") or {})
                 if raw in {"RESET_PAPER", "CLEAR_PAPER", "RESET_SIM"}:
-                    result.setdefault("snapshot", {
-                        "equity": snap.get("equity"),
-                        "gross_exposure": snap.get("gross_exposure"),
-                        "positions": snap.get("positions") or {},
-                        "open_positions": snap.get("open_positions") or [],
-                        "exposures": snap.get("exposures") or {},
-                        "halted": snap.get("halted"),
-                        "halt_reason": snap.get("halt_reason") or "",
-                    })
+                    result.setdefault(
+                        "snapshot",
+                        {
+                            "equity": snap.get("equity"),
+                            "gross_exposure": snap.get("gross_exposure"),
+                            "positions": snap.get("positions") or {},
+                            "open_positions": snap.get("open_positions") or [],
+                            "exposures": snap.get("exposures") or {},
+                            "halted": snap.get("halted"),
+                            "halt_reason": snap.get("halt_reason") or "",
+                        },
+                    )
                 if raw == "PHANTOM_RESET":
                     result.setdefault("phantom", snap.get("phantom"))
                 await self._broadcast(snap)
@@ -876,8 +871,7 @@ class UiBridgeService(BaseService):
             from engine.control_auth import AuthorizationDenied
 
             raise AuthorizationDenied(
-                "control authorizer is not installed; refusing "
-                f"{name} (fail-closed)"
+                f"control authorizer is not installed; refusing {name} (fail-closed)"
             )
 
         authorization = authorizer.authorize(
@@ -927,9 +921,7 @@ class UiBridgeService(BaseService):
             return {
                 "ok": True,
                 "cmd": "GET_CONFIG",
-                "config": operator_config_slice(
-                    getattr(self.core.config, "raw", {}) or {}
-                ),
+                "config": operator_config_slice(getattr(self.core.config, "raw", {}) or {}),
             }
         if raw == "SAVE_CONFIG":
             await self.core.config.save()
@@ -1020,14 +1012,18 @@ class UiBridgeService(BaseService):
             "cmd": "RESET_PAPER",
             "mode": mode,
             "detail": detail if isinstance(detail, dict) else {},
-            "open_positions": runtime.open_positions() if hasattr(runtime, "open_positions") else [],
+            "open_positions": runtime.open_positions()
+            if hasattr(runtime, "open_positions")
+            else [],
         }
 
     @staticmethod
     def _order_result_dict(result: Any) -> dict[str, Any]:
         return {
             "client_id": getattr(result, "client_id", ""),
-            "status": getattr(getattr(result, "status", None), "value", str(getattr(result, "status", ""))),
+            "status": getattr(
+                getattr(result, "status", None), "value", str(getattr(result, "status", ""))
+            ),
             "filled_qty": float(getattr(result, "filled_qty", 0) or 0),
             "avg_price": getattr(result, "avg_price", None),
             "reason": getattr(result, "reason", "") or "",
@@ -1141,10 +1137,14 @@ class UiBridgeService(BaseService):
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "cmd": "CLOSE_ALL", "error": str(exc)}
         orders = [self._order_result_dict(r) for r in results]
-        ok = all(
-            str(o.get("status") or "").lower() in {"filled", "partial", "accepted"}
-            for o in orders
-        ) if orders else True
+        ok = (
+            all(
+                str(o.get("status") or "").lower() in {"filled", "partial", "accepted"}
+                for o in orders
+            )
+            if orders
+            else True
+        )
         return {"ok": ok, "cmd": "CLOSE_ALL", "orders": orders, "count": len(orders)}
 
     async def _cmd_cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1190,8 +1190,7 @@ class UiBridgeService(BaseService):
         released = runtime.operator_release_exit(
             slice_id=str(payload["slice_id"]) if payload.get("slice_id") else None,
             symbol=str(payload["symbol"]) if payload.get("symbol") else None,
-            client_id=str(payload.get("client_id") or payload.get("order_id") or "")
-            or None,
+            client_id=str(payload.get("client_id") or payload.get("order_id") or "") or None,
             force=bool(payload.get("force")),
         )
         return {
@@ -1292,7 +1291,11 @@ class UiBridgeService(BaseService):
     def _cost_store(self) -> CostScheduleStore:
         raw = getattr(self.core.config, "raw", {}) or {}
         configured = ((raw.get("costs") or {}).get("store_path")) if isinstance(raw, dict) else None
-        root = Path(configured) if configured else Path(__file__).resolve().parents[2] / "data" / "cost_schedules"
+        root = (
+            Path(configured)
+            if configured
+            else Path(__file__).resolve().parents[2] / "data" / "cost_schedules"
+        )
         return CostScheduleStore(root)
 
     @staticmethod
@@ -1350,7 +1353,9 @@ class UiBridgeService(BaseService):
             if not isinstance(draft_raw, dict):
                 raise ValueError("structured draft object is required")
             draft = CostScheduleDraft.model_validate(draft_raw)
-            created_by = str(payload.get("operator_id") or payload.get("created_by") or "local_operator")
+            created_by = str(
+                payload.get("operator_id") or payload.get("created_by") or "local_operator"
+            )
             stored = self._cost_store().save_draft(
                 source,
                 draft,
@@ -1387,9 +1392,7 @@ class UiBridgeService(BaseService):
             raise PermissionError("authenticated operator context required")
         return principal.subject
 
-    async def _cmd_cost_activate(
-        self, payload: dict[str, Any], instance_id: str
-    ) -> dict[str, Any]:
+    async def _cmd_cost_activate(self, payload: dict[str, Any], instance_id: str) -> dict[str, Any]:
         if payload.get("confirm_cost_schedule") is not True:
             return {
                 "ok": False,
@@ -1560,9 +1563,7 @@ class UiBridgeService(BaseService):
             schema = getattr(plugin, "CONFIG_SCHEMA", None) if plugin is not None else None
             if not isinstance(schema, dict):
                 schema = None
-            variants = variants_for_mode(
-                strategy_id, mode, max_variants=max_v, schema=schema
-            )
+            variants = variants_for_mode(strategy_id, mode, max_variants=max_v, schema=schema)
         try:
             sizing = payload.get("sizing") if isinstance(payload.get("sizing"), dict) else None
             strategy_params = (
@@ -1718,9 +1719,7 @@ class UiBridgeService(BaseService):
                 class_code=str(payload.get("class_code") or "TQBR").strip() or "TQBR",
                 provider=payload.get("provider"),
                 limit=_int("bars", _int("limit")),
-                strategy_id=str(
-                    payload.get("strategy_id") or "ma_cross_example"
-                ).strip(),
+                strategy_id=str(payload.get("strategy_id") or "ma_cross_example").strip(),
                 variants=variants,
                 variant_mode=variant_mode,
                 max_variants=max_variants,
@@ -1840,11 +1839,7 @@ class UiBridgeService(BaseService):
             limit = (
                 int(payload["bars"])
                 if payload.get("bars") not in (None, "")
-                else (
-                    int(payload["limit"])
-                    if payload.get("limit") not in (None, "")
-                    else None
-                )
+                else (int(payload["limit"]) if payload.get("limit") not in (None, "") else None)
             )
         except (TypeError, ValueError):
             limit = None
@@ -1856,7 +1851,9 @@ class UiBridgeService(BaseService):
                 class_code=str(payload.get("class_code") or "CRYPTO").strip() or "CRYPTO",
                 provider=payload.get("provider"),
                 limit=limit,
-                variant_mode=str(payload.get("variant_mode") or nested.get("variant_mode") or "optimize"),
+                variant_mode=str(
+                    payload.get("variant_mode") or nested.get("variant_mode") or "optimize"
+                ),
                 max_variants=max_v,
                 holdout_bars=holdout,
                 walk_forward=nested,
@@ -1933,9 +1930,7 @@ class UiBridgeService(BaseService):
             raw_cfg = getattr(self.core.config, "raw", None)
             sid = str(result.get("strategy_id") or "")
             ticker = str(result.get("research_ticker") or "").strip() or None
-            plugged = plugin_params_from_config(
-                raw_cfg if isinstance(raw_cfg, dict) else None, sid
-            )
+            plugged = plugin_params_from_config(raw_cfg if isinstance(raw_cfg, dict) else None, sid)
             readiness = evaluate_live_readiness(
                 sid,
                 ticker=ticker,
@@ -1967,9 +1962,7 @@ class UiBridgeService(BaseService):
         symbol = str(payload.get("symbol") or "").strip() or None
         confirm = bool(payload.get("confirm_scoped"))
         if hasattr(phantom, "reset_ledger"):
-            result = phantom.reset_ledger(
-                strategy_id=sid, symbol=symbol, confirm_scoped=confirm
-            )
+            result = phantom.reset_ledger(strategy_id=sid, symbol=symbol, confirm_scoped=confirm)
             if isinstance(result, dict) and result.get("ok") is False:
                 return {"ok": False, "cmd": "PHANTOM_RESET", **result}
         else:
@@ -2061,7 +2054,10 @@ class UiBridgeService(BaseService):
             "cmd": "SET_UNIVERSE",
             "applied": applied,
             "mode": mode_norm
-            or str(((raw_cfg.get("universe") or {}) if isinstance(raw_cfg, dict) else {}).get("mode") or ""),
+            or str(
+                ((raw_cfg.get("universe") or {}) if isinstance(raw_cfg, dict) else {}).get("mode")
+                or ""
+            ),
             "active_keys": active,
             "profile": snap_profile or (str(profile) if profile is not None else ""),
             "reason": reason,
@@ -2118,9 +2114,7 @@ class UiBridgeService(BaseService):
             if verdict.get("live_ok"):
                 continue
             reasons = [
-                str(b.get("reason"))
-                for b in (verdict.get("blockers") or [])
-                if b.get("reason")
+                str(b.get("reason")) for b in (verdict.get("blockers") or []) if b.get("reason")
             ] or [f"grade={verdict.get('grade')}"]
             blockers.append({"strategy_id": sid, "reasons": reasons})
 
@@ -2137,9 +2131,6 @@ class UiBridgeService(BaseService):
                 "lineup": lineup,
             }
         return None
-
-
-
 
     async def _cmd_set_risk(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Set risk limits and the strength floor without editing YAML.
@@ -2201,9 +2192,7 @@ class UiBridgeService(BaseService):
             "cmd": "SET_RISK",
             "applied": applied,
             "rejected": rejected,
-            "note": (
-                "limits apply to new orders; positions already open are not resized"
-            ),
+            "note": ("limits apply to new orders; positions already open are not resized"),
         }
 
     async def _cmd_set_execution(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2251,8 +2240,12 @@ class UiBridgeService(BaseService):
 
         if bool(payload.get("persist", True)):
             await self.core.config.save()
-        return {"ok": not rejected, "cmd": "SET_EXECUTION", "applied": applied,
-                "rejected": rejected}
+        return {
+            "ok": not rejected,
+            "cmd": "SET_EXECUTION",
+            "applied": applied,
+            "rejected": rejected,
+        }
 
     async def _cmd_set_quarantine(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Set the per-strategy circuit breaker's thresholds.
@@ -2292,9 +2285,11 @@ class UiBridgeService(BaseService):
             }
 
         ops = self.core.service_registry.get("ops_monitor_service")
-        current = dict(getattr(ops, "quarantine", None).policy.__dict__) if (
-            getattr(ops, "quarantine", None) is not None
-        ) else {}
+        current = (
+            dict(getattr(ops, "quarantine", None).policy.__dict__)
+            if (getattr(ops, "quarantine", None) is not None)
+            else {}
+        )
         merged = {**current, **applied}
 
         # Validate by construction: an unusable policy must never reach the loop.
@@ -2305,9 +2300,7 @@ class UiBridgeService(BaseService):
                 enabled=bool(merged.get("enabled", True)),
                 quarantine_below=float(merged.get("quarantine_below", 0.0)),
                 restore_above=float(merged.get("restore_above", 0.05)),
-                consecutive_failures=max(
-                    1, int(float(merged.get("consecutive_failures", 3)))
-                ),
+                consecutive_failures=max(1, int(float(merged.get("consecutive_failures", 3)))),
                 min_samples=max(1, int(float(merged.get("min_samples", 20)))),
             ).validated()
         except ValueError as exc:
@@ -2323,9 +2316,7 @@ class UiBridgeService(BaseService):
                 enabled=bool(merged.get("enabled", True)),
                 quarantine_below=float(merged.get("quarantine_below", 0.0)),
                 restore_above=float(merged.get("restore_above", 0.05)),
-                consecutive_failures=max(
-                    1, int(float(merged.get("consecutive_failures", 3)))
-                ),
+                consecutive_failures=max(1, int(float(merged.get("consecutive_failures", 3)))),
                 min_samples=max(1, int(float(merged.get("min_samples", 20)))),
             )
 
@@ -2407,11 +2398,7 @@ class UiBridgeService(BaseService):
 
                         def one(name: str):
                             value = evidence.get(name)
-                            return (
-                                SafetyEvidence(**value)
-                                if isinstance(value, dict)
-                                else None
-                            )
+                            return SafetyEvidence(**value) if isinstance(value, dict) else None
 
                         report = preflight.evaluate(
                             LivePreflightInputs(
@@ -2544,9 +2531,7 @@ class UiBridgeService(BaseService):
                     if runtime is not None:
                         rm = getattr(runtime, "risk", None)
                         if rm is not None and hasattr(rm, "set_strategy_overrides"):
-                            rm.set_strategy_overrides(
-                                str(nsid), npatch if npatch else None
-                            )
+                            rm.set_strategy_overrides(str(nsid), npatch if npatch else None)
             elif sid:
                 if clear or not patch:
                     store.pop(sid, None)
@@ -2638,9 +2623,7 @@ class UiBridgeService(BaseService):
                 )
                 from engine.strategy_ids import resolve_strategy_id_via_core
 
-                resolved = [
-                    resolve_strategy_id_via_core(self.core, sid) for sid in sorted(added)
-                ]
+                resolved = [resolve_strategy_id_via_core(self.core, sid) for sid in sorted(added)]
                 policy = policy_from_config(raw_cfg)
                 blockers = live_promotion_blockers(
                     resolved,
@@ -2660,6 +2643,37 @@ class UiBridgeService(BaseService):
                             "or pass confirm_live_without_holdout=true (not recommended)."
                         ),
                     }
+                # Per-strategy readiness cannot see the set it is joining. With
+                # two or more live members, Holm and RC/SPA/PBO have to be
+                # applied to the whole resulting lineup, not just the addition.
+                if policy.require_batch_verdict and len(new_live) >= 2:
+                    from engine.research_gate import evaluate_many
+
+                    decision = evaluate_many(new_live, policy=policy, raw_cfg=raw_cfg)
+                    batch = decision.get("batch") or {}
+                    if batch.get("verdict") not in (
+                        "batch_edge_stable",
+                        "not_applicable",
+                    ):
+                        blockers = [
+                            {
+                                "strategy_id": sid,
+                                "reason": f"batch_{batch.get('verdict')}",
+                                "detail": batch,
+                            }
+                            for sid in new_live
+                        ]
+                        return {
+                            "ok": False,
+                            "cmd": "SET_ENSEMBLE",
+                            "error": "live_requires_readiness",
+                            "blockers": blockers,
+                            "hint": (
+                                "The live lineup's ranking is not stable "
+                                "(Holm / Reality Check / SPA / PBO). "
+                                "Use confirm_live_without_holdout=true to override."
+                            ),
+                        }
             ens_cfg["strategies"] = new_live
             # Canary size for newly promoted live members
             if added and not bool(payload.get("skip_canary_quantity")):
@@ -2669,9 +2683,7 @@ class UiBridgeService(BaseService):
                 )
 
                 scale = float(policy_from_config(raw_cfg).canary_quantity_scale)
-                canary_applied = apply_canary_quantity(
-                    raw_cfg, sorted(added), scale=scale
-                )
+                canary_applied = apply_canary_quantity(raw_cfg, sorted(added), scale=scale)
         if "observe" in payload and payload["observe"] is not None:
             live = {str(x) for x in (ens_cfg.get("strategies") or [])}
             ens_cfg["observe"] = [
@@ -2731,9 +2743,7 @@ class UiBridgeService(BaseService):
 
         strategies = list(ens_cfg.get("strategies") or [])
         observe = list(ens_cfg.get("observe") or [])
-        weights = (
-            getattr(getattr(ens, "manager", None), "weights", {}) if ens else {}
-        )
+        weights = getattr(getattr(ens, "manager", None), "weights", {}) if ens else {}
         try:
             from host.events import publish_lineup_changed
 
@@ -2748,9 +2758,7 @@ class UiBridgeService(BaseService):
                     "enabled": bool(ens_cfg.get("enabled", True)),
                     "persist": persist,
                 },
-                instance_id=str(
-                    await self.core.config.get("instance.id", "local") or "local"
-                ),
+                instance_id=str(await self.core.config.get("instance.id", "local") or "local"),
             )
         except Exception:
             pass
@@ -3074,9 +3082,7 @@ class UiBridgeService(BaseService):
         if not isinstance(raw_map, dict):
             # Flat payload also accepted: { "BITGET_API_KEY": "..." }
             raw_map = {
-                k: v
-                for k, v in payload.items()
-                if k in allowed or str(k).upper() in allowed
+                k: v for k, v in payload.items() if k in allowed or str(k).upper() in allowed
             }
         try:
             from host.secrets_env import upsert_secret
@@ -3194,9 +3200,7 @@ class UiBridgeService(BaseService):
                     continue
                 profile = dict(raw_profile)
                 settings = dict(profile.get("settings") or {})
-                provider_type = str(
-                    profile.get("provider_type") or pid_key
-                ).strip().lower()
+                provider_type = str(profile.get("provider_type") or pid_key).strip().lower()
                 profile["provider_type"] = provider_type
                 if not profile.get("display_name"):
                     profile["display_name"] = pid_key
@@ -3226,9 +3230,7 @@ class UiBridgeService(BaseService):
                         if has_secret(env_name):
                             _log().info("persisted AI secret env={}", env_name)
                         else:
-                            _log().warning(
-                                "AI secret upsert returned empty env={}", env_name
-                            )
+                            _log().warning("AI secret upsert returned empty env={}", env_name)
                     except Exception:
                         _log().exception("persist AI secret failed env={}", env_name)
                 profile["settings"] = settings
@@ -3304,17 +3306,11 @@ class UiBridgeService(BaseService):
                         from plugins.ai_analyst.plugin import _resolve_secrets
 
                         refresh_cfg = _resolve_secrets(
-                            dict(
-                                plugin.config
-                                if isinstance(plugin.config, dict)
-                                else live_block
-                            )
+                            dict(plugin.config if isinstance(plugin.config, dict) else live_block)
                         )
                     except Exception:
                         refresh_cfg = dict(
-                            plugin.config
-                            if isinstance(plugin.config, dict)
-                            else live_block
+                            plugin.config if isinstance(plugin.config, dict) else live_block
                         )
                     svc.refresh_settings(refresh_cfg)
                     applied_live = True
@@ -3579,9 +3575,7 @@ class UiBridgeService(BaseService):
                     pass
             await asyncio.sleep(0.05)
 
-    def _record_command_ack(
-        self, cmd: Any, result: dict[str, Any] | None
-    ) -> None:
+    def _record_command_ack(self, cmd: Any, result: dict[str, Any] | None) -> None:
         """Keep the outcome of a transport that cannot return an ACK."""
         payload = cmd if isinstance(cmd, dict) else {}
         request_id = payload.get("request_id")

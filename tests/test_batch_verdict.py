@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import random
+from datetime import datetime, timezone
 
 from host.bootstrap import ensure_code_base_path
 
@@ -49,33 +50,36 @@ def _record(
     folds: list[float] | None = None,
     variants: int = 12,
     p_value: float = 0.20,
+    data_end: str | None = None,
 ) -> None:
     series = folds if folds is not None else [0.1] * 12
     mean = sum(series) / len(series)
-    digest = digest_walk_forward({
-        "provenance": {
-            "strategy_id": strategy_id,
-            "ticker": ticker,
-            "class_code": "crypto",
-            "timeframe": "4h",
-            "variants_count": variants,
-            "data_end": "2026-10-01",
-            "data_start": "2024-01-01",
-        },
-        "oos": {
-            "mean_oos_pnl": mean,
-            "ci_low": mean - 1.0,
-            "ci_high": mean + 1.0,
-            "p_value": p_value,
-            "oos_pnl_by_fold": series,
-            "folds": len(series),
-            "total_oos_trades": 60,
-            "win_rate": 0.55,
-            "profit_factor": 1.4,
-        },
-        "holdout": {"pnl": mean * 5, "trades": 14, "bars": 120},
-        "chosen": {},
-    })
+    digest = digest_walk_forward(
+        {
+            "provenance": {
+                "strategy_id": strategy_id,
+                "ticker": ticker,
+                "class_code": "crypto",
+                "timeframe": "4h",
+                "variants_count": variants,
+                "data_end": data_end or datetime.now(timezone.utc).date().isoformat(),
+                "data_start": "2024-01-01",
+            },
+            "oos": {
+                "mean_oos_pnl": mean,
+                "ci_low": mean - 1.0,
+                "ci_high": mean + 1.0,
+                "p_value": p_value,
+                "oos_pnl_by_fold": series,
+                "folds": len(series),
+                "total_oos_trades": 60,
+                "win_rate": 0.55,
+                "profit_factor": 1.4,
+            },
+            "holdout": {"pnl": mean * 5, "trades": 14, "bars": 120},
+            "chosen": {},
+        }
+    )
     assert digest.get("ok") is True
     assert record_digest_clearance(digest, path=store) is not None
 
@@ -83,17 +87,19 @@ def _record(
 def _rows(**overrides) -> list[dict]:
     rows = []
     for i in range(8):
-        rows.append({
-            "strategy_id": f"s{i}",
-            "p_value": 0.30,
-            "variants_tried_lifetime": 20,
-            "oos_pnl_by_fold": _folds(0.0, 12, seed=100 + i),
-            "live_ok": True,
-            "observe_ok": True,
-            "checks": [],
-            "blockers": [],
-            **overrides,
-        })
+        rows.append(
+            {
+                "strategy_id": f"s{i}",
+                "p_value": 0.30,
+                "variants_tried_lifetime": 20,
+                "oos_pnl_by_fold": _folds(0.0, 12, seed=100 + i),
+                "live_ok": True,
+                "observe_ok": True,
+                "checks": [],
+                "blockers": [],
+                **overrides,
+            }
+        )
     return rows
 
 
@@ -192,16 +198,18 @@ def test_significance_without_a_stable_ranking_is_caught_by_pbo():
     rng = random.Random(11)
     rows = []
     for i in range(8):
-        rows.append({
-            "strategy_id": f"s{i}",
-            "p_value": 0.001,
-            "variants_tried_lifetime": 4,
-            "oos_pnl_by_fold": [rng.gauss(0.5, 1.0) for _ in range(40)],
-            "live_ok": True,
-            "observe_ok": True,
-            "checks": [],
-            "blockers": [],
-        })
+        rows.append(
+            {
+                "strategy_id": f"s{i}",
+                "p_value": 0.001,
+                "variants_tried_lifetime": 4,
+                "oos_pnl_by_fold": [rng.gauss(0.5, 1.0) for _ in range(40)],
+                "live_ok": True,
+                "observe_ok": True,
+                "checks": [],
+                "blockers": [],
+            }
+        )
     out = batch_research_verdict(rows, samples=400, seed=3)
     assert out["reality_check"]["reject"] is True
     assert out["pbo"]["pbo"] > 0.5
@@ -323,11 +331,24 @@ def test_evaluate_many_runs_the_batch_verdict_and_blocks_on_it(tmp_path):
     assert "batch_no_edge" in reasons
     for row in batch["rows"]:
         assert row["live_ok"] is False
-        check = next(
-            c for c in row["checks"] if c["name"].startswith("batch_")
-        )
+        check = next(c for c in row["checks"] if c["name"].startswith("batch_"))
         assert check["ok"] is False
         assert check["detail"]["universe"] > 0
+
+
+def test_single_strategy_lineup_has_no_batch_to_fail(tmp_path):
+    """N=1: there is no selection, so the batch family is inapplicable, not failed.
+
+    A one-member live lineup is the shipped configuration. If `not_evaluable`
+    blocked it, the product could never trade anything without adding a second
+    strategy purely to satisfy a test that asks about the best of N.
+    """
+    store = tmp_path / "clearance.json"
+    _record(store, "solo", "BTCUSDT", folds=_folds(2.0, 16, seed=3), p_value=0.01)
+    _record(store, "solo", "ETHUSDT", folds=_folds(2.0, 16, seed=4), p_value=0.01)
+    out = evaluate_many(["solo"], path=store, policy=LiveReadinessPolicy())
+    assert out["batch"]["verdict"] == "not_applicable"
+    assert out["live_ok"] == ["solo"], out["rows"][0]["blockers"]
 
 
 def test_batch_verdict_can_be_switched_off_and_is_visible(tmp_path):
@@ -344,9 +365,7 @@ def test_batch_verdict_can_be_switched_off_and_is_visible(tmp_path):
         ),
     )
     assert out["batch"] == {}
-    assert not any(
-        c["name"].startswith("batch_") for row in out["rows"] for c in row["checks"]
-    )
+    assert not any(c["name"].startswith("batch_") for row in out["rows"] for c in row["checks"])
 
 
 def test_policy_defaults_are_the_strict_ones():
@@ -365,8 +384,9 @@ def test_shipped_config_declares_the_new_knobs():
     import yaml
 
     config = yaml.safe_load(
-        (Path(__file__).resolve().parents[1] / "config" / "trading_bot.yaml")
-        .read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[1] / "config" / "trading_bot.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     block = config["trading"]["live_readiness"]
     assert block["require_batch_verdict"] is True
