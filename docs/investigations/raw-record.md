@@ -1750,3 +1750,55 @@ one architecture space/optimiser. A different feature family, multi-asset
 panel, or adaptive selector is a NEW registration. ML is still not closed as
 a general question — this is the second real-data FAIL (R-41 hourly, R-46
 daily) and the first at a yearly horizon.
+
+---
+
+## S20 · Horizon ladder — REGISTRATION (before the run)
+
+Registered as R-47 before running. The 8-year span was an overreach for a
+decision; history is replayed instantly, but a single 20-month holdout is a
+poor basis for "different horizons". This registers four SHORT nested holdouts
+ending on the same last bar, from a 1200-daily-bar span (~3.3 years):
+
+```
+test lengths: 60 / 120 / 240 / 360 daily bars (~2/4/8/12 months)
+for each: train 600 bars immediately before a 100-bar validation block
+```
+
+Nested, not independent — reported as a ladder, not four votes. Universe,
+optimiser, evolution (seed 41), ensemble form and cost model are IDENTICAL to
+R-46. No tuning of the split, seed or threshold after seeing results.
+
+Criterion (fixed): R-47 HOLDS iff ALL FOUR holdouts give ensemble net > 0 AND
+ensemble accuracy ≥ 0.53. FAILS if any holdout misses either bar. Each
+horizon's net, accuracy, fill count, evaluations/distinct and PBO are printed
+separately; a pass on only one horizon is explicitly NOT a pass. A FAIL says
+this model family does not transfer at any of these horizons, not that ML
+cannot work in general.
+
+## S20-2 · R-47 — RESULT
+
+Known-answer gate passed before the run (gradient 3.917e-08, noise −0.028,
+strong signal 0.864). 1200 BTCUSDT daily klines; four nested holdouts ending
+on the same bar, train 600 / validation 100 before each.
+
+```
+ holdout     acc       net  eval distinct    PBO
+      60  0.4500   -0.3026    62       23  0.964 FAILS
+     120  0.5167   -0.0834    62       19  1.000 FAILS
+     240  0.4833   -0.1956    62       24  0.998 FAILS
+     360  0.4833   -0.3341    62       24  0.911 FAILS
+R-47 FAILS: all four miss both bars.
+```
+
+Instrument caveat, recorded rather than hidden: the daily kline fetch includes
+TODAY'S FORMING bar, so two runs minutes apart produced nets differing by
+~0.0004 (e.g. −0.1960 vs −0.1956 at 240). The verdict is insensitive, but the
+research path still has the forming-bar issue the live path fixed in S15.
+A closed-bar research rerun is a separate registration, not a post-hoc edit.
+
+This is the third real-data ML failure (R-41 hourly, R-46 ~20-month daily,
+R-47 four short daily horizons). The ladder answers the "different horizons"
+objection directly: none of 2/4/8/12 months works for this family. Boundaries
+unchanged — one instrument, six lagged returns, one 50-architecture space.
+A multi-asset panel or other feature family needs its own registration.

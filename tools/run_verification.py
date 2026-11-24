@@ -52,6 +52,7 @@ OFFLINE_STEPS: tuple[tuple[str, ...], ...] = (
 LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/neuroevolution_count.py", "--stage", "main", "--data", "btc1h", "--seed", "41"),
     ("tools/neuroevolution_count.py", "--stage", "main", "--data", "btc1d", "--seed", "41"),
+    ("tools/horizon_ladder.py",),
     ("tools/orderflow_imbalance.py",),
     ("tools/universe_correction_verdict.py",),
     ("tools/timeframe_verdict.py",),

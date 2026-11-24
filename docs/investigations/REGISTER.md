@@ -355,6 +355,19 @@ Second real-data ML failure (R-41 hourly, R-46 daily) and the first on a yearly
 horizon. Boundaries are one instrument/feature family/architecture space; a
 different panel or selector is a new registration, not a reinterpretation.
 
+### Horizon ladder (R-47)
+
+Registered S20; result S20-2. Four nested daily holdouts 60/120/240/360 bars
+ending on the same bar (train 600 / val 100), same model family.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-47 | transfers at every short horizon | all four: net > 0 AND accuracy ≥ 0.53 | 4 × (50 archs, 62 fits) | BTCUSDT 1d, 1200 bars | `FAILS` — all four miss both bars; PBO 0.911–1.000 |
+
+Direct answer to "different horizons": 2/4/8/12 months all fail. The forming
+daily bar in the research fetch is recorded as a caveat; the verdict is
+insensitive to it.
+
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
 strategy to demote, so its registered criterion fails; the capability stays
@@ -368,8 +381,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            46
-closed with evidence             39   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            47
+closed with evidence             40   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -377,11 +390,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-39 + 3 + 1 = 43, not 46: the resolved `neuroevolution counting check` item
+40 + 3 + 1 = 44, not 47: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
-claim) and R-46 (long-horizon ML) were added later as separate registrations.
-Counted this way on purpose rather than silently.
+claim), R-46 (long-horizon ML) and R-47 (horizon ladder) were added later as
+separate registrations. Counted this way on purpose rather than silently.
 
 The last open item:
 
