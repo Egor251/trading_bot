@@ -351,6 +351,18 @@ def test_single_strategy_lineup_has_no_batch_to_fail(tmp_path):
     assert out["live_ok"] == ["solo"], out["rows"][0]["blockers"]
 
 
+def test_evaluate_many_universe_correction_is_opt_in(tmp_path):
+    """The available-space correction exists but never fires without the flag."""
+    store = tmp_path / "clearance.json"
+    for ticker in ("BTCUSDT", "ETHUSDT"):
+        _record(store, "solo", ticker, folds=_folds(2.0, 16, seed=3), p_value=0.03, variants=12)
+    narrow = evaluate_many(["solo"], path=store)
+    wide = evaluate_many(["solo"], path=store, use_universe_correction=True)
+    assert narrow["multiplicity"]["multiplicity_universe"] == 1
+    assert wide["multiplicity"]["multiplicity_universe"] == 12
+    assert wide["rows"][0]["p_value_adjusted"] > narrow["rows"][0]["p_value_adjusted"]
+
+
 def test_batch_verdict_can_be_switched_off_and_is_visible(tmp_path):
     store = tmp_path / "clearance.json"
     names = [f"s{i}" for i in range(6)]

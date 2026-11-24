@@ -1047,6 +1047,7 @@ def evaluate_many(
     path: str | Path | None = None,
     policy: LiveReadinessPolicy | None = None,
     raw_cfg: Mapping[str, Any] | None = None,
+    use_universe_correction: bool = False,
 ) -> dict[str, Any]:
     pol = policy or policy_from_config(raw_cfg)
     rows = []
@@ -1066,11 +1067,23 @@ def evaluate_many(
         )
     multiplicity: dict[str, Any] = {}
     if pol.require_multiplicity_correction and rows:
-        corrected_rows = apply_multiplicity(
-            rows,
-            alpha=pol.multiplicity_alpha,
-            method=pol.multiplicity_method,
-        )
+        correction_kwargs: dict[str, Any] = {
+            "alpha": pol.multiplicity_alpha,
+            "method": pol.multiplicity_method,
+        }
+        if use_universe_correction:
+            # Sullivan: correct over the space the rules were drawn from, not
+            # just the strategies that survived into this report.
+            correction_kwargs["universe"] = sum(
+                max(
+                    1,
+                    _i(row.get("variants_available_lifetime")),
+                    _i(row.get("variants_tried_lifetime")),
+                    _i(row.get("variants_count")),
+                )
+                for row in rows
+            )
+        corrected_rows = apply_multiplicity(rows, **correction_kwargs)
         rows = list(corrected_rows.get("rows") or rows)
         multiplicity = {k: v for k, v in corrected_rows.items() if k != "rows"}
 

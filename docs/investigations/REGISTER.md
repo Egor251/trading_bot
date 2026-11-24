@@ -311,20 +311,43 @@ registration**, not a lesson.
 
 ---
 
+## Session 11 — the two remaining gaps, closed with evidence
+
+Registered S16/S17/S17b in `raw-record.md` before running; results S16-2/S17-2.
+Tools: `tools/universe_correction_verdict.py`, `tools/timeframe_verdict.py`.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-42 | available-space correction changes who trades | live_ok count drops when Holm uses U instead of batch N | U=234 vs N=20, 20 strategies | live clearance store | `FAILS` — 0 → 0; adjusted p min 0.160 → 1.000 |
+| R-43 | 1m research reveals what 1d missed | no positive 1m net after costs | 4000 bars required | BTCUSDT 1h/1d | `NOT EVALUABLE` — only 3387 daily klines; window NOT shrunk |
+| R-44 | feasible-window replication | no positive 1m net after costs | 3000 bars, 20 strategies | BTCUSDT 1m + separate 1d control | `HOLDS` — 0 positive, 2 never traded |
+
+**Both gaps are now resolved without touching a default.** The Sullivan
+correction moves every p-value to the floor but there was no `live_ok`
+strategy to demote, so its registered criterion fails; the capability stays
+optional, the default stays batch-N. Moving research to the execution
+timeframe cannot manufacture an edge either. Absolute P&L figures from the
+timeframe harness use one-unit sizing and are NOT cash P&L — only their sign
+is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
+
+---
+
 ## Status
 
 ```
-registered hypotheses            41
-closed with evidence             35   (FAILS, HOLDS, ANSWER, CLOSED)
-not evaluable                     2   R-19 (null degenerate), R-36 (null gated:
-                                      portfolio never flat, q=1.0000) — neither
-                                      counted as pass or failure
+registered hypotheses            44
+closed with evidence             37   (FAILS, HOLDS, ANSWER, CLOSED)
+not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
+                                      portfolio never flat, q=1.0000), R-43
+                                      (3387 < 4000 registered daily bars) —
+                                      none counted as pass or failure
 open                              1
 ```
 
-35 + 2 + 1 = 38, not 41: the resolved `neuroevolution counting check` item
-became THREE rows (R-33/34/35), and the resolved portfolio-null item took TWO
-rows (R-36/37). Counted this way on purpose rather than silently.
+37 + 3 + 1 = 41, not 44: the resolved `neuroevolution counting check` item
+became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
+(R-36/37), and the two remaining gaps took THREE (R-42/43/44). Counted this
+way on purpose rather than silently.
 
 The last open item:
 

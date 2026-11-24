@@ -1472,6 +1472,111 @@ wrong thing.
 
 ---
 
+## S16 · Universe-based multiplicity — REGISTRATION (before the run)
+
+Registered as R-42. The gate computes `universe` (available configuration
+space, 234/727 on the live snapshots) but corrects p-values over the batch
+size N. Rule 6 of the register: a correction over the explored count is lenient
+by that ratio. Capability now exists (`apply_multiplicity(universe=)`); this
+registers whether USING it changes the gate's conclusions.
+
+Design frozen: same clearance store, same 20/22 strategies, same alpha 0.05,
+same Holm. Only the family size in the correction changes: N (current) vs
+U = max(1, variants_available_lifetime, variants_tried_lifetime,
+variants_count) per row, summed over the batch — the same U
+`batch_research_verdict` already reports.
+
+Criterion (fixed): R-42 HOLDS iff the number of `live_ok` strategies drops
+when corrected over U (i.e. the leniency was material). It FAILS if the count
+is identical, which would mean the available-space correction is inert on
+this snapshot. Both counts and both adjusted p-value distributions are
+reported; no threshold is tuned after seeing them.
+
+## S17 · Research/execution timeframe — REGISTRATION (before the run)
+
+Registered as R-43. Research scores closed DAILY bars; execution now receives
+closed 1-MINUTE bars. This registers what the gate says when research uses the
+execution timeframe and fill timing.
+
+Design frozen: BTCUSDT 1h was already tested (R-41, fails both bars). This one
+uses 1m klines, 4000 bars, train 2400 / val 800 / test 800; the same 20
+strategies' default configs from the shipped plugins; decisions mapped to
+fills with the SAME `decisions_to_fills` (long_flat, 7 bps/fill, carry at
+score_from, no strength filter — matching research), on closed bars. DAILY
+run on the same instrument/window shape is the control.
+
+Criterion (fixed): R-43 HOLDS iff NO strategy achieves positive net OOS on 1m
+after costs, i.e. the timeframe change cannot manufacture an edge that the
+1d research lacked. It FAILS if any strategy does — then the research
+timeframe was concealing something and must be changed. Reported alongside:
+per-strategy 1m vs 1d net, fill counts, and the number that clear the gate.
+
+Pre-run clarification (before any run): 4000 1m bars span only ~2.8 days, so
+the 1d control is a SEPARATELY fetched 4000-daily-bar series with the same
+2400/800/800 split — not an aggregation of the 1m window. Strategy instances
+use default params from their CONFIG_SCHEMA and stateless `evaluate_at`;
+`decisions_to_fills` maps the full decision series with `score_from=2400`,
+long_flat, 7 bps/fill; net comes from `equity_pnl` marked at the last close.
+This changes no threshold or criterion, only specifies the apparatus.
+
+## S17b · R-44 — feasible-window replication (NEW registration, before the run)
+
+The R-43 run was NOT EVALUABLE: Binance returned only 3387 daily klines,
+short of the registered 4000. Shrinking the window after seeing that would be
+the prohibited operation. This is a NEW hypothesis (R-44 candidate) with a
+window that is feasible on BOTH arms, fixed before running: 3000 bars, train
+1800 / val 600 / test 600. Everything else is unchanged — BTCUSDT, 20 shipped
+strategies, default params, `decisions_to_fills` with score_from=1800,
+long_flat, 7 bps/fill, `equity_pnl` marked at the last close, 1m arm and a
+separately fetched 1d control.
+
+Criterion (fixed, same direction): R-44 HOLDS iff no strategy has positive net
+OOS on the 1m arm after costs; it FAILS if any does. The R-43 failure stays in
+the record as NOT EVALUABLE and is not quietly folded into this one.
+
+## S16-2 · R-42 — RESULT
+
+```
+batch N   : live_ok=0 universe=20  p_adj min=0.15984 max=1.00000
+available U: live_ok=0 universe=234 p_adj min=1.00000 max=1.00000
+R-42 FAILS: live_ok 0 -> 0, dropped []
+```
+
+The correction is NOT inert — it moves every adjusted p to the floor — but
+there were no `live_ok` strategies to lose, so the registered criterion
+(live_ok count drops) is not met. Verdict **FAILS**, not reinterpreted as a
+pass. The default stays batch-N; `evaluate_many(use_universe_correction=True)`
+remains available for a future snapshot that actually promotes something.
+
+## S17-2 · R-43 / R-44 — RESULTS
+
+R-43: NOT EVALUABLE. Only 3387 daily klines were available against the
+registered 4000; the window was NOT shrunk on that run.
+
+R-44 (3000 bars, train 1800 / val 600 / test 600, BTCUSDT):
+
+```
+strategies with positive 1m net: 0 []
+1m nets range -10066.83 .. 0.00 ; momentum_roc and vwap_reversion: 0 fills, 0.00
+R-44 HOLDS
+```
+
+Honest caveat, from the apparatus: `decisions_to_fills` uses its default
+quantity of ONE UNIT, so a 1-unit BTC position is far larger than the 10 000
+starting equity. Absolute nets — especially the large POSITIVE 1d arm figures
+(+34 797 for adx_di_trend, +54 244 for ema_cross) — are not cash P&L and must
+not be quoted as such. The criterion is the SIGN of the 1m net under a fixed
+unit sizing, which is comparable across timeframes because both gain and cost
+scale with the same unit. Two strategies never traded and scored exactly 0.00,
+reported as neutral, not as wins.
+
+Consequences, stated rather than tuned: changing research to the execution
+timeframe does not reveal an edge (R-44); the available-space correction does
+not change who trades today (R-42). Both gaps are closed with evidence and
+neither default is silently switched.
+
+---
+
 ## S14 · PBO definition gap — found, documented, deliberately NOT changed
 
 `cscv_pbo` claimed Bailey & López de Prado's PBO = P(OOS logit < 0), i.e. the
