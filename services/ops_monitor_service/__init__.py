@@ -558,6 +558,19 @@ class OpsMonitorService(BaseService):
         except (TypeError, ValueError):
             qty, price, fee = 0.0, 0.0, 0.0
         sid = str(payload.get("strategy_id") or order.get("strategy_id") or "")
+        # The in-memory observation has a reference price; the journal row did
+        # not. Persist it in the existing meta field so calibration survives a
+        # restart. A fill without one stays usable only for fee accounting,
+        # never for a fabricated zero-slippage sample.
+        meta: dict[str, Any] = {}
+        reference = payload.get("reference_price") or order.get("reference_price")
+        try:
+            if reference is not None and float(reference) > 0:
+                meta["reference_price"] = float(reference)
+        except (TypeError, ValueError):
+            pass
+        if fee > 0:
+            meta["reported_fee"] = float(fee)
         if self.journal is not None:
             self.journal.record(
                 symbol=symbol,
@@ -567,6 +580,7 @@ class OpsMonitorService(BaseService):
                 strategy_id=sid,
                 reason=str(payload.get("reason") or order.get("reason") or "fill"),
                 fee=fee,
+                meta=meta,
             )
         self._sample_fill(
             symbol=symbol,

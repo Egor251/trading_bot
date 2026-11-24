@@ -322,6 +322,25 @@ Tools: `tools/universe_correction_verdict.py`, `tools/timeframe_verdict.py`.
 | R-43 | 1m research reveals what 1d missed | no positive 1m net after costs | 4000 bars required | BTCUSDT 1h/1d | `NOT EVALUABLE` — only 3387 daily klines; window NOT shrunk |
 | R-44 | feasible-window replication | no positive 1m net after costs | 3000 bars, 20 strategies | BTCUSDT 1m + separate 1d control | `HOLDS` — 0 positive, 2 never traded |
 
+### The existential claim (R-45)
+
+Registered S18 after the user asked to prove "at any moment at least one
+profitable strategy exists" — phrased so that best-of-N would make it
+trivially true. The registered version uses 20 default strategies, five fixed
+600-bar BTCUSDT 1h windows, 7 bps/fill, 1000 USD notional, and a gated count
+requiring BOTH positive net and net above a same-activity random-timing null.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-45 | every window contains a gated profitable strategy | ≥1 gated in all 5 windows | 20 strategies × 5 windows | BTCUSDT 1h, 6000 bars | `FAILS` — window 5: raw 0, gated 0 |
+
+A known-answer check caught the first implementation counting 15 "gated"
+strategies in a window with zero positives; the predicate was fixed to require
+profitability and pinned by `tests/test_existential_gate.py`. The failure is a
+statement about the DEFAULT universe on these windows, not a general theorem.
+ML stays a separate open question: R-41 was one family/one window, not a
+general negative.
+
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
 strategy to demote, so its registered criterion fails; the capability stays
@@ -335,8 +354,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            44
-closed with evidence             37   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            45
+closed with evidence             38   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -344,10 +363,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-37 + 3 + 1 = 41, not 44: the resolved `neuroevolution counting check` item
+38 + 3 + 1 = 42, not 45: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
-(R-36/37), and the two remaining gaps took THREE (R-42/43/44). Counted this
-way on purpose rather than silently.
+(R-36/37), and the two remaining gaps took THREE (R-42/43/44). R-45 was added
+later as the pre-registered version of the existential claim. Counted this way
+on purpose rather than silently.
 
 The last open item:
 

@@ -33,6 +33,8 @@ PYTEST_MODULES = (
     "tests/test_fill_pnl_source.py",
     "tests/test_gate_status_policy.py",
     "tests/test_closed_bar_publishing.py",
+    "tests/test_fill_reference_persistence.py",
+    "tests/test_existential_gate.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",
@@ -52,6 +54,7 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/orderflow_imbalance.py",),
     ("tools/universe_correction_verdict.py",),
     ("tools/timeframe_verdict.py",),
+    ("tools/existential_strategy.py",),
     ("tools/fill_audit.py",),
 )
 

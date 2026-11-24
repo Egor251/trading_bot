@@ -1629,3 +1629,65 @@ than claimed as an edge: it removes an execution artifact, not creates a signal.
 
 Verification: offline 146 passed + 3 known-answer self-tests, full suite
 **1077 passed**, ruff clean.
+
+---
+
+## S18 · Existential profitable strategy — REGISTRATION (before the run)
+
+Registered as R-45, before any run. The informal claim "at any moment there is
+at least one profitable strategy" is unfalsifiable as stated: selecting the
+best of 20 strategies after seeing the window guarantees a positive by luck.
+This registration makes it testable and separates luck from evidence.
+
+Universe: the 20 shipped strategies, DEFAULT params only, no tuning, no
+per-window refit. Data: BTCUSDT 1h closes from raw klines, 6000 bars; five
+fixed, non-overlapping 600-bar test windows at the end, no training on them.
+Execution: long_flat, 7 bps per fill, closed bars, fixed 1000 USD notional
+per position so net is comparable money, marked at the last close of the
+window. Windows and parameters are fixed here, not chosen after a result.
+
+Two counts, both reported:
+- raw: strategies with net > 0 in the window. Expected to be nonzero by luck
+  and NOT evidence for the hypothesis.
+- gated: strategies whose net exceeds the p90 of a same-activity random-timing
+  null for that window (200 draws, seed 450117), built from the SAME held-bar
+  activity rate, so both gross and cost vary. This is the registered bar.
+
+Criterion (fixed): R-45 HOLDS iff EVERY window has at least one GATED
+strategy. It FAILS if any window has none. No threshold is adjusted after
+seeing the numbers. If it fails, the honest conclusion is that on these
+windows no strategy beat random timing — not that none can ever exist.
+
+ML is NOT written off by this registration: R-41 tested one feature family,
+one timeframe, one architecture space on real data. It remains a separate
+question with its own registrations; nothing here reopens or closes it.
+
+## S18-2 · R-45 — RESULT
+
+Known-answer defect caught BEFORE the result was accepted: the first run
+reported a window with **raw positives 0 but gated 15**. The `gated` predicate
+compared net only to a deeply negative random-timing null, so losing
+strategies passed. Fixed to require BOTH net > 0 and net > p90; pinned by
+`tests/test_existential_gate.py`. Corrected run:
+
+```
+window 1: raw 1  gated 1  ['rsi_reversion']
+window 2: raw 4  gated 4  ['bollinger_reversion', 'mean_reversion_example', 'rsi_reversion', 'vwap_reversion']
+window 3: raw 7  gated 7  ['adx_di_trend', 'ema_cross', 'keltner_breakout', 'macd_trend']
+window 4: raw 14 gated 13 ['adx_di_trend', 'ema_cross', 'heikin_ashi_trend', 'keltner_breakout']
+window 5: raw 0  gated 0  []
+
+R-45 FAILS: at least one window has none.
+```
+
+This is the first result that bears directly on the informal claim: on the
+most recent 600-bar BTCUSDT 1h window, NO default strategy was profitable
+after 7 bps/fill, let alone above a random-timing null. The earlier windows
+show that this is not a blanket impossibility — profitable readings exist —
+but "at any moment" is falsified as a universal statement.
+
+Boundaries, stated: 20 default strategies, one instrument, five fixed windows,
+long_flat, 1000 USD notional. A different universe or a trained/adaptive
+selector is a NEW registration, not a reinterpretation. The ML lead is still
+open: R-41 was one family/one window and never established a general ML
+negative.
