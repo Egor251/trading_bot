@@ -611,28 +611,33 @@ def stage_main(gain: float, seed: int) -> None:
             )
 
 
-def stage_real(seed: int, n_bars: int = 6000) -> None:
-    """R-41: identical space/search/ensemble, real BTCUSDT 1h features."""
+def stage_real(
+    seed: int,
+    n_bars: int = 6000,
+    timeframe: str = "1h",
+    ntr: int = 3600,
+    nva: int = 1200,
+) -> None:
+    """Real BTCUSDT features; S3 search + ensemble. Timeframe/split are inputs."""
     import asyncio
 
-    from tools.orderflow_imbalance import _fetch_klines
+    from tools.timeframe_verdict import _klines
 
     archs = enumerate_architectures()
     assert len(archs) == 50
 
-    rows = asyncio.run(_fetch_klines(n_bars))
+    rows = asyncio.run(_klines(timeframe, n_bars))
     closes = [float(r[4]) for r in rows]
-    print(f"fetched {len(rows)} BTCUSDT 1h klines ({rows[0][0]}..{rows[-1][0]})")
+    print(f"fetched {len(rows)} BTCUSDT {timeframe} klines ({rows[0][0]}..{rows[-1][0]})")
     X, y_sig, R = build_real_rows(closes)
     N = len(y_sig)
-    NTR, NVA = 3600, 1200
-    assert N >= NTR + NVA + 200, f"only {N} rows"
-    itr, iva = np.arange(0, NTR), np.arange(NTR, NTR + NVA)
-    ite = np.arange(NTR + NVA, N)
+    assert N >= ntr + nva + 200, f"only {N} rows"
+    itr, iva = np.arange(0, ntr), np.arange(ntr, ntr + nva)
+    ite = np.arange(ntr + nva, N)
     rng = np.random.default_rng(41)
     y_noise = rng.permutation(y_sig)
     print(
-        f"rows: {N} (train {NTR} / val {len(iva)} / test {len(ite)}), "
+        f"rows: {N} (train {ntr} / val {len(iva)} / test {len(ite)}), "
         f"test base {y_sig[ite].mean():.4f}, "
         f"var(signal)={y_sig.var():.6f} var(noise)={y_noise.var():.6f}"
     )
@@ -706,14 +711,31 @@ def main() -> None:
     ap.add_argument("--stage", choices=("known", "pilot", "main"), required=True)
     ap.add_argument("--gain", type=float, default=0.6)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--data", choices=("synthetic", "btc1h"), default="synthetic")
+    ap.add_argument("--data", choices=("synthetic", "btc1h", "btc1d"), default="synthetic")
+    ap.add_argument("--bars", type=int, default=0)
+    ap.add_argument("--train", type=int, default=0)
+    ap.add_argument("--val", type=int, default=0)
     args = ap.parse_args()
     if args.stage == "known":
         stage_known()
     elif args.stage == "pilot":
         stage_pilot()
     elif args.data == "btc1h":
-        stage_real(args.seed)
+        stage_real(
+            args.seed,
+            n_bars=args.bars or 6000,
+            timeframe="1h",
+            ntr=args.train or 3600,
+            nva=args.val or 1200,
+        )
+    elif args.data == "btc1d":
+        stage_real(
+            args.seed,
+            n_bars=args.bars or 3000,
+            timeframe="1d",
+            ntr=args.train or 2000,
+            nva=args.val or 400,
+        )
     else:
         stage_main(args.gain, args.seed)
 

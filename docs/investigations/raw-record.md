@@ -1691,3 +1691,62 @@ long_flat, 1000 USD notional. A different universe or a trained/adaptive
 selector is a NEW registration, not a reinterpretation. The ML lead is still
 open: R-41 was one family/one window and never established a general ML
 negative.
+
+---
+
+## S19 · Long-horizon ML — REGISTRATION (before the run)
+
+Registered as R-46, before any run. The objection is correct: R-41's test was
+1193 hourly bars (~50 days) and R-45's windows were 600 bars (~25 days). A
+claim about a *working* strategy needs a horizon in years, not days. This is a
+NEW hypothesis; R-41/R-45 keep their verdicts.
+
+Data: BTCUSDT DAILY klines, 3000 bars (~8 years); train 2000 / val 400 /
+test 600 — the held-out window is ~20 months, ~12x R-41's. Split fixed here,
+not chosen after results; daily venue limit makes 3000 feasible (3387
+available, measured in R-43).
+
+Model: the SAME 50-architecture space, SAME optimiser (Adam, 500 epochs,
+lr 0.05), SAME evolution (pop 12, 6 gens, seed 41), SAME ensemble form
+(mean predicted probability over distinct evaluated architectures). Only the
+timeframe and horizon change. Features: 6 lagged daily log returns, target
+next-day direction, standardized on train only; permutation noise twin.
+Costs: 7 bps per fill, long/flat, net on the test window.
+
+Known-answer gate before reading the result: `neuroevolution --stage known`
+must pass (gradient 3.9e-08, noise within ±0.05 of coin flip, strong signal
+≥ 0.85). Run is refused otherwise.
+
+Criterion (fixed): R-46 HOLDS iff ensemble test net > 0 AND ensemble test
+accuracy ≥ 0.53 on the ~20-month test window. FAILS otherwise. Both counts
+(evaluations vs distinct architectures) and PBO are reported beside it.
+No threshold is changed after the numbers arrive. A FAIL says this model
+family fails on this horizon; it does not close ML in general.
+
+## S19-2 · R-46 — RESULT
+
+Known-answer gate passed first: gradient 3.917e-08, noise −0.028 from coin
+flip, strong signal 0.864. Run accepted.
+
+```
+fetched 3000 BTCUSDT 1d klines (2018-09-09 .. 2026-11-24)
+rows 2993 (train 2000 / val 400 / test 593 ≈ 20 months), test base 0.4975
+census test-acc spread over 50: mean 0.4908 sd 0.0140 min 0.4604 max 0.5278
+census best-by-val: val 0.5700 -> test 0.4722
+evolution: 62 evaluations / 22 distinct; PBO signal 1.000 / noise 1.000
+ensemble test 0.5025 (< 0.53)   net -0.4295 (< 0)
+winner and reference both test 0.4840, net -0.5812
+buy-and-hold over the same test window: -0.2836
+```
+
+**R-46 FAILS both bars.** The longer horizon did not rescue this model family:
+the ensemble sits at chance, every net is red, and the ranking is pure noise.
+Buy-and-hold was also negative over the window, so this is not a case where a
+simple long would have worked — but the registered criterion is absolute net,
+not relative, and it fails on its own terms.
+
+Boundaries: 6 lagged daily returns, one instrument, one 20-month holdout,
+one architecture space/optimiser. A different feature family, multi-asset
+panel, or adaptive selector is a NEW registration. ML is still not closed as
+a general question — this is the second real-data FAIL (R-41 hourly, R-46
+daily) and the first at a yearly horizon.

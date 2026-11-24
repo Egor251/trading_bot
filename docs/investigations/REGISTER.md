@@ -341,6 +341,20 @@ statement about the DEFAULT universe on these windows, not a general theorem.
 ML stays a separate open question: R-41 was one family/one window, not a
 general negative.
 
+### Long-horizon ML (R-46)
+
+Registered S19; results S19-2. Same 50-architecture space, optimiser, evolution
+and ensemble, moved to BTCUSDT DAILY bars, 2993 rows, train 2000 / val 400 /
+test 593 (~20 months). Known-answer gate passed before the run.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-46 | the ensemble transfers and trades profitably on a yearly horizon | net > 0 AND accuracy ≥ 0.53 on held-out | 62 evaluations / 22 distinct, 593-day holdout | BTCUSDT 1d, 3000 bars | `FAILS` — accuracy 0.5025, net −0.4295; PBO 1.000; census mean 0.4908 |
+
+Second real-data ML failure (R-41 hourly, R-46 daily) and the first on a yearly
+horizon. Boundaries are one instrument/feature family/architecture space; a
+different panel or selector is a new registration, not a reinterpretation.
+
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
 strategy to demote, so its registered criterion fails; the capability stays
@@ -354,8 +368,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            45
-closed with evidence             38   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            46
+closed with evidence             39   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -363,11 +377,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-38 + 3 + 1 = 42, not 45: the resolved `neuroevolution counting check` item
+39 + 3 + 1 = 43, not 46: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
-(R-36/37), and the two remaining gaps took THREE (R-42/43/44). R-45 was added
-later as the pre-registered version of the existential claim. Counted this way
-on purpose rather than silently.
+(R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
+claim) and R-46 (long-horizon ML) were added later as separate registrations.
+Counted this way on purpose rather than silently.
 
 The last open item:
 
