@@ -1502,3 +1502,25 @@ test_pbo_is_rank_degradation_not_the_papers_median_rule` pins the 1st↔2nd
 reading. All PBO numbers in the register (0.895, 0.965, 0.822 …) keep their
 meaning as rank-degradation rates. Switching definitions is a NEW registered
 hypothesis with its own threshold fixed before the run — not a repair.
+
+---
+
+## S15 · Forming bars no longer reach strategy evaluation
+
+No new hypothesis. The CCXT watch stream emits the current 1m bar on every
+tick; `CandleStore._put` upserts those updates into one minute bucket, so a
+strategy could see a price flip twice inside a bar and pay two fills while
+research scores closed bars. `engine.market.closed_bar_arrived(previous,
+current)` is the pure rule: a bar is publishable only when the NEXT minute
+bucket opens. The first update is held; same-minute updates are forming and
+are not published; a stale/out-of-order feed cannot republish a bar.
+`ccxt_market_service._watch_one` now holds the previous candle and publishes
+it once on the next bucket, with the exchange timestamp intact.
+
+Red-first: 4 tests in `tests/test_closed_bar_publishing.py` (import failed
+before the helper existed), then green. This narrows the 1d-research/1m-live
+gap but does not close it — the timeframes still differ. Recorded here rather
+than claimed as an edge: it removes an execution artifact, not creates a signal.
+
+Verification: offline 146 passed + 3 known-answer self-tests, full suite
+**1077 passed**, ruff clean.

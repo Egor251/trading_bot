@@ -83,6 +83,26 @@ def timeframe_to_interval_min(timeframe: str) -> int:
     return 1
 
 
+def closed_bar_arrived(previous: Candle | None, current: Candle) -> bool:
+    """True when `current` opens a new minute bucket, so `previous` is closed.
+
+    Websocket OHLCV streams re-emit the forming bar on every tick. Publishing
+    those updates makes strategies re-evaluate an incomplete close, and the
+    candle store upserts them into one bucket -- a flip inside the bar costs
+    two fills. Hold the bar and publish it once, when the next one opens.
+    The first bar has no predecessor and is held too.
+    """
+    if previous is None:
+        return False
+
+    def bucket(ts: datetime) -> str:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return ts.astimezone(UTC).replace(second=0, microsecond=0).isoformat()
+
+    return bucket(current.ts) > bucket(previous.ts)
+
+
 def candle_to_market_payload(
     candle: Candle,
     *,

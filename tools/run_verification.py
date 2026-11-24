@@ -32,6 +32,7 @@ PYTEST_MODULES = (
     "tests/test_gate_wiring.py",
     "tests/test_fill_pnl_source.py",
     "tests/test_gate_status_policy.py",
+    "tests/test_closed_bar_publishing.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",

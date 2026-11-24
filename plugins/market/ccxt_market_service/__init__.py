@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from engine.adapters import MockMarketDataAdapter
 from engine.adapters.ccxt_adapter import CcxtMarketDataAdapter, normalize_ccxt_symbol
-from engine.market import Candle, candle_to_market_payload
+from engine.market import Candle, candle_to_market_payload, closed_bar_arrived
 from host.events import publish_market_candle
 from host.logging_setup import get_log
 from plugins.market.market_adapter_base import MarketAdapterServiceBase
@@ -31,7 +31,9 @@ def _looks_like_ccxt_symbol(symbol: str, class_code: str) -> bool:
     if "/" in sym or "-" in sym:
         return True
     compact = sym.replace("/", "").replace("-", "").upper()
-    return any(compact.endswith(q) and len(compact) > len(q) for q in ("USDT", "USDC", "BTC", "ETH"))
+    return any(
+        compact.endswith(q) and len(compact) > len(q) for q in ("USDT", "USDC", "BTC", "ETH")
+    )
 
 
 # Exchange-specific credential env defaults (override via config api_key_env etc.).
@@ -43,9 +45,7 @@ _EXCHANGE_CRED_ENVS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _resolve_ccxt_cred_envs(
-    exchange: str, config: dict[str, Any]
-) -> tuple[str, str, str]:
+def _resolve_ccxt_cred_envs(exchange: str, config: dict[str, Any]) -> tuple[str, str, str]:
     """Resolve (api_key_env, secret_env, password_env) for an exchange."""
     ex = str(exchange or "").strip().lower()
     defaults = _EXCHANGE_CRED_ENVS.get(ex, ("CCXT_API_KEY", "CCXT_SECRET", "CCXT_PASSWORD"))
@@ -108,9 +108,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
 
     def _build_ccxt_adapter(self) -> CcxtMarketDataAdapter:
         exchange = str(self.config.get("exchange") or "bitget").strip().lower()
-        key_env, secret_env, password_env = _resolve_ccxt_cred_envs(
-            exchange, self.config
-        )
+        key_env, secret_env, password_env = _resolve_ccxt_cred_envs(exchange, self.config)
         return CcxtMarketDataAdapter(
             exchange_id=exchange,
             sandbox=bool(self.config.get("sandbox", False)),
@@ -153,9 +151,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
         }:
             if runtime is not None:
                 runtime.halt(f"live_market_feed_unavailable:{reason}")
-            raise RuntimeError(
-                f"mock market fallback forbidden in live mode: {reason}"
-            )
+            raise RuntimeError(f"mock market fallback forbidden in live mode: {reason}")
         if not self._mock_fallback_allowed():
             self._last_error = reason
             self._feed_source = "none"
@@ -196,9 +192,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
                 self._activate_mock_fallback(reason)
             else:
                 self._last_error = reason
-                _svc_log().error(
-                    "ccxt_market_service disabled: {} (pip install ccxt)", reason
-                )
+                _svc_log().error("ccxt_market_service disabled: {} (pip install ccxt)", reason)
                 return
         try:
             await super().start()
@@ -244,11 +238,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
         if not active:
             return
         self._active = active
-        need = [
-            (cc, t)
-            for cc, t in active
-            if self._series_key(cc, t) not in self._seeded
-        ]
+        need = [(cc, t) for cc, t in active if self._series_key(cc, t) not in self._seeded]
         if self._seeding:
             return
         if need and self.is_running and self._adapter is not None:
@@ -265,9 +255,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
         timeframe: str,
     ) -> Candle | None:
         assert self._adapter is not None
-        bars = await self._adapter.fetch_ohlcv(
-            ticker, timeframe, limit=3, class_code=class_code
-        )
+        bars = await self._adapter.fetch_ohlcv(ticker, timeframe, limit=3, class_code=class_code)
         return bars[-1] if bars else None
 
     async def _stream_loop(self) -> None:
@@ -297,8 +285,7 @@ class CcxtMarketService(MarketAdapterServiceBase):
             return
         timeframe = str(self.config.get("timeframe", "1m"))
         books = list(self._active) or [
-            (self._default_class_code, str(t))
-            for t in (self.config.get("tickers") or ["BTC/USDT"])
+            (self._default_class_code, str(t)) for t in (self.config.get("tickers") or ["BTC/USDT"])
         ]
         for class_code, ticker in books:
             self._watch_tasks.append(
@@ -324,24 +311,28 @@ class CcxtMarketService(MarketAdapterServiceBase):
     ) -> None:
         assert self._ccxt is not None
         poll_fallback = float(self.config.get("interval_sec", 5))
+        # A websocket update can be the SAME bar re-emitted many times a
+        # minute. Publish the previous bar only when the next one opens, so
+        # strategies act on a closed close instead of flipping on a forming
+        # price. The first update has no predecessor and is held.
+        held: Candle | None = None
         while self.is_running:
             try:
-                candle = await self._ccxt.watch_ohlcv(
-                    ticker, timeframe, class_code=class_code
-                )
-                instance_id = str(
-                    await self.core.config.get("instance.id", "local") or "local"
-                )
-                payload = candle_to_market_payload(candle, class_code=class_code)
-                await publish_market_candle(
-                    self.core.event_bus,
-                    source_id=self.component_id,
-                    payload=payload,
-                    instance_id=instance_id,
-                )
-                self._ticks += 1
-                self._last_error = None
-                self._maybe_persist_live(class_code, ticker, timeframe=timeframe)
+                candle = await self._ccxt.watch_ohlcv(ticker, timeframe, class_code=class_code)
+                if closed_bar_arrived(held, candle):
+                    assert held is not None
+                    instance_id = str(await self.core.config.get("instance.id", "local") or "local")
+                    payload = candle_to_market_payload(held, class_code=class_code)
+                    await publish_market_candle(
+                        self.core.event_bus,
+                        source_id=self.component_id,
+                        payload=payload,
+                        instance_id=instance_id,
+                    )
+                    self._ticks += 1
+                    self._last_error = None
+                    self._maybe_persist_live(class_code, ticker, timeframe=timeframe)
+                held = candle
             except asyncio.CancelledError:
                 break
             except Exception as exc:
