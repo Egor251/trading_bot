@@ -86,6 +86,151 @@ Carried here because the register should be complete or useless.
 
 ---
 
+## Session 3 — the neuroevolution counting check
+
+Registered in `raw-record.md` S3-1 before running (criteria, gain, seed); results
+in S3-2. Tool `tools/neuroevolution_count.py`. Space: 50 architectures by
+enumeration (depth-0 collapses to logistic; hidden-0/depth>0 keeps its label —
+12 functionally tied labels). Panels from one generator (n=2400, train 1200 / val
+600 / test 600, gain 0.5, seed 7): signal y ~ Bernoulli(sigmoid(0.5·(x0+x1)/√2)),
+noise = permuted signal labels, var identical 0.249950 both. Evolution fixed in
+advance: pop 12, 6 generations, tournament 3, top-2 elites carried without refit.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-33 | evolution is countable: distinct < evaluations | distinct < fits | 62 fits / 18 distinct (signal), 62 / 17 (noise) | synthetic, seed 7 | `HOLDS` |
+| R-34 | evolution's pick does not survive OOS though signal is findable | (a) pre-specified logistic test ≥ 0.53 AND (b) winner val−test ≥ +0.03 AND (c) winner − ref ≤ +0.01 | 50-arch census + 62-fit evolution, held-out test | synthetic, seed 7 | `FAILS` — (a) 0.5867 HOLDS, (c) +0.0000 HOLDS, but (b) is **−0.0050**: the fitness survived, test joint-best observed anywhere |
+| R-35 | PBO over the evaluated architecture population is high | PBO ≥ 0.7 | 18 distinct archs × 16 val blocks, 512 splits | synthetic, seed 7 | `HOLDS` — **0.822** signal (lineup 0.895), 0.965 noise |
+
+**R-34 is the binding negative in the other direction.** The search was expected
+to be the problem; it is not, on this space/signal/budget: one shared optimiser,
+a smooth weak signal every architecture sees, a fixed val set. The overfitting the
+registration aimed at evolution hit the exhaustive census instead —
+best-by-val 0.6083 → test 0.5617 (gap +4.7pp) vs the evolution winner's −0.5pp.
+Single seed (7), stated as a limitation; re-running seeds until (b) holds would be
+the criterion-shopping S2-20 registers against. Variants that might hold H2b
+(separate tuners, needle signal, resampled val) are a new registration, not a
+reinterpretation.
+
+---
+
+## Session 4 — the portfolio corrected null
+
+R-19 stays `NOT EVALUABLE` and the 4/4 stays withdrawn. New hypothesis, new null,
+everything else frozen (15 ETFs, 252/252/40%, 7 bps/fill, 4×749). Full registration
+in `raw-record.md` S4-1 (amended pre-run: N2 split into N2a loser-must-fail and
+N2b q=1-must-refuse), results in S4-2. Tool: `tools/portfolio_trend.py --null held`
+(200 draws/window, seed 361115); the old permuted path is untouched in the same
+file and reproduces S2-20 byte-identical. `--selftest` pins N1–N3 with no network.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-36 | the portfolio beats random timing on the held-bars null | total net ≥ p90 of 200 null totals | 4 windows × 749 bars, 200 draws | 15 ETFs, 2010–2026 | `NOT EVALUABLE` — q=1.0000 in all four windows (portfolio never flat across 2996 bars), null spread exactly 0, gate refused before any comparison |
+
+**R-36 is the N2b rehearsal happening live.** The gate that refused the flat
+−50% synthetic refused the real portfolio for the same structural reason: a
+same-activity timing null for an always-on portfolio is the portfolio itself.
+Deeper than either session's first diagnosis: `_costed` sees only (window sum,
+non-zero count), and no same-activity timing resample moves either one here.
+A cross-sectional or turnover-costed null is a different hypothesis, not a fix —
+designing it now would be replacing the null after seeing it gate.
+
+---
+
+## Session 5 — the portfolio cross-sectional null
+
+Second attempt at the open item, registered as S5-1 before running (criterion,
+seeds, live design; one pre-run synthetic calibration noted in S5-2 that touches
+only the synthetic loser). Tool: `tools/portfolio_trend.py --null cross`
+(200 draws/window, seed 362115) plus `--selftest2` (C1–C3, no network). Shared
+scorer for observed and null subsets; reproduction assert (scorer == port_net)
+held in all 4 windows.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-37 | the portfolio beats random instrument selection | total net ≥ p90 of 200 null totals | 4 windows × 749 bars, 200 draws | 15 ETFs, 2010–2026 | `FAILS` — total −1.7005 vs null median −1.1904, p90 −0.9895; 1/4 windows (record only) |
+
+**R-37 is the first evaluable answer to the portfolio-timing question, and it is
+negative.** Random same-size instrument subsets lose less than the TSMOM
+selection. The open item is CLOSED: timing has no variance to test (R-36),
+selection loses to random (R-37). H2/H3 stand as FAIL — all three portfolio
+claims now fail with evidence, none withdrawn.
+
+---
+
+## Session 6 — signed order flow
+
+Open item, unblocked by re-checking rather than assuming: Binance raw klines
+(12 fields, taker-buy base volume at index 9) are reachable from here via the
+installed ccxt's implicit `public_get_klines` — no new dependency, research
+tool only (`tools/orderflow_imbalance.py`). Registered S6-1 before running
+(C0 field check gating K1/K2 gating H); results S6-2.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-38 | trailing taker imbalance predicts next-bar BTC return | \|t\| > 3.00, lags {1,4} | 2999 bars, 2 lags | BTCUSDT 1h spot klines | `FAILS` — t = −1.29 / −1.16; C0 +0.4086 (fields real) |
+
+**R-38 closes the item negatively with evidence.** The endpoint exists and the
+blocked question is answered: no predictability at these lags. (The Almgren
+permanent-vs-temporary split stays untestable — it needs our own fills, and
+that is the last open item, not this one.)
+
+---
+
+## Session 7 — neuroevolution replication
+
+R-34's falsification of H2b stood on one seed (7). Replication registered S7-1
+before running (frozen design, fresh seeds 8–12); results S7-2. No new code —
+`tools/neuroevolution_count.py --seed` — so no new pin tests; the S3 pins cover
+the instrument.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-39 | R-34 replicates: the winner's fitness survives on fresh seeds | gap < +0.03 on ≥4/5 seeds | 5 × (50-arch census + 62-fit evolution) | synthetic, seeds 8–12 | `HOLDS` — 4/5 (gaps +0.025/−0.027/+0.015/+0.033/−0.043; seed 11 misses by 0.33pp while tying census-best) |
+
+**R-39 makes the non-closure of the ML lead a 6-seed statement.** The search
+transfers on this space/signal/budget; H1/H2c/H3 re-hold on all five seeds, and
+twice evolution matches or beats exhaustive selection OOS. What could still
+break it is a different registration, not a reinterpretation.
+
+---
+
+## Session 8 — the ensemble, the usable form
+
+Constructive finish, registered S8-1 before running (frozen design, fresh seeds
+13–17; additive ensemble lines, no existing number moves — S3 pins re-run
+green). Results S8-2.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-40 | averaging the evaluated population transfers; the pick adds nothing | ensemble ≥ 0.53 AND \|ens − winner\| ≤ 0.02 on ≥4/5 seeds | 5 × (50-arch census + 62-fit evolution) | synthetic, seeds 13–17 | `HOLDS` — 5/5 both (max gap 1.0pp; census-50 ensembles agree) |
+
+**R-40 finishes the ML arc without breaking anything.** Search transfers,
+ranking is noise, average is the usable form — 11 seeds, one optimiser, zero
+real data. Seed 16 (winner val lucky at +5.8pp, test and ensemble both 0.5717)
+shows luck moves val, never the OOS answer.
+
+---
+
+## Session 9 — ML on real data
+
+Boundary crossed deliberately as its own hypothesis, registered S9-1 before
+running (same space/search/ensemble; 6 real features = lagged BTC 1h returns;
+6000 bars train 3600/val 1200/test 1193; costs inside the criterion). Results S9-2.
+Tool: `tools/neuroevolution_count.py --stage main --data btc1h --seed 41`
+(leakage-pinned builder, permutation control twin).
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-41 | the ML ensemble transfers on real BTC net of costs | ensemble ≥ 0.53 AND test net > 0 | 50 archs + 62 fits, held-out 1193 bars | BTCUSDT 1h, 6000 bars | `FAILS` — 0.5264 (misses by 0.36pp, not rounded up) and net −0.0858; census mean 0.5055, PBO 0.986 |
+
+**R-41 closes the ML lead in both directions.** Synthetically the search works
+(R-34/R-39/R-40); on real data it finds nothing — the only honest reading after
+40 edgeless hypotheses. No plugin in either direction: one side does not work
+where it must, the other only where the answer was planted.
+
+---
+
 ## Rules derived, written down so they are not rediscovered the hard way
 
 Each cost a real experiment to learn. Each is a **precondition for the next
@@ -148,21 +293,23 @@ registration**, not a lesson.
 ## Status
 
 ```
-registered hypotheses            32
-closed with evidence             27   (FAILS, HOLDS, ANSWER, CLOSED)
-not evaluable                     1   R-19 — the null had no variance; withdrawn,
-                                     NOT counted as either a pass or a failure
-open                              4
+registered hypotheses            41
+closed with evidence             35   (FAILS, HOLDS, ANSWER, CLOSED)
+not evaluable                     2   R-19 (null degenerate), R-36 (null gated:
+                                      portfolio never flat, q=1.0000) — neither
+                                      counted as pass or failure
+open                              1
 ```
 
-The four open items, none of which is a strategy awaiting a verdict:
+35 + 2 + 1 = 38, not 41: the resolved `neuroevolution counting check` item
+became THREE rows (R-33/34/35), and the resolved portfolio-null item took TWO
+rows (R-36/37). Counted this way on purpose rather than silently.
+
+The last open item:
 
 | open | blocked on |
 |---|---|
-| signed order flow | `fetch_ohlcv` returns 6 columns; Binance taker-buy volume (raw kline 9–10) is discarded upstream. Needs an exchange-specific raw endpoint |
 | fee schedule | reconciliation runs hourly, but it has never seen a real fill — the schedule is assumed, not measured |
-| portfolio hypothesis, corrected null | needs a registered null that resamples *which bars are held*, so the cost term varies. Not written, deliberately: replacing a null after seeing it degenerate is the criterion-shopping registered against |
-| neuroevolution counting check | registered, not run — see [`HANDOFF-neuroevolution.md`](HANDOFF-neuroevolution.md) |
 
 ```
 error catalogue          this session   parallel session
