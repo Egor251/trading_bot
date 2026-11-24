@@ -45,12 +45,21 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
     mean = _f(oos.get("mean_oos_pnl"))
     ci_lo = oos.get("ci_low")
     ci_hi = oos.get("ci_high")
-    ci_crosses_zero = False
+    # Unknown is not clean. A report written before intervals were recorded has
+    # no evidence that the mean clears zero, and "False" here would be read by
+    # the gate as a clean interval -- the same fail-open as a missing p-value
+    # becoming 0.0. Fail closed: an absent or malformed interval crosses zero.
+    ci_crosses_zero = True
     if ci_lo is not None and ci_hi is not None:
         try:
             ci_crosses_zero = float(ci_lo) <= 0.0 <= float(ci_hi)
         except (TypeError, ValueError):
-            ci_crosses_zero = False
+            ci_crosses_zero = True
+    p_value = oos.get("p_value")
+    try:
+        p_value = None if p_value is None else float(p_value)
+    except (TypeError, ValueError):
+        p_value = None
     holdout_pnl = holdout.get("pnl")
     robust_sign = None
     if holdout_pnl is not None:
@@ -90,10 +99,11 @@ def digest_walk_forward(report: Mapping[str, Any] | None) -> dict[str, Any]:
         "ci_high": _f(ci_hi) if ci_hi is not None else None,
         "ci_crosses_zero": ci_crosses_zero,
         # Null-hypothesis p-value for the mean, from the recentred block bootstrap.
-        # Absent on older reports rather than defaulted to 0.05: a record written
-        # before this field existed has *unknown* evidence, and treating unknown as
-        # "p = 0.05, fails the corrected bar" is the safe direction to be wrong in.
-        "p_value": _f(oos.get("p_value")),
+        # A record written before this field existed has *unknown* evidence, and
+        # it stays None all the way to the multiplicity check, which blocks on
+        # unknown. Defaulting to 0.0 here used to hand the gate the most
+        # significant possible p-value and promote every legacy record.
+        "p_value": p_value,
         # The per-fold OOS P&L series. A corrected p-value is not enough for the
         # batch-level tests -- those bootstrap a series per strategy -- and a
         # clearance record that carried only a p-value could never be re-examined

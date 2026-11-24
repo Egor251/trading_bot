@@ -748,6 +748,7 @@ def batch_research_verdict(
     seed: int = 42,
     pbo_splits: int = 8,
     universe_basis: str = "available",
+    max_pbo: float = 0.5,
 ) -> dict[str, Any]:
     """Run the whole family of corrections over one batch, and report each verdict.
 
@@ -866,11 +867,23 @@ def batch_research_verdict(
     # inverts the whole gate: it declares a batch of noise to have an edge and
     # declares a dominant strategy to have none. That happened here once and is
     # pinned by `test_a_dominant_strategy_passes_and_a_noise_batch_does_not`.
-    unstable = bool(pbo.get("ok")) and float(pbo.get("pbo") or 0.0) > 0.5
+    # An unavailable PBO is not evidence of a stable ranking. Reading `ok=False`
+    # as "not unstable" used to turn a batch whose ranking test could not run
+    # into `batch_edge_stable` -- a pass built entirely out of a missing number.
+    pbo_value = _f(pbo.get("pbo"))
+    pbo_available = (
+        bool(pbo.get("ok"))
+        and pbo_value is not None
+        and 0.0 <= pbo_value <= 1.0
+    )
+    max_pbo_f = float(max_pbo)
+    unstable = pbo_available and pbo_value is not None and pbo_value > max_pbo_f
     passes = bool(rc.get("ok") and spa.get("ok")) and bool(
         rc.get("reject") is True and spa.get("reject") is True
     )
-    if not passes:
+    if not pbo_available:
+        out["verdict"] = "not_evaluable"
+    elif not passes:
         out["verdict"] = "no_batch_edge"
     elif unstable:
         # Significance without a stable ranking: the edge may be real and the
@@ -884,6 +897,9 @@ def batch_research_verdict(
         "universe_basis": universe_basis,
         "series_granularity": "per_fold_oos_pnl",
         "pbo_worse_than_random": unstable,
+        "pbo_available": pbo_available,
+        "pbo_reason": None if pbo_available else pbo.get("reason"),
+        "max_pbo": max_pbo_f,
     }
     return out
 
@@ -1089,6 +1105,7 @@ def evaluate_many(
             samples=pol.batch_bootstrap_samples,
             pbo_splits=int(pol.pbo_splits or 8),
             universe_basis=str(pol.universe_basis or "available"),
+            max_pbo=float(pol.max_pbo),
         )
         verdict = str(batch.get("verdict") or "not_evaluable")
         passing = verdict == "batch_edge_stable"

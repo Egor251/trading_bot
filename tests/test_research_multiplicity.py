@@ -24,6 +24,7 @@ ensure_code_base_path()
 
 import json  # noqa: E402
 import random  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -378,7 +379,10 @@ def _store_record(store, strategy_id: str, ticker: str, *, p_value: float, mean:
             "class_code": "crypto",
             "timeframe": "4h",
             "variants_count": 8,
-            "data_end": "2026-10-01",
+            # Relative to now: a hardcoded date turns into an expired clearance
+            # after max_age_days, and these tests assert live_ok. That is a
+            # time-bomb, not a failure of the multiplicity logic under test.
+            "data_end": datetime.now(timezone.utc).date().isoformat(),
             "data_start": "2024-01-01",
         },
         "oos": {
