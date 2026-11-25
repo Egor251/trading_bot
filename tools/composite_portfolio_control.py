@@ -6,6 +6,7 @@ Registered S29: REAL vs RANDOM (same activity by construction) vs SHUFFLED
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import math
 import random
@@ -60,12 +61,17 @@ def _shuffled_closes(closes: list[float], seed: int) -> list[float]:
 
 
 async def main() -> int:
-    rows = await _klines("1d", N_BARS * 2)
-    rows = rows[:N_BARS]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--symbol", default="BTCUSDT")
+    ap.add_argument("--block", choices=("earlier", "later"), default="earlier")
+    args = ap.parse_args()
+    rows = await _klines("1d", N_BARS * 2, symbol=args.symbol)
+    rows = rows[:N_BARS] if args.block == "earlier" else rows[N_BARS:]
     raw_closes = [float(r[4]) for r in rows]
     X, y, R = build_real_rows(raw_closes)
     N = len(y)
-    print(f"earlier block {len(rows)} bars ({rows[0][0]}..{rows[-1][0]})")
+    print(f"{args.block} block {args.symbol} {len(rows)} bars "
+          f"({rows[0][0]}..{rows[-1][0]})")
     pass_counts = {"REAL": 0, "RANDOM": 0, "SHUFFLED": 0}
 
     for length in LENGTHS:
@@ -100,7 +106,7 @@ async def main() -> int:
     controls_ok = pass_counts["RANDOM"] <= 1 and pass_counts["SHUFFLED"] <= 1
     verdict = "HOLDS" if real_ok and controls_ok else "FAILS"
     print(f"\npass counts: {pass_counts}")
-    print(f"R-56 {verdict}")
+    print(f"R-57 {verdict} ({args.symbol}, {args.block})")
     return 0
 
 

@@ -431,6 +431,21 @@ Strongest result to date, with a demonstrated-power statistic on disjoint
 data. Still one instrument and an aggregate, not a single tradable strategy:
 other instruments and a later non-overlapping span need new registrations.
 
+### Aggregate confirmation (R-57)
+
+Registered S30; result S30-2. Same aggregate and controls on ETH earlier,
+SOL earlier and BTC later blocks. REAL passed 4/4 on all three arms, but the
+controls also passed too often: ETH SHUFFLED 3/4, SOL RANDOM 3/4 and SHUFFLED
+3/4, BTC SHUFFLED 3/4.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-57 | aggregate beats constructed controls on three additional arms | each arm: REAL ≥3/4, both controls ≤1/4 | 3 arms × 3 controls × 4 windows | ETH/SOL earlier, BTC later | `FAILS` — all three arms; aggregate net reproduced by random timing or shuffled returns |
+
+R-56 is therefore a single-block result, not a general one. The shape matches
+R-22/R-23: a positive aggregate that fails the control asking whether timing
+contributed anything. No promotion.
+
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
 
@@ -456,8 +471,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            56
-closed with evidence             49   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            57
+closed with evidence             50   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -465,13 +480,14 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-49 + 3 + 1 = 53, not 56: the resolved `neuroevolution counting check` item
+50 + 3 + 1 = 54, not 57: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
 R-51 (chaos features), R-52 (disjoint check), R-53 (stop grid), R-54 (power
-check) and R-55/56 (aggregate and control) were added later as separate
-registrations. Counted this way on purpose rather than silently.
+check), R-55/56 (aggregate and control) and R-57 (confirmation) were added
+later as separate registrations. Counted this way on purpose rather than
+silently.
 
 The last open item:
 

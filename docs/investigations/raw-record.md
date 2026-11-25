@@ -2257,3 +2257,57 @@ earlier 1200-bar block, nested windows, aggregate net rather than a single
 tradable strategy. Confirmation on other instruments and on a non-overlapping
 later span is a NEW registration; none of it is done here, and this is not a
 live-trading decision.
+
+---
+
+## S30 · Aggregate confirmation — REGISTRATION (before the run)
+
+Registered as R-57 before running. R-56 held on ONE instrument and ONE earlier
+block. This tests the same aggregate and controls on three arms, fixed here:
+
+  A — ETHUSDT, earlier disjoint 1200-bar daily block;
+  B — SOLUSDT, earlier disjoint 1200-bar daily block;
+  C — BTCUSDT, LATER 1200-bar daily block (the discovery-era block).
+
+Everything else is unchanged from R-56: six pairs, 2%/10 stop, four nested
+holdouts 60/120/240/360, train 600 / val 100, 500 draws, REAL/RANDOM/SHUFFLED,
+p = (1 + #{null >= observed}) / 501.
+
+Criterion (fixed): R-57 HOLDS iff on EACH arm REAL passes at least three of
+four windows AND both controls pass at most one each. FAILS if any arm misses.
+Arm C is discovery-era data and is reported as such — a pass there is weaker
+evidence than A or B and cannot compensate for a failure on either.
+
+A HOLDS would make the aggregate a multi-market, time-disjoint result rather
+than a single-block observation. It still would not be a live decision: the
+aggregate is not a single executable strategy, and real-fill tradability is a
+separate question.
+
+## S30-2 · R-57 — RESULT
+
+```
+ETH earlier : REAL 4/4, RANDOM 0/4, SHUFFLED 3/4  -> FAILS
+SOL earlier : REAL 4/4, RANDOM 3/4, SHUFFLED 3/4  -> FAILS
+BTC later   : REAL 4/4, RANDOM 1/4, SHUFFLED 3/4  -> FAILS
+```
+
+REAL is positive and significant in every window of every arm — but so are
+the constructed no-edge controls on most of them. On SOL, random timing at
+the same activity rate beats the null in three of four windows; shuffled
+returns do the same on ETH and BTC-later. The criterion requires both controls
+to clear at most one window each, and none of the three arms meets it.
+
+Interpretation, fixed by the registered criterion: R-56's clean result was
+specific to the BTC EARLIER block. On the tested additional arms the aggregate
+net is reproducible without any strategy timing — it is market drift/beta,
+not selection skill. No promotion, no parameter changes. This is the same
+shape as R-22/R-23 at the strategy-lineup level: a positive aggregate that
+does not survive the control that asks whether the timing contributed anything.
+
+Boundaries kept: one aggregate, six fixed pairs, nested windows, daily bars.
+A statistic that separates timing from drift on these arms is a NEW
+registration, not a reinterpretation of this one.
+
+Verification: three arms added to the live loop; offline 158 passed + 3
+self-tests, full suite 1088 passed with the documented load-dependent quik
+flake passing in isolation on the same commit.

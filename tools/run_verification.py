@@ -62,6 +62,9 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/gate_power_check.py",),
     ("tools/composite_portfolio_verdict.py",),
     ("tools/composite_portfolio_control.py",),
+    ("tools/composite_portfolio_control.py", "--symbol", "ETHUSDT"),
+    ("tools/composite_portfolio_control.py", "--symbol", "SOLUSDT"),
+    ("tools/composite_portfolio_control.py", "--block", "later"),
     (
         "tools/neuroevolution_count.py",
         "--stage",
