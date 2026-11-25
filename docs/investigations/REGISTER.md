@@ -474,6 +474,21 @@ Historical order-book depth and RSS news do not exist in this repo; they were
 not fabricated. `tools/book_collector.py` starts a forward, bounded, idempotent
 snapshot series for a future registration; no depth-based claim can be made yet.
 
+### Live online-learning instrument (R-61)
+
+Registered S36; result S36-2. `engine/online_learning.py` is an observe-only
+state machine: frozen observation floor, GA schedule, 7 bps costs and a held-out
+bar; it never calls execution. Five known-answer tests pin the guards. Replay of
+three 1h streams plus collected book snapshots is byte-identical across runs;
+one decision was logged with `tradable: true` after 200 observations, which is
+logging state, NOT a promotion.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-61 | replay of the live path is deterministic and gated | identical decisions; no tradable before min_observations | 2 replays × 260 bars | BTC/ETH/SOL 1h + book snapshots | `HOLDS` — instrument/safety, not an edge claim |
+
+Live promotion requires a new registration. No edge is asserted.
+
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
 
@@ -499,8 +514,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            59
-closed with evidence             52   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            60
+closed with evidence             53   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -508,14 +523,14 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-52 + 3 + 1 = 56, not 59: the resolved `neuroevolution counting check` item
+53 + 3 + 1 = 57, not 60: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
 R-51 (chaos features), R-52 (disjoint check), R-53 (stop grid), R-54 (power
 check), R-55/56 (aggregate and control), R-57 (confirmation) and R-58
-(timing skill) and R-59 (rich-market ML) were added later as separate
-registrations. Counted this way on purpose rather than silently.
+(timing skill) and R-59 (rich-market ML) plus R-61 (online instrument) were added later as
+separate registrations. Counted this way on purpose rather than silently.
 
 The last open item:
 

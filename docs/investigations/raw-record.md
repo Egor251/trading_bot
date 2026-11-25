@@ -2501,3 +2501,54 @@ This is NOT a historical book series. A depth-based hypothesis cannot be run
 until enough forward snapshots have accumulated; that run needs its own
 registration. RSS/news ingestion does not exist in this repo and was not
 pretended to exist.
+
+---
+
+## S36 · Live online learning — REGISTRATION (before the run)
+
+Registered as R-61 before running. This answers the clarification: the model is
+meant to learn on a LIVE stream where the order book exists, not on history
+where it does not. It is NOT a trading deployment.
+
+Guards, fixed here and not negotiable later:
+- OBSERVE-ONLY: the learner writes decisions to a research log; it never calls
+  an execution path and never changes the live lineup;
+- symbols are the shipped BTC/ETH/SOL set; features per aligned bar: six lagged
+  log returns per symbol plus book spread_bps and top-of-book imbalance where
+  a snapshot exists (missing book fields are absent, never invented);
+- update schedule: GA every `update_every` new bars over the last `window_bars`
+  observations, population 12 / 6 generations over the registered 50-arch
+  space, Adam 500 epochs lr 0.05, seed 61 — unchanged optimiser from S3;
+- `tradable` stays FALSE until `min_observations` live bars AND a held-out tail
+  shows net > 0 after 7 bps/fill and accuracy ≥ 0.53. Even then this
+  registration only permits logging.
+
+Criterion (fixed): R-61 HOLDS iff a deterministic REPLAY of a recorded bar/book
+stream produces identical decisions to the live path's pure core, and no
+decision is marked tradable before `min_observations`. FAILS otherwise. This is
+an instrument/safety verdict, not an edge claim. Promotion to live requires a
+new registration.
+
+## S36-2 · R-61 — RESULT
+
+Five known-answer tests on the pure core: no decision before the observation
+floor; negative net never marks tradable; positive net only permits logging;
+replay of the same stream is byte-identical; out-of-order bars are ignored;
+missing book fields are flagged by an explicit present/absent column.
+
+`tools/online_lab.py --mode replay --bars 260` fed three 1h kline streams and
+the collected book snapshots through the same core with the real GA optimizer:
+
+```
+observations 252, bars_seen 780, decisions 1, observe_only true
+decision: SELL, confidence 0.3265, held_out_acc 0.5333,
+          held_out_net +0.00407, tradable true
+two independent replays: identical JSONL (hash equality)
+```
+
+`tradable` here is the core's state after ONE qualifying held-out tail, not a
+trading decision: the driver never calls execution, never touches the live
+lineup, and writes only `research/online_decisions.jsonl`. Reproducibility is
+the point of R-61, not profit. Promotion to live needs a NEW registration with
+its own out-of-sample criterion. Live polling mode (`--mode live`) is included
+for observe-only collection and does not alter the live path.

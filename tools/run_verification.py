@@ -40,6 +40,7 @@ PYTEST_MODULES = (
     "tests/test_timing_skill.py",
     "tests/test_strategy_lab.py",
     "tests/test_book_collector.py",
+    "tests/test_online_learning.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",
@@ -76,6 +77,7 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
      "--out", "strategy_lab.json"),
     ("tools/market_ml_ga.py",),
     ("tools/book_collector.py", "--once"),
+    ("tools/online_lab.py", "--mode", "replay", "--bars", "260"),
     (
         "tools/neuroevolution_count.py",
         "--stage",
