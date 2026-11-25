@@ -2001,3 +2001,55 @@ generalization.
 Verification: offline 155 passed + 3 self-tests; full suite 1085 passed with
 one known load-dependent flake (`test_quik_fake_path_e2e`) that PASSED in
 isolation on the same commit — recorded, not suppressed or retried until green.
+
+---
+
+## S25 · Disjoint-period confirmation — REGISTRATION (before the run)
+
+Registered as R-52 before running. R-49 found the pair on windows at the END
+of a 1200-daily-bar span; R-50 failed on other instruments. This tests the
+SAME rule on a time-disjoint block of BTCUSDT history, so the discovery
+windows are no longer part of the evaluation.
+
+Everything fixed and unchanged: pair dual_thrust -> adx_di_trend, 2% stop,
+10-bar cooldown, 1200 daily bars, four nested holdouts 60/120/240/360 ending
+on the block's last bar, train 600 / val 100, 500-draw same-activity null,
+Holm over the same six pairs. Only the DATA BLOCK changes: fetch 2400 daily
+bars and use the EARLIER 1200 as the evaluation block, strictly before the
+block used in S21/S22.
+
+This is NOT a forward period — future bars do not exist yet, and waiting for
+them is not a valid substitute for an out-of-sample test. It is a disjoint
+prior period, stated as such. No parameter, window or threshold is changed
+after the numbers arrive.
+
+Criterion (fixed): R-52 HOLDS iff the pair has stop net > 0, stop net >
+baseline composite net, and Holm p < 0.05 in ALL FOUR windows of the earlier
+block. FAILS if any window misses. A pass here would make R-49's rule
+time-disjoint confirmed; a fail would mean the BTC reading was specific to
+the discovery windows and must not be promoted.
+
+## S25-2 · R-52 — RESULT
+
+Earlier disjoint block: 1200 BTCUSDT daily bars, 2020-05-01 .. 2023-08-13,
+strictly before the block used for R-49. Same pair, stop, cooldown, windows,
+null and Holm budget.
+
+```
+holdout  60 : base +398.92 -> stop +736.09, Holm 0.0838  FAILS
+holdout 120 : base +237.63 -> stop +481.94, Holm 0.0998  FAILS
+holdout 240 : base +464.75 -> stop +818.73, Holm 0.0359  HOLDS
+holdout 360 : base +2026.55 -> stop +2380.53, Holm 0.0120 HOLDS
+R-52 FAILS: two of four windows have no significant winner for the pair.
+```
+
+The stop still improved net in every earlier window, and two windows are
+significant — so the effect is not imaginary — but the registered criterion
+requires all four and is not met. Combined with R-50 (ETH/SOL), the honest
+summary is: R-49's pair is BTC-and-window-specific on the tested spans. It is
+NOT promoted to live, and no parameter was adjusted to make R-52 pass.
+
+This does not erase the observation: a composite entry/exit with a fixed stop
+produced the first consistent positive nets in the project. It does mean that
+calling it a working strategy would be best-of-N reasoning of exactly the kind
+the register was built to refuse.

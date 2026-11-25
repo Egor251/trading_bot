@@ -56,6 +56,7 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/horizon_ladder.py",),
     ("tools/composite_strategy_verdict.py",),
     ("tools/stop_loss_composite.py",),
+    ("tools/stop_loss_composite.py", "--symbol", "BTCUSDT", "--block", "earlier"),
     (
         "tools/neuroevolution_count.py",
         "--stage",

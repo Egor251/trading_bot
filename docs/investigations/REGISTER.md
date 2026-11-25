@@ -397,6 +397,18 @@ box dimension, spectral entropy) replaces the six raw lags in the same
 First positive ML net on real data, but below the registered accuracy bar, so
 it is not a pass. No threshold was tuned after the result.
 
+### Time-disjoint check (R-52)
+
+Registered S25; result S25-2. Same R-49 pair/stop/cooldown on an earlier,
+strictly disjoint 1200-bar BTCUSDT daily block (2020-05 to 2023-08).
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-52 | the rule clears all four windows on disjoint history | net > 0, beats baseline, Holm p < 0.05 in all 4 | 6 pairs × 4 windows | BTCUSDT 1d, earlier 1200 bars | `FAILS` — 2 of 4 windows pass; stop improves net in all four |
+
+With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
+specific to the discovery market and windows, and is NOT promoted to live.
+
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
 strategy to demote, so its registered criterion fails; the capability stays
@@ -410,8 +422,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            51
-closed with evidence             44   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            52
+closed with evidence             45   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -419,11 +431,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-44 + 3 + 1 = 48, not 51: the resolved `neuroevolution counting check` item
+45 + 3 + 1 = 49, not 52: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
-stop-loss, generalization) and R-51 (chaos features) were added later as
+stop-loss, generalization) R-51 (chaos features) and R-52 (disjoint-period check) were added later as
 separate registrations. Counted this way on purpose rather than silently.
 
 The last open item:

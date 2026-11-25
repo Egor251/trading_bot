@@ -70,10 +70,15 @@ def _with_stop(entry: list[str], exit_: list[str], closes: list[float]) -> list[
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="BTCUSDT")
+    ap.add_argument("--block", choices=("latest", "earlier"), default="latest")
     args = ap.parse_args()
-    rows = await _klines("1d", N_BARS, symbol=args.symbol)
+    rows = await _klines("1d", N_BARS * 2 if args.block == "earlier" else N_BARS,
+                         symbol=args.symbol)
+    if args.block == "earlier":
+        rows = rows[:N_BARS]
     closes = [float(r[4]) for r in rows]
-    print(f"fetched {len(rows)} {args.symbol} 1d klines")
+    print(f"evaluation block: {args.block}, {len(rows)} {args.symbol} 1d klines "
+          f"({rows[0][0]}..{rows[-1][0]})")
     if len(rows) < N_BARS:
         print("NOT EVALUABLE")
         return 1
@@ -104,7 +109,8 @@ async def main() -> int:
         winners = [r[0] for r, q in zip(results, adjusted) if r[2] > 0 and r[2] > r[1] and q < 0.05]
         all_ok = all_ok and bool(winners)
         print(f"  winners: {winners or 'NONE'}")
-    print(f"\nR-50 {'HOLDS' if all_ok else 'FAILS'} ({args.symbol})")
+    label = "R-52" if args.block == "earlier" else "R-49"
+    print(f"\n{label} {'HOLDS' if all_ok else 'FAILS'} ({args.symbol}, {args.block})")
     return 0
 
 
