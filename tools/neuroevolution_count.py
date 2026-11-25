@@ -154,7 +154,10 @@ def fit_mlp(
 ) -> dict:
     """Fit on standardized train columns; returns params + scaler. Deterministic
     given (data, arch, seed)."""
-    cols = FS_COLS[arch.fs]
+    # Same two modes for any feature count: 0 = all columns, 2 = first two.
+    # For the registered 6-lag family this is exactly the old FS_COLS mapping.
+    cols = list(range(Xtr.shape[1])) if arch.fs == 0 else [0, 1]
+    cols = [c for c in cols if c < Xtr.shape[1]] or [0]
     X = Xtr[:, cols]
     mu = X.mean(axis=0)
     sd = X.std(axis=0)
@@ -493,6 +496,17 @@ def build_real_rows(closes: list[float]) -> tuple[np.ndarray, np.ndarray, np.nda
     return X, y, R
 
 
+def build_chaos_rows(closes: list[float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """R-51 feature family: four causal chaos-derived values per decision bar."""
+    from tools.chaos_features import chaos_vector
+
+    rets = np.array([math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))])
+    X = np.stack([chaos_vector(rets, i + 5) for i in range(5, len(rets) - 1)])
+    y = (rets[6:] > 0).astype(int)
+    R = rets[6:]
+    return X, y, R
+
+
 def net_long_flat(probs: np.ndarray, R: np.ndarray, cost: float = 7.0 / 1e4) -> float:
     """Long-if-P>0.5-else-flat test net: Σ pos·r − flips·cost."""
     pos = (probs > 0.5).astype(float)
@@ -617,6 +631,7 @@ def stage_real(
     timeframe: str = "1h",
     ntr: int = 3600,
     nva: int = 1200,
+    features: str = "raw",
 ) -> None:
     """Real BTCUSDT features; S3 search + ensemble. Timeframe/split are inputs."""
     import asyncio
@@ -629,7 +644,8 @@ def stage_real(
     rows = asyncio.run(_klines(timeframe, n_bars))
     closes = [float(r[4]) for r in rows]
     print(f"fetched {len(rows)} BTCUSDT {timeframe} klines ({rows[0][0]}..{rows[-1][0]})")
-    X, y_sig, R = build_real_rows(closes)
+    X, y_sig, R = build_chaos_rows(closes) if features == "chaos" else build_real_rows(closes)
+    print(f"features: {features}, columns {X.shape[1]}")
     N = len(y_sig)
     assert N >= ntr + nva + 200, f"only {N} rows"
     itr, iva = np.arange(0, ntr), np.arange(ntr, ntr + nva)
@@ -715,6 +731,7 @@ def main() -> None:
     ap.add_argument("--bars", type=int, default=0)
     ap.add_argument("--train", type=int, default=0)
     ap.add_argument("--val", type=int, default=0)
+    ap.add_argument("--features", choices=("raw", "chaos"), default="raw")
     args = ap.parse_args()
     if args.stage == "known":
         stage_known()
@@ -727,6 +744,7 @@ def main() -> None:
             timeframe="1h",
             ntr=args.train or 3600,
             nva=args.val or 1200,
+            features=args.features,
         )
     elif args.data == "btc1d":
         stage_real(
@@ -735,6 +753,7 @@ def main() -> None:
             timeframe="1d",
             ntr=args.train or 2000,
             nva=args.val or 400,
+            features=args.features,
         )
     else:
         stage_main(args.gain, args.seed)

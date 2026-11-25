@@ -368,6 +368,35 @@ Direct answer to "different horizons": 2/4/8/12 months all fail. The forming
 daily bar in the research fetch is recorded as a caveat; the verdict is
 insensitive to it.
 
+### Composite strategies and stop-loss (R-48/49/50)
+
+Registered S21/S22/S23 with pair universe, stop parameters and correction
+fixed before the respective runs.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-48 | a composite entry/exit pair is profitable at every horizon | ≥1 of 6 pairs: net > 0 and Holm p < 0.05 in all 4 windows | 6 pairs × 4 windows | BTCUSDT 1d, 1200 bars | `FAILS` — one window only; best pair positive in all four but uncorrected |
+| R-49 | a 2% stop + 10-bar recompute improves the pair | stop net > baseline and Holm p < 0.05 in all 4 windows | same 6 pairs × 4 windows | BTCUSDT 1d | `HOLDS` — dual_thrust→adx_di_trend passes all four |
+| R-50 | the rule transfers to other instruments | same pair/params on ETH and SOL, all 4 windows each | same | ETHUSDT, SOLUSDT | `FAILS` — ETH misses one, SOL misses all |
+
+First positive strategy reading in the project (R-49), immediately bounded by
+a failed generalization (R-50). NOT promoted to live: one instrument, nested
+windows, one pre-fixed six-pair universe.
+
+### Chaos-derived features (R-51)
+
+Registered S24; result S24-2. Local causal implementation inspired by
+`aphina-server`'s numeric engine (delay embedding + Lyapunov-style divergence,
+box dimension, spectral entropy) replaces the six raw lags in the same
+50-architecture ensemble. Known-answer causality tests pinned first.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-51 | chaos features transfer and trade | net > 0 AND accuracy ≥ 0.53 on ≥1 timeframe | 62 evaluations / 20–22 distinct per timeframe | BTCUSDT 1h + 1d | `FAILS` — 1h net −0.1380/acc 0.5205; 1d net **+0.1083** but acc 0.5059 |
+
+First positive ML net on real data, but below the registered accuracy bar, so
+it is not a pass. No threshold was tuned after the result.
+
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
 strategy to demote, so its registered criterion fails; the capability stays
@@ -381,8 +410,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            47
-closed with evidence             40   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            51
+closed with evidence             44   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -390,10 +419,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-40 + 3 + 1 = 44, not 47: the resolved `neuroevolution counting check` item
+44 + 3 + 1 = 48, not 51: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
-claim), R-46 (long-horizon ML) and R-47 (horizon ladder) were added later as
+claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
+stop-loss, generalization) and R-51 (chaos features) were added later as
 separate registrations. Counted this way on purpose rather than silently.
 
 The last open item:

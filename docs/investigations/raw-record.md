@@ -1802,3 +1802,202 @@ R-47 four short daily horizons). The ladder answers the "different horizons"
 objection directly: none of 2/4/8/12 months works for this family. Boundaries
 unchanged — one instrument, six lagged returns, one 50-architecture space.
 A multi-asset panel or other feature family needs its own registration.
+
+---
+
+## S21 · Composite entry/exit — REGISTRATION (before the run)
+
+Registered as R-48 before running. New family: enter on one strategy's signal,
+exit ONLY on another strategy's signal, never re-reading the first. This is a
+different state machine, not a new parameter of the old one.
+
+Implementation is fixed: `decisions_to_fills` maps a generated decision series;
+HOLD + intent `long` means maintain, so only the exit strategy's SELL flattens.
+If both fire on the same bar, entry wins (fixed, not tuned). Long_flat, 1000 USD
+cash sizing, 7 bps/fill, mark at window end.
+
+Pair universe is fixed deterministically, BEFORE results: three clusters from
+the plugin audit — trend (adx_di_trend…), reversion (bollinger_reversion…),
+breakout (dual_thrust…) — with the alphabetically first member of each as
+representative; all SIX ordered cross-cluster pairs are tested. No pair is
+chosen after seeing numbers.
+
+Data/horizons: BTCUSDT 1d, 1200 bars, nested holdouts 60/120/240/360 ending
+on the same bar, train 600 / val 100 before each (same ladder as R-47).
+
+Null and correction: for each pair+window, p from 500 same-activity random
+timing draws, `(1 + #{null >= observed}) / 501`; Holm over the six pairs.
+
+Criterion (fixed): R-48 HOLDS iff at least one pair has net > 0 AND Holm
+adjusted p < 0.05 in ALL FOUR windows. FAILS otherwise. Every pair/window
+p, net and Holm value is printed; picking the best pair post hoc is prohibited.
+
+## S21-2 · R-48 — RESULT
+
+Six pairs, four nested daily holdouts, 500-draw null. Only window 120 had a
+Holm-significant winner:
+
+```
+holdout  60 : dual_thrust -> adx_di_trend  net +357.21  p 0.0100  holm 0.0599
+holdout 120 : dual_thrust -> adx_di_trend  net +679.46  p 0.0020  holm 0.0120 HOLDS
+holdout 240 : dual_thrust -> adx_di_trend  net +431.18  p 0.0180  holm 0.1078
+holdout 360 : dual_thrust -> adx_di_trend  net +594.47  p 0.0419  holm 0.2515
+R-48 FAILS: three of four windows have no significant pair.
+```
+
+Observation, NOT a promotion: that same ordered pair had positive net in ALL
+four windows, with uncorrected p 0.010/0.002/0.018/0.042. Holm over six pairs
+at 500 draws has a resolution floor: the smallest attainable adjusted p is
+0.012, so only a p=0.002 raw result can ever clear 0.05. The criterion was
+fixed before the run and FAILS; the pair cannot be promoted post hoc. It is
+recorded as the candidate for a NEW, separately registered test with its own
+pair count and draw budget fixed in advance.
+
+This is the first non-degenerate positive reading in the project, but it is
+not yet a verdict: it is one pair out of six on one instrument.
+
+---
+
+## S22 · Stop-loss plus recompute — REGISTRATION (before the run)
+
+Registered as R-49 before running. Same six deterministic pairs, same four
+nested daily holdouts, same null and Holm budget as R-48. The ONLY addition:
+once long, a bar whose close is ≤ 2% below the entry close forces an exit;
+for the next 10 bars all entry signals are ignored, then the entry strategy's
+next BUY is accepted again with fresh inputs. Both numbers (2%, 10 bars) are
+fixed here, not tuned after results.
+
+Baseline is the R-48 composite without a stop, on the same data. For each
+pair+window we report baseline net, stop net, and the stop's null p with
+Holm over six.
+
+Criterion (fixed): R-49 HOLDS iff at least one pair has stop net > 0, stop net
+> baseline net, and Holm p < 0.05 in ALL FOUR windows. FAILS otherwise. An
+improvement in one window, or a positive net without beating baseline, is not
+a pass. No parameter is changed after seeing the numbers.
+
+## S22-2 · R-49 — RESULT
+
+Ran on the S21 six-pair universe (fixed before either result), same four
+nested daily holdouts, 500-draw null, Holm over six. 2% stop / 10-bar cooldown
+fixed before the run.
+
+```
+holdout   dual_thrust->adx_di_trend : baseline -> stop, Holm
+  60         +357.21 -> +519.33   0.0359  HOLDS
+ 120         +679.46 -> +735.15   0.0120  HOLDS
+ 240         +431.18 -> +634.08   0.0240  HOLDS
+ 360         +594.47 -> +966.03   0.0359  HOLDS
+other five pairs: none passes in any window
+R-49 HOLDS
+```
+
+This is the first positive strategy reading in the project. Boundaries that
+must not be omitted: ONE instrument (BTCUSDT), ONE ordered pair from a
+pre-fixed six-pair universe, FOUR NESTED (not independent) windows, one 2%
+stop and one 10-bar cooldown, both fixed before the run. The pair set was
+registered in S21 BEFORE R-48's numbers existed, so this is not a pair chosen
+after seeing the result — but it is still one pair on one market.
+
+Promoting it to live would be best-of-N unless it is confirmed on untouched
+data. A NEW registration is required: same pair and parameters fixed, held-out
+instruments (ETH/SOL) and a non-overlapping time span. Chaos-feature work (the
+third proposed family) remains a separate registration and is not a substitute
+for this confirmation.
+
+---
+
+## S23 · Out-of-instrument confirmation — REGISTRATION (before the run)
+
+Registered as R-50 before running. R-49 found one profitable pair on BTCUSDT;
+this tests whether it is a property of the RULE or of that market. Everything
+is fixed here and unchanged from R-49: pair dual_thrust -> adx_di_trend, 2%
+stop, 10-bar cooldown, 1200 daily bars, four nested holdouts 60/120/240/360
+with train 600 / val 100, 500-draw same-activity null, Holm over the same six
+pairs. Only the INSTRUMENT changes: ETHUSDT and SOLUSDT.
+
+Criterion (fixed): R-50 HOLDS iff the pair has stop net > 0, stop net > the
+same-composite baseline, and Holm p < 0.05 in ALL FOUR windows on BOTH
+instruments. FAILS if either instrument misses any window. Both instruments'
+nets and p-values are printed individually; no parameter or window is changed
+after the numbers arrive.
+
+A HOLDS is still not a live-trading decision: it confirms the rule on two more
+markets, with nested windows on one span. A non-overlapping forward period is
+a further registration, not something to infer from this one.
+
+## S23-2 · R-50 — RESULT
+
+Pair/parameters/window/null unchanged; only instrument differs.
+
+```
+ETHUSDT: holdouts 60 HOLDS, 120 FAILS (stop 1426.30 < baseline 1449.09),
+         240 HOLDS, 360 HOLDS
+SOLUSDT: Holm 0.2495 / 0.3752 / 0.6487 / 0.1996 — no window passes
+R-50 FAILS: neither instrument clears all four windows
+```
+
+Conclusion: R-49's pair is not a market-independent rule. On ETH the stop
+usually helps but reverses on one window; on SOL the same rule is not
+distinguishable from random timing. This is a negative generalization result,
+recorded rather than explained away. The BTC reading is NOT promoted to live.
+
+---
+
+## S24 · Chaos-derived features — REGISTRATION (before the run)
+
+Registered as R-51 before running. Reviewed the user's `aphina-server` engine:
+`numeric_calculator` exposes `lyapunov_map(fn, x0)`, `op_fractal_dimension`
+(for an ODE system), `fft`, `autocorrelation`, `moving_average`. These operate
+on a DEFINED map/system, not on a market series, so a straight copy cannot
+produce a trading feature. The honest bridge is a local module implementing
+causal features from past returns only:
+
+```
+delay embedding of the trailing 120 returns (dimension 3, lag 1);
+largest Lyapunov estimate from mean log divergence of nearest neighbours;
+box-counting dimension of the embedded points;
+spectral entropy of the trailing window (numpy FFT).
+```
+
+All four are computed on PAST bars only, standardized on train. They replace
+the 6 raw lags as the feature vector (4 chaos features). Everything else is
+IDENTICAL to the registered model: 50 architectures, Adam 500 epochs lr 0.05,
+evolution pop 12 / 6 gens / seed 41, ensemble mean probability, 7 bps long_flat.
+
+Data/horizons: BTCUSDT 1h 6000 bars (R-41 shape) and 1d 3000 bars (R-46
+shape), both with their registered splits. Known-answer gate runs first.
+
+Criterion (fixed): R-51 HOLDS iff on at least one timeframe the ensemble has
+net > 0 AND accuracy ≥ 0.53 on the held-out window. FAILS otherwise. Counts
+(evaluations/distinct) and PBO reported as in S3. A FAIL says this feature
+family does not transfer; it does not close chaos research generally. If it
+HOLDS, confirmation on ETH/SOL is a NEW registration before any live use.
+
+## S24-2 · R-51 — RESULT
+
+Known-answer gate passed; chaos features are causality-pinned by four tests
+(future bars cannot change a past feature; degenerate windows read 0, not NaN).
+
+```
+1h  6000 bars: ensemble acc 0.5205 (< 0.53), net -0.1380, PBO 0.990
+1d  3000 bars: ensemble acc 0.5059 (< 0.53), net +0.1083 (> 0), PBO 1.000
+              reference logistic acc 0.5278, net +0.2994
+```
+
+**R-51 FAILS**: neither timeframe clears BOTH bars. Notable and recorded: on
+daily bars the chaos features produced a POSITIVE ensemble net, the first
+positive net from this ML line — but accuracy stayed below the registered
+0.53 bar, so it cannot be counted as a pass. The raw 6-lag family had negative
+net on the same window (R-46: −0.4295), so the feature change mattered; a
+separate registration would be needed to test whether a calibrated threshold
+or a different chaos estimator turns this into a genuine edge. That is NOT
+done here: no threshold is tuned after seeing the number.
+
+This is the third proposed family checked (composite, stop-loss, chaos). The
+positive strategy reading remains R-49 on BTC only, with R-50's negative
+generalization.
+
+Verification: offline 155 passed + 3 self-tests; full suite 1085 passed with
+one known load-dependent flake (`test_quik_fake_path_e2e`) that PASSED in
+isolation on the same commit — recorded, not suppressed or retried until green.

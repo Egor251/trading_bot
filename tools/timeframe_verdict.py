@@ -29,7 +29,7 @@ TRAIN, VAL, TEST = 1800, 600, 600
 FEE_BPS = 7.0
 
 
-async def _klines(timeframe: str, n: int) -> list[list]:
+async def _klines(timeframe: str, n: int, *, symbol: str = "BTCUSDT") -> list[list]:
     import ccxt.async_support as ccxt
 
     ex = ccxt.binance({"enableRateLimit": True})
@@ -38,7 +38,7 @@ async def _klines(timeframe: str, n: int) -> list[list]:
         cursor: int | None = None
         while len(by_ts) < n:
             params = {
-                "symbol": "BTCUSDT",
+                "symbol": symbol,
                 "interval": timeframe,
                 "limit": 1000,
             }
