@@ -71,7 +71,8 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/timing_skill_verdict.py", "--symbol", "ETHUSDT"),
     ("tools/timing_skill_verdict.py", "--symbol", "SOLUSDT"),
     ("tools/timing_skill_verdict.py", "--block", "later"),
-    ("tools/strategy_lab.py",),
+    ("tools/strategy_lab.py", "--symbol", "BTCUSDT", "--block", "earlier",
+     "--out", "strategy_lab.json"),
     (
         "tools/neuroevolution_count.py",
         "--stage",

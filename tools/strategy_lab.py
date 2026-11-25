@@ -30,12 +30,22 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--block", choices=("earlier", "later"), default="earlier")
+    ap.add_argument("--out", default="")
     args = ap.parse_args()
     _counts, aggregate = await _run(args.symbol, args.block)
     # R-58's power and controls were demonstrated for the AGGREGATE, not for
     # individual pairs. The product candidate is therefore the aggregate.
     report = evaluate_lab({"composite_aggregate": aggregate})
+    report["symbol"] = args.symbol
+    report["block"] = args.block
     print(json.dumps(report, indent=2, default=str))
+    if args.out:
+        from engine.paths import data_path
+
+        out = Path(args.out) if Path(args.out).is_absolute() else data_path("research", args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        print(f"report written: {out}")
     return 0
 
 

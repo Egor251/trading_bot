@@ -2404,3 +2404,27 @@ BTCUSDT later   : selected null, blocker shuffled_control_dirty
 The product tool can say yes on one arm and refuses on others under the same
 frozen thresholds. Refusals are not tuned away. Nothing is wired to live
 execution.
+
+---
+
+## S33 · Dedicated research window in the Operator UI
+
+Engineering increment, no new hypothesis. The lab's decision was only visible
+in a CLI JSON; the Operator now has a separate `/research` page containing the
+math, the per-window evidence chart, the frozen config and the named blockers.
+
+Data path: `tools/strategy_lab.py --out strategy_lab.json` writes the report
+to `research/strategy_lab.json` through `engine.paths.data_path`;
+`UiBridgeService._strategy_research_snapshot()` reads it read-only into the
+snapshot, with `no_report` / `malformed_report` / `unreadable_report` as
+explicit states — a missing report is never rendered as a clean pass.
+
+The page renders: `skill = Σ_held(r_i − μ_window)·N − flips·7bps·N`, Holm's
+step-down formula, the two constructed controls, an inline SVG of per-window
+real vs injected-power nets with a zero line, per-window p-values, and a plain
+explanation for each blocker (e.g. "random timing reproduced the result —
+drift, not timing"). The candidate is the aggregate, matching the level at
+which R-58's power was proven. Added nav entry and EN/RU labels.
+
+Typecheck (`npx tsc --noEmit`) clean; three Python tests pin missing, valid and
+malformed reports. No live execution path is touched.

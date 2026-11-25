@@ -110,6 +110,9 @@ def evaluate_lab(
             "shuffled_wins": shuffled_wins,
             "worst_p": worst_p[name],
             "adjusted_p": adjusted[name],
+            "window_nets": [e.net for e in rows],
+            "window_p": [e.p for e in rows],
+            "window_power_nets": [e.power_net for e in rows],
         }
         reasons = []
         if real_wins < cfg.min_windows:

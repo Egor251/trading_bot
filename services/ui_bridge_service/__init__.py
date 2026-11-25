@@ -428,6 +428,7 @@ class UiBridgeService(BaseService):
             "plugins": plugins,
             "ai": self._ai_snapshot(),
             "costs": self._costs_snapshot(),
+            "strategy_research": self._strategy_research_snapshot(),
             "secrets": self._secrets_presence_snapshot(),
             "market": self._market_feed_snapshot(),
             "storage": dict(self._storage_cache),
@@ -669,6 +670,53 @@ class UiBridgeService(BaseService):
             }
         except Exception as exc:  # Corrupt state must not take down UI snapshots.
             return {"active": None, "error": str(exc)}
+
+    def _strategy_research_snapshot(self) -> dict[str, Any]:
+        """Read-only research report for the dedicated Operator window.
+
+        The lab tool writes `research/strategy_lab.json`; this window shows the
+        math, the per-window evidence and the decision with its blockers. A
+        missing or malformed report is reported as unavailable, never as a
+        clean pass.
+        """
+        try:
+            import json
+
+            from engine.paths import data_path
+
+            path = data_path("research", "strategy_lab.json")
+            if not path.exists():
+                return {"ok": False, "reason": "no_report"}
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or not isinstance(raw.get("candidates"), list):
+                return {"ok": False, "reason": "malformed_report"}
+            return {
+                "ok": True,
+                "symbol": str(raw.get("symbol") or ""),
+                "block": str(raw.get("block") or ""),
+                "selected": raw.get("selected"),
+                "blockers": list(raw.get("blockers") or []),
+                "config": dict(raw.get("config") or {}),
+                "candidates": [
+                    {
+                        "strategy": str(c.get("strategy") or ""),
+                        "real_wins": c.get("real_wins"),
+                        "random_wins": c.get("random_wins"),
+                        "shuffled_wins": c.get("shuffled_wins"),
+                        "adjusted_p": c.get("adjusted_p"),
+                        "blockers": list(c.get("blockers") or []),
+                        "window_nets": [float(v) for v in (c.get("window_nets") or [])],
+                        "window_p": [float(v) for v in (c.get("window_p") or [])],
+                        "window_power_nets": [
+                            float(v) for v in (c.get("window_power_nets") or [])
+                        ],
+                    }
+                    for c in raw["candidates"]
+                    if isinstance(c, dict)
+                ][:20],
+            }
+        except Exception:
+            return {"ok": False, "reason": "unreadable_report"}
 
     def _ai_snapshot(self) -> dict[str, Any]:
         pm = getattr(self.core, "plugin_manager", None)

@@ -41,6 +41,26 @@ export type Snapshot = {
   ai?: AiSnap;
   storage?: StorageSnap;
   costs?: Record<string, unknown>;
+  strategy_research?: {
+    ok?: boolean;
+    reason?: string;
+    symbol?: string;
+    block?: string;
+    selected?: string[] | null;
+    blockers?: string[];
+    config?: Record<string, unknown>;
+    candidates?: {
+      strategy?: string;
+      real_wins?: number;
+      random_wins?: number;
+      shuffled_wins?: number;
+      adjusted_p?: number;
+      blockers?: string[];
+      window_nets?: number[];
+      window_p?: number[];
+      window_power_nets?: number[];
+    }[];
+  };
   [key: string]: unknown;
 };
 

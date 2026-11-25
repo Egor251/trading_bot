@@ -18,6 +18,7 @@ const NAV = [
   { href: "/book", key: "nav.book", tip: "tip.nav.book" },
   { href: "/consilium", key: "nav.consilium", tip: "tip.nav.consilium" },
   { href: "/strategy", key: "nav.strategy", tip: "tip.nav.strategy" },
+  { href: "/research", key: "nav.research", tip: "tip.nav.research" },
   { href: "/phantom", key: "nav.phantom", tip: "tip.nav.phantom" },
   { href: "/costs", key: "nav.costs", tip: "tip.nav.costs" },
   { href: "/system", key: "nav.system", tip: "tip.nav.system" },
