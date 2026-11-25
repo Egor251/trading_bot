@@ -36,6 +36,7 @@ PYTEST_MODULES = (
     "tests/test_fill_reference_persistence.py",
     "tests/test_existential_gate.py",
     "tests/test_chaos_features.py",
+    "tests/test_stop_grid_criterion.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",
@@ -57,6 +58,7 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/composite_strategy_verdict.py",),
     ("tools/stop_loss_composite.py",),
     ("tools/stop_loss_composite.py", "--symbol", "BTCUSDT", "--block", "earlier"),
+    ("tools/stop_grid_verdict.py",),
     (
         "tools/neuroevolution_count.py",
         "--stage",

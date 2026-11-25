@@ -2053,3 +2053,60 @@ This does not erase the observation: a composite entry/exit with a fixed stop
 produced the first consistent positive nets in the project. It does mean that
 calling it a working strategy would be best-of-N reasoning of exactly the kind
 the register was built to refuse.
+
+---
+
+## S26 · Stop-parameter mechanism — REGISTRATION (before the run)
+
+Registered as R-53 before running. R-52 used ONE stop setting (2%, 10 bars)
+and failed on the disjoint block; the stop still improved net in all four
+windows. This asks whether the MECHANISM is robust, without choosing settings
+after the result.
+
+Fixed before the run:
+- pair dual_thrust -> adx_di_trend (the R-49 pair, unchanged);
+- grid: stop in {1%, 2%, 3%} × cooldown in {5, 10, 20} bars = 9 configurations;
+- evaluation block: the EARLIER 1200-bar BTCUSDT daily span, strictly before
+  the discovery windows (same block as R-52);
+- four nested holdouts 60/120/240/360, train 600 / val 100;
+- 500-draw same-activity null, p = (1 + #{null >= net}) / 501;
+- baseline is the same composite WITHOUT a stop on the same window.
+
+Criterion (fixed): R-53 HOLDS iff at least one of the nine configurations has
+net > 0, net > baseline, and Holm-adjusted p < 0.05 over the NINE in ALL FOUR
+windows. FAILS otherwise. Every configuration/window p, net and Holm value is
+printed; the best configuration is NOT selected for live use from this run —
+a pass would only establish that the mechanism is not a single-setting fluke,
+and confirmation on other instruments would be a NEW registration.
+
+## S26-2 · R-53 — RESULT
+
+Two known-answer defects caught BEFORE accepting the result:
+1. The first implementation asked "did any configuration win in each window?"
+   rather than "did the SAME configuration win in all four?". Window 120
+   passed only (1%,10); window 240 only (1%,20) and (2%,20) — intersection
+   empty — yet it printed HOLDS. Fixed to intersect winners across windows.
+2. An empty window list vacuously passed every configuration; fixed to fail
+   closed. Both pinned by `tests/test_stop_grid_criterion.py`.
+
+Corrected result on the earlier disjoint block:
+
+```
+window  60 winners: (1%,10), (1%,20), (2%,10), (2%,20), (3%,10)
+window 120 winners: (1%,10)
+window 240 winners: (1%,20), (2%,20)
+window 360 winners: eight of nine configurations
+configurations passing ALL FOUR: NONE
+R-53 FAILS
+```
+
+The stop improves net in every window and many configurations are individually
+significant, but NO single setting survives all four windows after correcting
+for the nine-setting grid. That is the registered verdict. It also explains
+R-52 cleanly: the 2%/10 setting was not special, it was one of several that
+won in some windows. No configuration is promoted, and no threshold was
+tuned after seeing the numbers.
+
+This is the second criterion-defect of this project's class (numbers that
+looked like a pass because the check was weaker than the claim), alongside
+the degenerate portfolio null — recorded, pinned, and not treated as a find.

@@ -40,7 +40,10 @@ STOP = 0.02
 COOLDOWN = 10
 
 
-def _with_stop(entry: list[str], exit_: list[str], closes: list[float]) -> list[StrategyDecision]:
+def _with_stop(
+    entry: list[str], exit_: list[str], closes: list[float],
+    stop: float = STOP, cooldown_bars: int = COOLDOWN,
+) -> list[StrategyDecision]:
     out: list[StrategyDecision] = []
     long = False
     entry_px = 0.0
@@ -48,9 +51,9 @@ def _with_stop(entry: list[str], exit_: list[str], closes: list[float]) -> list[
     for i, (a, b) in enumerate(zip(entry, exit_)):
         px = closes[i]
         if long:
-            if px <= entry_px * (1.0 - STOP):
+            if px <= entry_px * (1.0 - stop):
                 out.append(StrategyDecision(action="SELL", strength=1.0))
-                long, cooldown = False, COOLDOWN
+                long, cooldown = False, cooldown_bars
             elif b in {"SELL", "SHORT"}:
                 out.append(StrategyDecision(action="SELL", strength=1.0))
                 long = False
@@ -71,6 +74,8 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--block", choices=("latest", "earlier"), default="latest")
+    ap.add_argument("--stop", type=float, default=STOP)
+    ap.add_argument("--cooldown", type=int, default=COOLDOWN)
     args = ap.parse_args()
     rows = await _klines("1d", N_BARS * 2 if args.block == "earlier" else N_BARS,
                          symbol=args.symbol)
@@ -95,7 +100,8 @@ async def main() -> int:
         for pi, (a, b) in enumerate(PAIRS):
             base, _ = _net_and_p(_composite(entry_acts[a], entry_acts[b]), wcloses, SEED + pi)
             stop, p = _net_and_p(
-                _with_stop(entry_acts[a], entry_acts[b], wcloses), wcloses, SEED + pi
+                _with_stop(entry_acts[a], entry_acts[b], wcloses,
+                           args.stop, args.cooldown), wcloses, SEED + pi
             )
             results.append((f"{REPS[a]}->{REPS[b]}", base, stop, p))
         adjusted = adjust_pvalues([r[3] for r in results], "holm")

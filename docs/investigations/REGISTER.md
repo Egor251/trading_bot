@@ -405,9 +405,19 @@ strictly disjoint 1200-bar BTCUSDT daily block (2020-05 to 2023-08).
 | id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
 |---|---|---|---|---|---|
 | R-52 | the rule clears all four windows on disjoint history | net > 0, beats baseline, Holm p < 0.05 in all 4 | 6 pairs × 4 windows | BTCUSDT 1d, earlier 1200 bars | `FAILS` — 2 of 4 windows pass; stop improves net in all four |
+| R-53 | one stop configuration survives all four windows | same pair, 9 configs (1/2/3% × 5/10/20), Holm over 9, same config in all 4 | 9 × 4 windows | BTCUSDT 1d, earlier 1200 bars | `FAILS` — no configuration intersects all four; two criterion defects caught and pinned |
 
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
+
+### Stop-parameter mechanism (R-53)
+
+Registered S26; result S26-2. Nine fixed stop/cooldown configurations on the
+disjoint block, Holm over nine, criterion requiring the SAME configuration in
+all four windows. Two known-answer criterion defects (per-window "any winner"
+and an empty-window vacuous pass) were caught and pinned before accepting the
+result. Verdict: `FAILS` — no configuration passes all four, though the stop
+improves net in every window. This explains R-52 without promoting any setting.
 
 **Both gaps are now resolved without touching a default.** The Sullivan
 correction moves every p-value to the floor but there was no `live_ok`
@@ -422,8 +432,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            52
-closed with evidence             45   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            53
+closed with evidence             46   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -431,11 +441,11 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-45 + 3 + 1 = 49, not 52: the resolved `neuroevolution counting check` item
+46 + 3 + 1 = 50, not 53: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
-stop-loss, generalization) R-51 (chaos features) and R-52 (disjoint-period check) were added later as
+stop-loss, generalization) R-51 (chaos features) R-52 (disjoint-period check) and R-53 (stop grid) were added later as
 separate registrations. Counted this way on purpose rather than silently.
 
 The last open item:
