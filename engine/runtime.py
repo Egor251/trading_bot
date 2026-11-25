@@ -562,7 +562,11 @@ class TradingRuntime:
                     reason=decision.reason or "insurance_halt",
                 )
         meta = getattr(intent, "meta", None) or {}
-        allow_reverse = bool(close_and_reverse or meta.get("close_and_reverse"))
+        allow_reverse = bool(
+            close_and_reverse
+            or getattr(intent, "close_and_reverse", False)
+            or meta.get("close_and_reverse")
+        )
         verdict = self.position_book.evaluate_intent(
             strategy_id=intent.strategy_id or "",
             symbol=intent.exposure_key,
@@ -785,6 +789,7 @@ class TradingRuntime:
         order_type: str = "market",
         limit_price: float | None = None,
         post_only: bool = False,
+        close_and_reverse: bool = False,
     ) -> tuple[OrderIntent | None, OrderResult | None, float]:
         """Return (intent, reject, price)."""
         price = mark_price
@@ -843,6 +848,7 @@ class TradingRuntime:
             order_type=ot,
             reduce_only=reduce_only,
             post_only=bool(post_only),
+            close_and_reverse=bool(close_and_reverse),
             exit_reason=exit_reason,
             venue=resolved_venue,
             account=resolved_account,
@@ -1392,6 +1398,7 @@ class TradingRuntime:
         order_type: str = "market",
         limit_price: float | None = None,
         post_only: bool = False,
+        close_and_reverse: bool = False,
     ) -> OrderResult:
         """Paper (sync) path — used when ``mode=paper``."""
         priced = float(mark_price or 0)
@@ -1453,6 +1460,7 @@ class TradingRuntime:
             order_type=order_type,
             limit_price=limit_price,
             post_only=post_only,
+            close_and_reverse=close_and_reverse,
         )
         if rejected is not None:
             return rejected
@@ -1505,6 +1513,7 @@ class TradingRuntime:
         order_type: str = "market",
         limit_price: float | None = None,
         post_only: bool = False,
+        close_and_reverse: bool = False,
     ) -> OrderResult:
         """
         Route by mode: paper → sync fill; quik/live → broker after risk check.
@@ -1528,6 +1537,7 @@ class TradingRuntime:
                 order_type=order_type,
                 limit_price=limit_price,
                 post_only=post_only,
+            close_and_reverse=close_and_reverse,
             )
 
         priced = float(mark_price or 0)
@@ -1589,6 +1599,7 @@ class TradingRuntime:
             order_type=order_type,
             limit_price=limit_price,
             post_only=post_only,
+            close_and_reverse=close_and_reverse,
         )
         if rejected is not None:
             return rejected

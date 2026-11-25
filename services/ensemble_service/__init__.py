@@ -70,6 +70,7 @@ class EnsembleService(BaseService):
     def __init__(self, core: MicrokernelCore, component_id: str) -> None:
         super().__init__(core, component_id)
         self.manager = EnsembleManager()
+        self.manager.allow_short = False  # set from trading.position_policy on init
         self._buffer: dict[str, list[StrategySignal]] = {}
         self._flush_task: asyncio.Task[None] | None = None
         self._rebalance_task: asyncio.Task[None] | None = None
@@ -143,6 +144,8 @@ class EnsembleService(BaseService):
     async def on_initialize(self) -> None:
         trading = await self.core.config.get("trading", {}) or {}
         self._ensemble_cfg = dict(trading.get("ensemble") or {})
+        policy = dict(trading.get("position_policy") or {})
+        self.manager.allow_short = not bool(policy.get("forbid_net_flip", True))
         # Bound after config is available: `__init__` runs before `self.config`
         # is populated, so a path configured here would be silently ignored and
         # the store would stay in-memory -- provenance that evaporates on
@@ -932,7 +935,12 @@ class EnsembleService(BaseService):
                     price = float(c.meta["price"])
                 if c.meta.get("class_code"):
                     class_code = str(c.meta["class_code"])
-            action = "BUY" if dec.side == "buy" else "SELL"
+            if dec.side == "buy":
+                action = "BUY"
+            elif dec.side == "short":
+                action = "SHORT"  # runtime maps to OrderSide.SELL with reverse allowed
+            else:
+                action = "SELL"
             strength = float(dec.strength) * max(0.0, min(1.0, float(self._risk_scale)))
             payload = {
                 "action": action,
@@ -1017,6 +1025,7 @@ class EnsembleService(BaseService):
             strength=strength,
             order_type="limit" if post_only else "market",
             post_only=post_only,
+            close_and_reverse=(str(payload.get("action") or "").upper() == "SHORT"),
         )
         ok = result.status in {
             OrderStatus.FILLED,

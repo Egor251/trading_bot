@@ -2756,3 +2756,24 @@ The two-sided and aggregate blockers remain: production `forbid_net_flip`,
 no SHORT vote from Consilium, gross-only leverage, orphaned allocator and the
 `max_k` gate statistic. Those are bigger, architecture-respecting changes and
 are not silently bundled here.
+
+---
+
+## S42 · Two-sided capability, opt-in
+
+Next blocker removed WITHOUT changing the shipped policy. `EnsembleManager`
+gained `allow_short`, set from `trading.position_policy.forbid_net_flip` on
+initialize: with the shipped `true` nothing changes, with `false` a negative
+consensus emits `SHORT` instead of `SELL`. `OrderIntent` gained
+`close_and_reverse`; the ensemble sets it when the action is SHORT, and
+`TradingRuntime._gate_consilium_intent` passes it into `PositionBook`, so a
+long→short reversal is an explicit decision rather than a silent violation.
+Three known-answer tests pin the opt-in vote, the reversal permission reaching
+the policy, and the default never requesting a reversal.
+
+Deliberately NOT changed in this increment: the shipped forbid_net_flip value,
+risk's gross-only leverage (a hedged pair still consumes 1×), the correlation
+gate's `abs()` treatment of a negative hedge, and `PortfolioLedger`
+funding/borrow wiring. Enabling shorts in production is a separate decision
+with its own registered hypothesis and controls; the capability is now present
+without pretending the risk model is ready.

@@ -65,6 +65,7 @@ class OrderIntent:
     venue: str = ""
     account: str = ""
     reduce_only: bool = False
+    close_and_reverse: bool = False
     post_only: bool = False
     exit_reason: str = ""
     #: Market price when the decision was taken. Slippage is measured against

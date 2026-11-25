@@ -47,6 +47,7 @@ PYTEST_MODULES = (
     "tests/test_maker_rebate.py",
     "tests/test_phantom_position_mode.py",
     "tests/test_cost_liquidity.py",
+    "tests/test_two_sided.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",

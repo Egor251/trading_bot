@@ -153,6 +153,8 @@ class EnsembleManager:
 
     def __init__(self, strategy_ids: list[str] | None = None) -> None:
         self._weights: dict[str, float] = {}
+        #: Two-sided decisions are opt-in: the shipped policy forbids net flips.
+        self.allow_short: bool = False
         #: Last computed pairwise correlation, for the operator read-model.
         self._last_correlation: dict[str, dict[str, float]] = {}
         self.stats = StrategyStats()
@@ -329,7 +331,7 @@ class EnsembleManager:
             elif score > 0:
                 side = "buy"
             else:
-                side = "sell"
+                side = "short" if self.allow_short else "sell"
             out.append(
                 WeightedDecision(
                     symbol=symbol,
