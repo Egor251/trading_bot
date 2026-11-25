@@ -2110,3 +2110,61 @@ tuned after seeing the numbers.
 This is the second criterion-defect of this project's class (numbers that
 looked like a pass because the check was weaker than the claim), alongside
 the degenerate portfolio null — recorded, pinned, and not treated as a find.
+
+---
+
+## S27 · Detection power of the composite gate — REGISTRATION (before the run)
+
+Registered as R-54 before running. Every negative so far (R-48/50/52/53)
+could be a weak instrument rather than a weak strategy. The original project
+asked the same question with an injection sweep (R-02) before trusting its
+negatives; this does the same for the composite criterion.
+
+Design fixed: the earlier disjoint 1200-bar BTCUSDT daily block, the same six
+pairs, four nested holdouts, 500-draw null, Holm over six. INJECTION is not
+into the price series (that would move the indicators and be circular) but
+into the evaluated P&L: `net_injected = net + edge_bps * held_bars / 1e4 *
+NOTIONAL`, where held_bars comes from the rule's own fills. The null stays the
+no-edge distribution. Edge ladder fixed: 0 / 1 / 2 / 5 bps per held bar.
+
+Criterion (fixed): the instrument is ADEQUATE iff at edge = 2 bps per held bar
+at least one pair clears net > 0 AND Holm p < 0.05 in ALL FOUR windows. If it
+does not, every negative verdict from this criterion is INCONCLUSIVE about
+weak edges and must be labelled as such — not converted into "no strategy
+exists". The 0-bps row is the known-answer control: it must produce no pass.
+
+This is a property of the MEASURING instrument, not a new strategy claim.
+It cannot make R-49 tradable; it tells us how much to believe R-48/50/52/53.
+
+## S27-2 · R-54 — RESULT
+
+Control clean: at 0 bps no pair passes all four windows. Injection ladder:
+
+```
+edge 0 bps -> NONE   (winners/window 60:0, 120:1, 240:0, 360:3)
+edge 1 bps -> NONE   (0, 1, 0, 3)
+edge 2 bps -> NONE   (0, 1, 0, 4)
+edge 5 bps -> NONE   (2, 3, 1, 4)
+control 0 bps clean: True; 2 bps detected: False
+R-54 INCONCLUSIVE
+```
+
+The gate cannot detect a 2 bps-per-held-bar edge, and not even a 5 bps one
+(which already exceeds the 7 bps round-trip cost of the product). Windows 60
+and 240 have ZERO winners at every weak edge, so no pair can ever satisfy
+"all four windows" at those magnitudes no matter how real the injected edge.
+
+Consequence, binding on the register: R-48, R-50, R-52 and R-53 are FAILS of
+the registered criterion, but they are **inconclusive about the existence of a
+weak edge**. They must not be cited as evidence that no strategy works. The
+same discipline that produced R-02 (power sweep before trusting a negative)
+now applies here. R-49's positive reading is not upgraded by this — a broken
+or underpowered gate cuts both ways.
+
+What this does NOT say: it does not prove an edge exists; it says this
+instrument cannot decide. A different statistic (more windows, different
+null, longer holdouts or a portfolio-level measure) is a NEW registration.
+
+Verification: the power tool is in the live verification loop; offline 158
+passed + 3 self-tests, full suite 1088 passed with the documented
+load-dependent quik flake passing in isolation on the same commit.

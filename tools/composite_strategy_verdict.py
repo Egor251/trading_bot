@@ -78,7 +78,8 @@ def _composite(entry: list[str], exit_: list[str]) -> list[StrategyDecision]:
 
 
 def _net_and_p(
-    decisions: list[StrategyDecision], closes: list[float], seed: int
+    decisions: list[StrategyDecision], closes: list[float], seed: int,
+    edge_bps: float = 0.0,
 ) -> tuple[float, float]:
     fills = decisions_to_fills(
         decisions,
@@ -100,6 +101,11 @@ def _net_and_p(
         elif act == "SELL":
             pos = False
         held[i] = pos
+    # Injection is into the EVALUATED P&L only, never into the price series
+    # that drives the indicators (that would be circular). Used by R-54's
+    # power check; default 0 preserves every registered run.
+    if edge_bps:
+        net += edge_bps / 1e4 * NOTIONAL * sum(held)
     rets = [0.0] + [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
     q = sum(held[1:]) / max(1, len(held) - 1)
     import random

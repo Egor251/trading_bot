@@ -406,6 +406,13 @@ strictly disjoint 1200-bar BTCUSDT daily block (2020-05 to 2023-08).
 |---|---|---|---|---|---|
 | R-52 | the rule clears all four windows on disjoint history | net > 0, beats baseline, Holm p < 0.05 in all 4 | 6 pairs × 4 windows | BTCUSDT 1d, earlier 1200 bars | `FAILS` — 2 of 4 windows pass; stop improves net in all four |
 | R-53 | one stop configuration survives all four windows | same pair, 9 configs (1/2/3% × 5/10/20), Holm over 9, same config in all 4 | 9 × 4 windows | BTCUSDT 1d, earlier 1200 bars | `FAILS` — no configuration intersects all four; two criterion defects caught and pinned |
+| R-54 | the gate can detect an injected weak edge | 2 bps per held bar must produce a pair passing all four; 0 bps is the control | 6 pairs × 4 windows × 4 edge levels | same earlier block, P&L-only injection | `FAILS` — even 5 bps gives no all-window pair; gate INCONCLUSIVE |
+
+**R-54 changes how the previous failures may be read.** R-48/50/52/53 remain
+FAILS of their registered criteria, but the gate cannot detect a weak edge at
+the registered magnitude, so they are NOT evidence that no edge exists. This
+is the R-02 power discipline applied to the composite family; it does not
+promote R-49 and does not prove an edge either.
 
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
@@ -432,8 +439,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            53
-closed with evidence             46   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            54
+closed with evidence             47   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -441,12 +448,12 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-46 + 3 + 1 = 50, not 53: the resolved `neuroevolution counting check` item
+47 + 3 + 1 = 51, not 54: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
-stop-loss, generalization) R-51 (chaos features) R-52 (disjoint-period check) and R-53 (stop grid) were added later as
-separate registrations. Counted this way on purpose rather than silently.
+stop-loss, generalization) R-51 (chaos features) R-52 (disjoint-period check) R-53 (stop grid) and R-54 (power check) were added later as separate
+registrations. Counted this way on purpose rather than silently.
 
 The last open item:
 
