@@ -2693,3 +2693,46 @@ This reframes the search: the plausible profit source at our scale is not a
 better direction predictor on 1h bars, but cost-side (maker/rebate), breadth
 and horizon, and two-sided relative value. Each needs its own registered
 hypothesis with controls and power — no threshold was tuned here.
+
+---
+
+## S40 · Blockers for the three remaining profit classes
+
+Direct answer to "what stops us doing maker rebates/spread, two-legged shorts
+and an aggregate of weak signals?" — the blockers are concrete, and one of
+them was a wiring bug we could remove today.
+
+**Maker rebates / spread.** The product path can now express post-only and book
+a rebate (S39), but: (a) everything runs in `mode: paper` (`config:713`); (b)
+`post_only` defaults to false and needs a limit price plus a venue that honours
+GTX; (c) no real post-only fills exist — `tools/fill_audit.py` reports 0 usable
+observations, so the ≥30-fill calibration bar is unmet; (d)
+`engine/cost_calibration.py` still returns a flat `fee_bps + slippage_bps`, not
+a maker/taker schedule, and `ops_monitor_service:498` drops negative fees from
+calibration. Blocker type: **live venue data + cost-schedule wiring**, not code
+imagination. A registered hypothesis needs realized resting rate ≥50% and
+slippage p95 ≤2 bps before any claim.
+
+**Two-legged shorts.** Research is now fixed: `run_grid` read
+`trading.forbid_net_flip`, a key the shipped YAML never had, so `net_flip` was
+unreachable; `services/phantom_service.py::research_position_mode` now reads
+`trading.position_policy.forbid_net_flip`, honours `false`, and fails closed to
+long_flat on a missing/legacy key (3 pinned tests). Remaining blockers:
+production `forbid_net_flip: true` (`config:734-735`), no SHORT action produced
+by Consilium (`engine/ensemble.py:17,25,324-336`), gross-only leverage that
+charges a hedged pair 1× (`engine/risk.py:483-488`), a correlation gate that
+treats a negative hedge as a violation (`engine/risk.py:228-249`), and
+`PortfolioLedger` (funding/borrow) never instantiated by the runtime. Blocker
+type: **decision/risk construction**, plus a registered two-sided hypothesis.
+
+**Aggregate of weak signals.** The gate statistic is `max_k(mean_k/se_k)`
+(`engine/simulation.py:804-865`): it rejects "the best member is special", not
+"a fixed weighted combination has positive net". Live ships one strategy and
+drops observe votes before aggregation (`services/ensemble_service:812-813`),
+and `AdaptiveAllocator` has no production caller. Blocker type: **missing
+portfolio-level statistic and allocator wiring**, not missing signals. A
+portfolio-verdict tool must fix weights before OOS, bootstrap the AGGREGATE
+series, and include RANDOM/SHUFFLED controls plus a power injection — the same
+lessons already pinned in S28/S29/S31.
+
+None of these is unblocked by tuning a lookback or adding another indicator.

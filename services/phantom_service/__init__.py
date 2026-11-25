@@ -7,7 +7,29 @@ import logging
 import uuid
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
+
+
+def research_position_mode(
+    trading: Mapping[str, Any] | None,
+    service_cfg: Mapping[str, Any] | None = None,
+) -> str:
+    """Map the shipped `trading.position_policy` key to a research fill mode.
+
+    `run_grid` used to read `trading.forbid_net_flip`, a key that does not
+    exist in the shipped config, so research was silently pinned to long_flat
+    no matter what the operator configured.
+    """
+    block = trading if isinstance(trading, Mapping) else {}
+    policy = block.get("position_policy")
+    value: Any = None
+    if isinstance(policy, Mapping):
+        value = policy.get("forbid_net_flip")
+    if value is None and isinstance(service_cfg, Mapping):
+        value = service_cfg.get("forbid_net_flip")
+    forbid = True if value is None else bool(value)
+    return "long_flat" if forbid else "net_flip"
+
 
 from microkernel_core import BaseService, KernelEvent
 
@@ -1522,7 +1544,8 @@ class PhantomService(BaseService):
                 )
         else:
             hint_qty = float(qty_arg or 1.0)
-        # Match paper TradingRuntime: forbid_net_flip → research long/flat only.
+        # Match paper TradingRuntime: forbid_net_flip -> research long/flat only.
+        # Read from trading.position_policy, where the shipped YAML stores it.
         trading_cfg = {}
         try:
             raw = getattr(self.core.config, "raw", None)
@@ -1532,13 +1555,8 @@ class PhantomService(BaseService):
                 trading_cfg = dict(await self.core.config.get("trading", {}) or {})
         except Exception:
             trading_cfg = {}
-        forbid_flip = bool(
-            trading_cfg.get(
-                "forbid_net_flip",
-                self.config.get("forbid_net_flip", True),
-            )
-        )
-        position_mode = "long_flat" if forbid_flip else "net_flip"
+        position_mode = research_position_mode(trading_cfg, self.config)
+        forbid_flip = position_mode != "net_flip"
         from engine.ohlc_timeframe import timeframe_to_seconds as _tf_sec
 
         expected_interval_sec = _tf_sec(resolved_tf)

@@ -45,6 +45,7 @@ PYTEST_MODULES = (
     "tests/test_forecast_learning.py",
     "tests/test_fast_forecast_daemon.py",
     "tests/test_maker_rebate.py",
+    "tests/test_phantom_position_mode.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",
