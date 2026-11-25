@@ -489,6 +489,23 @@ logging state, NOT a promotion.
 
 Live promotion requires a new registration. No edge is asserted.
 
+### Fast price-forecast learning (R-62)
+
+Registered S38; status S38-2. The design was corrected by the user: poll the
+book and candles every 5 seconds, forecast price at a 300-second horizon and
+train on distance to the realised price with a 2× adverse-direction penalty.
+A regression forecaster with GA over the countable 50-architecture space and
+a fast observe-only daemon are built and known-answer pinned. The registered
+criterion is NOT EVALUABLE until enough forward ticks with resolved horizons
+exist; the daemon is collecting them in the background.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-62 | distance-trained forecast beats no-change baseline | lower held-out loss than baseline, noise twin not also better | 50 archs, 200-observation floor | live book stream, 5s polls | `NOT EVALUABLE` — 300s horizon needs forward data |
+
+No execution path is connected. `loss < baseline` is a training state, not a
+trading decision.
+
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
 
@@ -514,23 +531,25 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            60
+registered hypotheses            61
 closed with evidence             53   (FAILS, HOLDS, ANSWER, CLOSED)
-not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
+not evaluable                     4   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
-                                      (3387 < 4000 registered daily bars) —
+                                      (3387 < 4000 registered daily bars), R-62
+                                      (300s horizon needs forward ticks) —
                                       none counted as pass or failure
 open                              1
 ```
 
-53 + 3 + 1 = 57, not 60: the resolved `neuroevolution counting check` item
+53 + 4 + 1 = 58, not 61: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
 R-51 (chaos features), R-52 (disjoint check), R-53 (stop grid), R-54 (power
 check), R-55/56 (aggregate and control), R-57 (confirmation) and R-58
-(timing skill) and R-59 (rich-market ML) plus R-61 (online instrument) were added later as
-separate registrations. Counted this way on purpose rather than silently.
+(timing skill), R-59 (rich-market ML), R-61 (online instrument) and R-62
+(fast price forecast) were added later as separate registrations. Counted this
+way on purpose rather than silently.
 
 The last open item:
 

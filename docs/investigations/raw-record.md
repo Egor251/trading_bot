@@ -2587,3 +2587,58 @@ guard on an unrelated test. Checkpoints and decisions now default to
 `~/.trading_bot/online/` via `TRADING_ONLINE_DIR`, outside `data/`; the systemd
 unit sets it explicitly. The first process was stopped and the daemon restarted
 with the corrected path. This is an isolation fix, not a research result.
+
+---
+
+## S38 · Fast price-forecast learning — REGISTRATION (before the run)
+
+Registered as R-62 before running. The user's correction, fixed here: the order
+book and candles must update as often as the venue allows (target 5 seconds),
+and the network's output is a PRICE FORECAST, not a BUY/SELL flag.
+
+Design fixed:
+- every poll: top-of-book bid/ask and sizes plus the latest candle for BTC,
+  ETH and SOL; features are the six lagged returns per instrument, book
+  spread_bps and book imbalance;
+- the model emits a predicted mid price for a fixed horizon of 300 seconds;
+- when that horizon arrives, the realized mid price is compared to the
+  forecast. Loss is distance-based: `|log(realized) - log(predicted)|`, with a
+  registered asymmetric factor 2.0 when the realized move is BELOW the
+  forecast (adverse direction for a long). Lower is better; the trainer
+  minimises this loss;
+- GA over the same countable 50-architecture space, Adam 500 epochs lr 0.05,
+  population 12 / 6 generations, seed 62; evaluations and distinct reported;
+- known-answer gate first: a finite-difference gradient check and an injected
+  linear price path must be learnable (loss trending to zero), otherwise the
+  run is refused.
+
+Criterion (fixed): R-62 HOLDS iff, on a deterministic replay of recorded ticks,
+the forecast loss is lower than a no-change baseline (predict current mid) on
+the held-out tail AND the noise-twin (shuffled future prices) does not also
+beat the baseline. FAILS otherwise. This is an observe-only instrument: no
+execution, no live-lineup mutation, no claim of profitability. Promotion is a
+new registration. Poll interval and loss are fixed here, not tuned after data.
+
+## S38-2 · R-62 — STATUS
+
+The instrument is built and pinned; the registered criterion is NOT yet
+evaluable on real data. Known-answer checks passed: finite-difference gradient
+of the asymmetric distance loss; an injected linear price path is learnable;
+downside surprise costs more than upside; evolution reports evaluations and
+distinct; a forecast resolves only after its horizon; duplicate ticks are
+ignored; missing book fields are flagged, never invented.
+
+`tools/fast_forecast_daemon.py` now polls top-of-book every 5 seconds, builds
+six-lagged book-mid returns plus spread/imbalance, emits a 300-second forecast
+and trains on realised distance against a no-change baseline. Checkpoints go
+to `~/.trading_bot/online/forecast_weights.json`, decisions to
+`forecast_decisions.jsonl`. Autostart units and the registered Windows task
+were pointed at this fast daemon; the slow binary-classification daemon was
+stopped and replaced. The fast daemon was launched in the background.
+
+At a 300-second horizon the first real targets cannot exist for at least five
+minutes, and 200 observations take far longer. R-62 is therefore NOT
+EVALUABLE until that forward series exists — reported, not worked around with
+synthetic prices. Observe-only is preserved: no execution, no live-lineup
+mutation; `loss < baseline` in a checkpoint is a training state, not a
+trading decision.

@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=/opt/trading_bot
 Environment=TRADING_DATA_DIR=/var/lib/trading_bot/data
 Environment=TRADING_ONLINE_DIR=/var/lib/trading_bot/online
-ExecStart=/opt/trading_bot/.venv/bin/python tools/online_daemon.py --mode live --interval 300
+ExecStart=/opt/trading_bot/.venv/bin/python tools/fast_forecast_daemon.py --interval 5 --horizon 300
 Restart=always
 RestartSec=30
 NoNewPrivileges=true
