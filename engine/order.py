@@ -65,6 +65,7 @@ class OrderIntent:
     venue: str = ""
     account: str = ""
     reduce_only: bool = False
+    post_only: bool = False
     exit_reason: str = ""
     #: Market price when the decision was taken. Slippage is measured against
     #: this, not against the previous close, because the strategy acted *because*
@@ -628,6 +629,17 @@ class OrderManager:
         )
         costs = self._calculate_costs(context)
         actual_fee = (raw or {}).get("actual_fee")
+        # A negative venue fee is a maker REBATE: credit it, never book it as a
+        # second cost. `abs()` here used to turn a credit into a debit.
+        rebate = Decimal("0")
+        if actual_fee not in (None, ""):
+            try:
+                fee_value = Decimal(str(actual_fee))
+                if fee_value < 0:
+                    rebate = -fee_value
+                    actual_fee = None  # handled as a credit, not a cost line
+            except Exception:  # noqa: BLE001 - never let a fee break a fill
+                actual_fee = None
         if actual_fee not in (None, ""):
             # The broker's real fee is *added* to the modelled lines, not a
             # replacement for them. Replacing discarded commission and slippage,
@@ -668,6 +680,7 @@ class OrderManager:
             fill_id=str((raw or {}).get("fill_id") or uuid4().hex),
             order_id=intent.client_id,
             costs=costs,
+            rebate=rebate,
         )
         self.fill_ledger.append(record)
         self._record_execution_observation(intent, record, raw=raw)

@@ -2642,3 +2642,54 @@ EVALUABLE until that forward series exists — reported, not worked around with
 synthetic prices. Observe-only is preserved: no execution, no live-lineup
 mutation; `loss < baseline` in a checkpoint is a training state, not a
 trading decision.
+
+---
+
+## S39 · Wide outside review — what successful algos have that we don't
+
+Three independent broad read-only reviews (strategy universe, venue/data path,
+portfolio/risk/capital) converged on the same conclusion: 62 negative verdicts
+are the expected output of the apparatus. They do not show that no edge exists;
+they show that the classes of edge real algos use are UNREPRESENTABLE here.
+
+Evidence, by priority:
+
+- **Maker/rebate path was dormant.** `engine/execution.py:774-787,807-835` can
+  send `postOnly/GTX`, but `engine/runtime.py:1642-1666` never set
+  `time_in_force` from an intent; `OrderIntent` had no such field. A maker fee
+  is normally negative, but `engine/order.py:641` took `abs()` and booked a
+  rebate as a cost; `CostLine` rejects negatives and `FillRecord.cash_delta`
+  reduced cash unconditionally. `post_only_enabled` (`engine/execution.py:796`)
+  and the UI toggle were cosmetic.
+- **Long-flat only.** `config/trading_bot.yaml:734-735` forbids net flips;
+  `engine/research.py:228-286` defaults SELL→flat; `phantom_service:1535`
+  reads the wrong config key, so research is pinned to long_flat regardless.
+  Two-sided relative value is unrepresentable; the only clean fade known-answer
+  needs `net_flip` and zero fees.
+- **No portfolio at the decision layer.** `config:601-603` ships one live
+  strategy; `services/ensemble_service/__init__.py:812-813` drops observe
+  signals before aggregation; `engine/ensemble.py:313-342` aggregates per
+  symbol only. `AdaptiveAllocator` and `PortfolioLedger` have no production
+  caller. The gate's RC/SPA statistic is `max_k(mean/se)` — it rejects "the
+  best member is special", not "a fixed weighted combination has an edge".
+- **Breadth/latency.** Live universe is 3 correlated coins (`config:616-637`),
+  decisions on closed 1m bars; the published paper's TSMOM result is a 58
+  instrument basket needing ~30000 daily bars — data budget we never gave it.
+- **Venue raw fields** (taker-buy volume) exist in research only; the product
+  event drops them (`engine/market.py:106-149`).
+
+Fix applied in this increment (P0, engineering, not a new hypothesis):
+`OrderIntent` gained `post_only`; it travels through `submit_signal(_async)`
+into `BrokerOrder.time_in_force`, so the existing adapter finally sends
+`postOnly/GTX`. `services.execution_service.post_only` now sets
+`post_only_enabled` and the ensemble passes post-only/limit orders. Negative
+`actual_fee` is booked as an explicit `FillRecord.rebate` that CREDITS cash,
+and survives JSON round-trip. Three known-answer tests pin the transmission
+and the credit. The remaining gaps are recorded, not silently patched:
+two-sided research miswiring, orphaned portfolio allocator, breadth and
+forming-bar safety in the REST path.
+
+This reframes the search: the plausible profit source at our scale is not a
+better direction predictor on 1h bars, but cost-side (maker/rebate), breadth
+and horizon, and two-sided relative value. Each needs its own registered
+hypothesis with controls and power — no threshold was tuned here.

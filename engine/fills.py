@@ -39,6 +39,9 @@ class FillRecord:
     costs: CostBreakdown
     contract_multiplier: Decimal = Decimal("1")
     currency: str = "USD"
+    #: Venue rebate (maker fee credit). Positive values CREDIT cash; the cost
+    #: breakdown cannot hold a negative line, so rebates live here explicitly.
+    rebate: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         for name in ("fill_id", "order_id", "venue", "account", "symbol", "currency"):
@@ -55,6 +58,9 @@ class FillRecord:
             _decimal(self.contract_multiplier, "contract_multiplier", positive=True),
         )
         object.__setattr__(self, "trade_time", _datetime(self.trade_time, "trade_time"))
+        object.__setattr__(self, "rebate", _decimal(self.rebate, "rebate"))
+        if self.rebate < 0:
+            raise ValueError("rebate must not be negative")
         if not isinstance(self.costs, CostBreakdown):
             raise TypeError("costs must be a CostBreakdown (use CostBreakdown() for no costs)")
 
@@ -64,11 +70,11 @@ class FillRecord:
 
     @property
     def total_cost(self) -> Decimal:
-        return self.costs.total
+        return self.costs.total - self.rebate
 
     @property
     def cash_delta(self) -> Decimal:
-        """Signed settlement cash movement; costs always reduce cash."""
+        """Signed settlement cash movement; rebates credit it, costs reduce it."""
         gross_cash = self.gross_notional if self.side == "sell" else -self.gross_notional
         return gross_cash - self.total_cost
 
@@ -80,6 +86,7 @@ class FillRecord:
         fill_id: str,
         order_id: str,
         costs: CostBreakdown,
+        rebate: Decimal = Decimal("0"),
     ) -> FillRecord:
         if not isinstance(context, TradeContext):
             raise TypeError("context must be a TradeContext")
@@ -94,6 +101,7 @@ class FillRecord:
             price=context.price,
             trade_time=context.trade_time,
             costs=costs,
+            rebate=rebate,
             contract_multiplier=context.contract_multiplier,
             currency=context.currency,
         )
@@ -129,6 +137,7 @@ class FillRecord:
             "costs": self.costs.to_dict(),
             "contract_multiplier": _decimal_text(self.contract_multiplier),
             "currency": self.currency,
+            "rebate": _decimal_text(self.rebate),
             "gross_notional": _decimal_text(self.gross_notional),
             "cash_delta": _decimal_text(self.cash_delta),
         }

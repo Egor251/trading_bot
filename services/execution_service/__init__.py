@@ -55,6 +55,9 @@ class ExecutionService(BaseService):
             # `time_in_force` never remove it. 0 disables the sweep.
             "stale_order_ttl_sec": 900,
             "stale_order_sweep_interval_sec": 60,
+            # Post-only is opt-in at the decision path; false disables maker routing
+            # for venues that reject GTX/post-only orders.
+            "post_only": False,
             "accounts": {"quik": "default", "alpaca": "default"},
         }
 
@@ -169,11 +172,9 @@ class ExecutionService(BaseService):
         if client is not None:
             venue = str(getattr(ccxt_adapter, "exchange_id", "ccxt"))
             account = str(accounts.get(venue) or accounts.get("ccxt") or "default")
-            self._register(
-                venue,
-                account,
-                CcxtExecutionAdapter(client, venue=venue, account=account),
-            )
+            adapter = CcxtExecutionAdapter(client, venue=venue, account=account)
+            adapter.post_only_enabled = bool(self.config.get("post_only", True))
+            self._register(venue, account, adapter)
 
         alpaca = self.core.service_registry.get("alpaca_market_service")
         alpaca_adapter = getattr(alpaca, "_alpaca", None)

@@ -359,6 +359,8 @@ services:
     attach_interval_sec: 2
     auto_start: true
     enabled: true
+    # Opt-in maker routing: requires a limit price and a venue that honours postOnly.
+    post_only: false
     reconcile_interval_sec: 30
     store_path: data/execution/orders.json
   historical_data_service:

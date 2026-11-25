@@ -784,6 +784,7 @@ class TradingRuntime:
         account: str = "",
         order_type: str = "market",
         limit_price: float | None = None,
+        post_only: bool = False,
     ) -> tuple[OrderIntent | None, OrderResult | None, float]:
         """Return (intent, reject, price)."""
         price = mark_price
@@ -841,6 +842,7 @@ class TradingRuntime:
             limit_price=lp,
             order_type=ot,
             reduce_only=reduce_only,
+            post_only=bool(post_only),
             exit_reason=exit_reason,
             venue=resolved_venue,
             account=resolved_account,
@@ -1389,6 +1391,7 @@ class TradingRuntime:
         apply_sizing: bool = True,
         order_type: str = "market",
         limit_price: float | None = None,
+        post_only: bool = False,
     ) -> OrderResult:
         """Paper (sync) path — used when ``mode=paper``."""
         priced = float(mark_price or 0)
@@ -1449,6 +1452,7 @@ class TradingRuntime:
             account=account,
             order_type=order_type,
             limit_price=limit_price,
+            post_only=post_only,
         )
         if rejected is not None:
             return rejected
@@ -1500,6 +1504,7 @@ class TradingRuntime:
         apply_sizing: bool = True,
         order_type: str = "market",
         limit_price: float | None = None,
+        post_only: bool = False,
     ) -> OrderResult:
         """
         Route by mode: paper → sync fill; quik/live → broker after risk check.
@@ -1522,6 +1527,7 @@ class TradingRuntime:
                 apply_sizing=apply_sizing,
                 order_type=order_type,
                 limit_price=limit_price,
+                post_only=post_only,
             )
 
         priced = float(mark_price or 0)
@@ -1582,6 +1588,7 @@ class TradingRuntime:
             account=account,
             order_type=order_type,
             limit_price=limit_price,
+            post_only=post_only,
         )
         if rejected is not None:
             return rejected
@@ -1652,6 +1659,7 @@ class TradingRuntime:
                 client_id=intent.client_id,
                 idempotency_key=intent.client_id,
                 order_type=intent.order_type,
+                time_in_force="post_only" if intent.post_only else "day",
                 limit_price=(
                     Decimal(str(intent.limit_price))
                     if intent.limit_price is not None

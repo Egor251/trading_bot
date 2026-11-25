@@ -474,14 +474,15 @@ def test_broker_fee_is_added_not_substituted() -> None:
     assert record.costs.total > Decimal("0.75")
 
 
-def test_negative_broker_fee_does_not_abort_the_fill() -> None:
+def test_negative_broker_fee_is_a_rebate_not_a_cost() -> None:
     m = _manager()
     intent = _intent("BTC/USDT", "CRYPTO", OrderSide.BUY, 0.01, 50_000.0)
     record = m._record_fill(  # noqa: SLF001
         intent, quantity=0.01, price=50_000.0, raw={"actual_fee": "-1.25"}
     )
     assert record is not None
-    assert any(line.component == "actual_fee" for line in record.costs.lines)
+    assert record.rebate == Decimal("1.25")
+    assert not any(line.component == "actual_fee" for line in record.costs.lines)
 
 
 # ---------------------------------------------------------------------------

@@ -1003,6 +1003,8 @@ class EnsembleService(BaseService):
                 instance_id=instance_id,
             )
             return
+        exec_cfg = await self.core.config.get("services.execution_service", {}) or {}
+        post_only = bool(exec_cfg.get("post_only", False))
         result = await runtime.submit_signal_async(
             ticker=str(payload.get("ticker") or ""),
             action=str(payload.get("action") or "BUY"),
@@ -1013,6 +1015,8 @@ class EnsembleService(BaseService):
                 float(payload["price"]) if payload.get("price") not in (None, "") else None
             ),
             strength=strength,
+            order_type="limit" if post_only else "market",
+            post_only=post_only,
         )
         ok = result.status in {
             OrderStatus.FILLED,
