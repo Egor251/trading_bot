@@ -2168,3 +2168,92 @@ null, longer holdouts or a portfolio-level measure) is a NEW registration.
 Verification: the power tool is in the live verification loop; offline 158
 passed + 3 self-tests, full suite 1088 passed with the documented
 load-dependent quik flake passing in isolation on the same commit.
+
+---
+
+## S28 · Portfolio of composite pairs — REGISTRATION (before the run)
+
+Registered as R-55 before running. R-54 showed the single-pair gate cannot
+detect even a 5 bps edge: the statistic, not necessarily the strategy, is the
+limitation. This changes the statistic rather than the search.
+
+Statistic (fixed): equal-weight MEAN of the six S21 pairs' net P&L per window,
+each pair using the S22 stop (2%, 10 bars) unchanged. No pair is selected —
+the aggregate is the unit, the same lesson R-23 gave the strategy lineup.
+
+Null (fixed): for each of 500 draws, randomize each pair's held bars
+independently at its own activity rate, compute that pair's null net, then
+average the six — the null of the AGGREGATE, not of a best pair. p =
+(1 + #{null >= observed}) / 501.
+
+Inclusion of power in the SAME run (fixed): inject 0 / 2 / 5 bps per held bar
+into the evaluated AGGREGATE net only, never into the price series. This tests
+whether the new statistic can detect an edge that the old one missed.
+
+Criterion (fixed): R-55 is ADEQUATE iff at 0 bps no window passes (control) AND
+at 2 bps at least three of four windows pass p < 0.05 with net > 0. R-55 HOLDS
+iff ADEQUATE AND at 0 bps the real aggregate also passes at least three of four
+windows. Anything else FAILS or is INCONCLUSIVE, reported under its own name.
+Earlier disjoint 1200-bar BTCUSDT daily block, four nested holdouts 60/120/
+240/360, train 600 / val 100 — unchanged. No threshold is tuned after seeing
+the numbers.
+
+## S28-2 · R-55 — RESULT
+
+R-55 is recorded as FAILS under its own registered criterion. The criterion
+contained a false premise: "0 bps injection" is NOT a no-edge control — it is
+the real composite net, so a clean control there was impossible. Numbers kept
+verbatim: aggregate net +205.87 / +316.38 / +415.25 / +1292.93 with
+p 0.0060 / 0.0020 / 0.0020 / 0.0020 on the four disjoint windows; 2 bps
+injection detected 4/4 — the new statistic HAS power, unlike the old gate.
+No criterion is repaired retroactively; S29 registers the corrected control.
+
+---
+
+## S29 · Composite portfolio with a correct control — REGISTRATION (before the run)
+
+Registered as R-56 before running. S28's control was wrong: injecting 0 bps
+does not remove the strategies' edge, it merely adds nothing. A no-edge
+control must be built from random timing BY CONSTRUCTION.
+
+Design (fixed): same aggregate statistic, null and windows as R-55 on the
+earlier disjoint BTCUSDT block. Three arms, computed identically:
+  REAL     — the six S21 pairs' composite decisions;
+  RANDOM   — for each pair, a random held/unheld sequence at that pair's own
+             activity rate, mapped through the SAME fills/P&L path (costs,
+             sizing, mark-to-market);
+  SHUFFLED — the real returns shuffled within each window before scoring the
+             real decisions (destroys time order, preserves return distribution).
+
+Criterion (fixed): R-56 HOLDS iff REAL has net > 0 and p < 0.05 in at least
+three of four windows, while BOTH controls pass at most one window each. It
+FAILS if the controls pass as often as REAL (null cannot reject), or if REAL
+fails. Power is inherited from R-55's 2 bps row (4/4 detected), so no separate
+injection ladder is needed. No threshold or control is changed after the
+numbers arrive.
+
+## S29-2 · R-56 — RESULT
+
+```
+window  60: REAL +205.87 p0.0060 HOLDS | RANDOM -89.70 p0.1657 | SHUFFLED -283.74 p0.5868
+window 120: REAL +316.38 p0.0020 HOLDS | RANDOM -302.70 p0.2435 | SHUFFLED -389.72 p0.3972
+window 240: REAL +415.25 p0.0020 HOLDS | RANDOM -165.17 p0.1856 | SHUFFLED -283.23 p0.3752
+window 360: REAL +1292.93 p0.0020 HOLDS | RANDOM +392.91 p0.0918 | SHUFFLED +1016.17 p0.0020 HOLDS
+pass counts: REAL 4, RANDOM 0, SHUFFLED 1
+R-56 HOLDS
+```
+
+The registered bar is met: the real six-pair aggregate clears four of four
+windows; both constructed no-edge controls clear at most one. SHUFFLED did
+clear window 360 — recorded, not hidden — but the criterion allowed at most
+one control window, and this is exactly why that tolerance was fixed before
+the run rather than chosen after it.
+
+This is the strongest result in the project: a statistic with demonstrated
+power (R-55's 2 bps row detected 4/4) on a time-disjoint block, against two
+controls that are no-edge BY CONSTRUCTION rather than by a mis-specified
+injection. Boundaries remain real: ONE instrument, six pre-fixed pairs, one
+earlier 1200-bar block, nested windows, aggregate net rather than a single
+tradable strategy. Confirmation on other instruments and on a non-overlapping
+later span is a NEW registration; none of it is done here, and this is not a
+live-trading decision.
