@@ -98,7 +98,11 @@ class ExecutionObservation:
         }
 
 
-def cost_model_from_config(raw_cfg: Mapping[str, Any] | None) -> dict[str, float]:
+def cost_model_from_config(
+    raw_cfg: Mapping[str, Any] | None,
+    *,
+    liquidity: str = "taker",
+) -> dict[str, float]:
     """The per-fill cost the product actually charges, read from its own config.
 
     Two numbers for the same thing is the defect this exists to remove. The shipped
@@ -145,6 +149,12 @@ def cost_model_from_config(raw_cfg: Mapping[str, Any] | None) -> dict[str, float
 
     fee = block.get("fee_bps")
     slip = block.get("slippage_bps")
+    schedule = cfg.get("maker_cost_schedule")
+    if isinstance(schedule, Mapping) and str(liquidity).strip().lower() in {"maker", "post_only", "postonly"}:
+        maker_fee = schedule.get("maker_fee_bps")
+        fee = maker_fee if maker_fee is not None else 0.0
+        maker_slip = schedule.get("maker_slippage_bps")
+        slip = maker_slip if maker_slip is not None else 0.0
     return _split_cost({"fee_bps": fee, "slippage_bps": slip})
 
 

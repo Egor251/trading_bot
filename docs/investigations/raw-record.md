@@ -2736,3 +2736,23 @@ series, and include RANDOM/SHUFFLED controls plus a power injection — the same
 lessons already pinned in S28/S29/S31.
 
 None of these is unblocked by tuning a lookback or adding another indicator.
+
+---
+
+## S41 · Maker cost schedule and rebate evidence — wiring complete
+
+Engineering increment on the maker blocker. `cost_model_from_config(raw,
+liquidity="maker")` now reads `trading.cost_schedule` (maker 0/0, taker 5/2);
+the default call is UNCHANGED at 7 bps, so no registered number moves.
+`CcxtExecutionAdapter._order` carries the venue's `takerOrMaker` into
+`raw["liquidity"]` and preserves `time_in_force` from the request, so a maker
+fill can finally be matched to a maker rule instead of `unknown`.
+`OpsMonitorService._sample_fill` uses the maker model for maker fills and
+retains negative `actual_fee` as evidence (it was dropped before), while the
+journal `meta` now stores `actual_fee` including rebates. Three known-answer
+tests pin the split, the venue echo and the retained credit.
+
+The two-sided and aggregate blockers remain: production `forbid_net_flip`,
+no SHORT vote from Consilium, gross-only leverage, orphaned allocator and the
+`max_k` gate statistic. Those are bigger, architecture-respecting changes and
+are not silently bundled here.

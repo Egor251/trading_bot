@@ -888,6 +888,13 @@ class CcxtExecutionAdapter:
 
     def _order(self, value: Any, original: BrokerOrder | None = None) -> BrokerOrder:
         raw = _mapping(value)
+        # Carry maker/taker through the venue echo. CCXT reports it as
+        # `takerOrMaker` on fills; TradeContext expects `raw["liquidity"]`.
+        liquidity = raw.get("takerOrMaker") or raw.get("liquidity")
+        if liquidity is None and isinstance(getattr(original, "raw", None), dict):
+            liquidity = original.raw.get("liquidity")
+        if liquidity is not None:
+            raw["liquidity"] = liquidity
         return BrokerOrder(
             symbol=str(raw.get("symbol") or (original.symbol if original else "")),
             side=raw.get("side") or (original.side if original else "buy"),
@@ -895,6 +902,10 @@ class CcxtExecutionAdapter:
             venue=self.venue, account=self.account,
             client_id=str(raw.get("clientOrderId") or (original.client_id if original else raw.get("id"))),
             order_type=str(raw.get("type") or (original.order_type if original else "market")),
+            time_in_force=str(
+                raw.get("timeInForce")
+                or (original.time_in_force if original else "day")
+            ),
             limit_price=raw.get("price"),
             # Fall back to what we asked for. A venue that does not echo
             # `stopPrice` would otherwise null the trigger on the very object

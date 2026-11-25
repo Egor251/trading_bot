@@ -641,6 +641,13 @@ trading:
     preset: moderate
   legacy_fee_bps: 5
   legacy_slippage_bps: 2
+  # A maker order rests on the book: no crossing, and on many venues a rebate.
+  # Taker remains the shipped 5+2=7 bps single source used by research.
+  maker_cost_schedule:
+    maker_fee_bps: 0
+    maker_slippage_bps: 0
+    taker_fee_bps: 5
+    taker_slippage_bps: 2
   live_readiness:
     # ENFORCED, not advisory. At Consilium start-up every live member that does
     # not reach `live_ok` is moved to the observe roster and the reason is

@@ -476,6 +476,18 @@ class OpsMonitorService(BaseService):
         reference = payload.get("reference_price") or order.get("reference_price")
         if reference is None or quantity <= 0 or price <= 0:
             return
+        _liquidity = str(
+            payload.get("liquidity") or order.get("liquidity")
+            or order.get("takerOrMaker") or ""
+        ).strip().lower()
+        try:
+            from engine.cost_calibration import cost_model_from_config
+
+            _maker_cost_model = cost_model_from_config(
+                getattr(self.core.config, "raw", None), liquidity="maker"
+            )
+        except Exception:  # noqa: BLE001
+            _maker_cost_model = self._cost_model
         notional = abs(quantity) * price
         if notional <= 0:
             return
@@ -493,9 +505,14 @@ class OpsMonitorService(BaseService):
                     fill_price=price,
                     notional=notional,
                     expected_cost=notional
-                    * (self._cost_model["fee_bps"] + self._cost_model["slippage_bps"])
+                    * (
+                        (_maker_cost_model if _liquidity in {"maker", "post_only", "postonly"}
+                         else self._cost_model)["fee_bps"]
+                        + (_maker_cost_model if _liquidity in {"maker", "post_only", "postonly"}
+                           else self._cost_model)["slippage_bps"]
+                    )
                     / 10_000.0,
-                    actual_fee=fee if fee > 0 else None,
+                    actual_fee=fee,  # negative maker rebates are evidence, not noise
                 )
             )
         except (TypeError, ValueError):
@@ -571,6 +588,8 @@ class OpsMonitorService(BaseService):
             pass
         if fee > 0:
             meta["reported_fee"] = float(fee)
+        if fee != 0:
+            meta["actual_fee"] = float(fee)  # negative maker rebates stay visible
         if self.journal is not None:
             self.journal.record(
                 symbol=symbol,
