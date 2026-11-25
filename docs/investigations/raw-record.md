@@ -2428,3 +2428,76 @@ which R-58's power was proven. Added nav entry and EN/RU labels.
 
 Typecheck (`npx tsc --noEmit`) clean; three Python tests pin missing, valid and
 malformed reports. No live execution path is touched.
+
+---
+
+## S34 · Rich-market ML with GA — REGISTRATION (before the run)
+
+Registered as R-59 before running. The user's proposal: keep a model fed by
+order book, history and candles on all available similar instruments, evolved
+by a genetic algorithm. Two inputs are NOT historically available and are not
+faked: the order book is only a live snapshot (no historical depth), and there
+is no RSS/news ingestion in this repo. They are recorded as separate forward
+instruments below, not silently substituted.
+
+Available historical inputs, fixed before the run: BTCUSDT, ETHUSDT and
+SOLUSDT 1h raw klines, aligned on timestamp. Per bar per instrument: six
+lagged log returns plus the raw taker-buy imbalance `2*tb/base - 1` (field 9),
+i.e. 7 × 3 = 21 columns. Target: next-bar BTC direction. Standardization on
+train only. Modes: fs=0 uses all 21 columns, fs=2 uses the first two BTC lags
+(the registered mapping for any feature count).
+
+Model/GA unchanged from S3: 50 countable architectures, Adam 500 epochs lr
+0.05, evolution pop 12 / 6 generations / tournament 3 / top-2 elites, seed 41.
+Census of all 50 first (rule 5); report evaluations AND distinct (rule 4);
+PBO over the evaluated population; permutation noise twin. Known-answer gate
+(`--stage known`) must pass before results are read.
+
+Costs: long-if-P>0.5 at 7 bps per fill; net on held-out test.
+
+Criterion (fixed): R-59 HOLDS iff the GA-evolved ensemble has test net > 0
+AND accuracy ≥ 0.53 on held-out, AND the noise twin does not clear both bars.
+FAILS otherwise. No threshold, feature, seed or budget is changed after the
+numbers arrive. A FAIL says this richer input family with this GA does not
+transfer; it does not close ML in general.
+
+## S35 · Forward book collector — REGISTRATION (before the run)
+
+No historical order-book series exists in this repo; any claim to have trained
+on depth would be fabricated. Add a read-only collector that writes timestamped
+top-of-book snapshots (bid/ask/sizes) from the existing CCXT adapter to
+`research/order_book.jsonl`, idempotently, with a bounded file size. Unit tests
+use injected snapshots, never the network. The collected file becomes usable
+for a NEW registered hypothesis after enough forward bars exist; this
+increment only creates the instrument and states the limitation.
+
+## S34-2 · R-59 — RESULT
+
+Known-answer gate passed first (gradient 3.917e-08, noise −0.028, strong
+signal 0.864). Three instruments' 1h raw klines aligned to 5994 rows, 21
+columns, 3600/1200/1194 split.
+
+```
+signal: census test mean 0.5175 sd 0.0119; 62 evaluations / 23 distinct
+        ensemble acc 0.5134 (< 0.53), net -0.4984 (< 0), PBO 0.988
+noise : census mean 0.5004; 62/20; ensemble acc 0.5092, net -0.3806, PBO 0.854
+R-59 FAILS both bars.
+```
+
+Richer inputs plus the same GA did not transfer. The noise twin is also
+negative, so the search is not manufacturing an false edge — it simply finds
+nothing on these features. Counts and PBO reported beside the verdict as
+required. No budget/feature/seed was changed after the result.
+
+## S35-2 · Forward book collector
+
+`tools/book_collector.py` now writes timestamped top-of-book snapshots to
+`research/order_book.jsonl`: bid/ask, sizes and spread_bps, idempotent by
+(exchange, symbol, ts), bounded to 20 000 lines, crossed or malformed books
+refused. Four known-answer tests pin normalization, refusal, idempotence and
+the bound. First `--once` run wrote 3 live snapshots.
+
+This is NOT a historical book series. A depth-based hypothesis cannot be run
+until enough forward snapshots have accumulated; that run needs its own
+registration. RSS/news ingestion does not exist in this repo and was not
+pretended to exist.
