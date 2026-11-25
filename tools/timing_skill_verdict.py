@@ -21,6 +21,7 @@ from host.bootstrap import ensure_code_base_path
 
 ensure_code_base_path()
 
+from engine.strategy_lab import WindowEvidence  # noqa: E402
 from tools.composite_portfolio_control import _random_decisions  # noqa: E402
 from tools.composite_strategy_verdict import (  # noqa: E402
     DRAWS, FEE_BPS, LENGTHS, N_BARS, NOTIONAL, PAIRS, REPS, SEED, TRAIN, VAL,
@@ -82,6 +83,10 @@ async def _run(symbol: str, block: str) -> tuple[dict[str, int], int]:
     X, y, R = build_real_rows(raw)
     N = len(y)
     counts = {k: 0 for k in ("REAL", "RANDOM", "SHUFFLED", "POWER")}
+    evidence: dict[str, list[WindowEvidence]] = {
+        f"{REPS[a]}->{REPS[b]}": [] for a, b in PAIRS
+    }
+    aggregate: list[WindowEvidence] = []
     print(f"\n{symbol} {block}: {len(rows)} bars ({rows[0][0]}..{rows[-1][0]})")
     for length in LENGTHS:
         iva_end = N - length
@@ -99,6 +104,7 @@ async def _run(symbol: str, block: str) -> tuple[dict[str, int], int]:
         shuffled_mu = sum(shuffled_rets) / len(shuffled_rets)
 
         row = {}
+        arm_stats: dict[str, list[tuple[float, list[float]]]] = {}
         for arm in ("REAL", "RANDOM", "SHUFFLED", "POWER"):
             stats = []
             for pi, d in enumerate(pairs):
@@ -113,17 +119,34 @@ async def _run(symbol: str, block: str) -> tuple[dict[str, int], int]:
                 else:
                     skill, nulls = _pair_skill(d, rets, mu, SEED + pi, edge_bps=2.0)
                 stats.append((skill, nulls))
+            arm_stats[arm] = stats
             observed = sum(v[0] for v in stats) / len(stats)
             nulls = [sum(v[1][k] for v in stats) / len(stats) for k in range(DRAWS)]
             p = _p(observed, nulls)
             ok = observed > 0 and p < 0.05
             counts[arm] += int(ok)
             row[arm] = (observed, p, ok)
+        aggregate.append(WindowEvidence(
+            net=row["REAL"][0], p=row["REAL"][1],
+            power_net=row["POWER"][0], power_p=row["POWER"][1],
+            random_p=row["RANDOM"][1], shuffled_p=row["SHUFFLED"][1],
+        ))
+        for pi, (a, b) in enumerate(PAIRS):
+            name = f"{REPS[a]}->{REPS[b]}"
+            evidence[name].append(WindowEvidence(
+                net=arm_stats["REAL"][pi][0],
+                p=_p(arm_stats["REAL"][pi][0], arm_stats["REAL"][pi][1]),
+                power_net=arm_stats["POWER"][pi][0],
+                power_p=_p(arm_stats["POWER"][pi][0], arm_stats["POWER"][pi][1]),
+                random_p=_p(arm_stats["RANDOM"][pi][0], arm_stats["RANDOM"][pi][1]),
+                shuffled_p=_p(arm_stats["SHUFFLED"][pi][0],
+                              arm_stats["SHUFFLED"][pi][1]),
+            ))
         print(f"  window {length:3d}: " + " | ".join(
             f"{a} {row[a][0]:>+8.2f} p{row[a][1]:.3f}{'*' if row[a][2] else ''}"
             for a in ("REAL", "RANDOM", "SHUFFLED", "POWER")
         ))
-    return counts, DRAWS
+    return counts, aggregate
 
 
 async def main() -> int:
@@ -131,7 +154,7 @@ async def main() -> int:
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--block", choices=("earlier", "later"), default="earlier")
     args = ap.parse_args()
-    counts, _ = await _run(args.symbol, args.block)
+    counts, _evidence = await _run(args.symbol, args.block)
     adequate = counts["POWER"] >= 3
     real = counts["REAL"] >= 3
     controls = counts["RANDOM"] <= 1 and counts["SHUFFLED"] <= 1

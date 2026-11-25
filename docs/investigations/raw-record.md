@@ -2372,3 +2372,35 @@ This is a strictly better instrument than the raw aggregate (R-56/57): it
 separates timing from market direction on BTC, but the effect is NOT universal
 across the tested arms. No promotion, no retuning. A statistic/procedure that
 works on ETH and SOL is a NEW registration, not a reinterpretation.
+
+---
+
+## S32 · Product-side autonomous selection instrument
+
+Engineering increment, no new hypothesis. The project kept inventing checks by
+hand; `engine/strategy_lab.py` is the reusable product core. It takes a frozen
+`LabConfig` (alpha, method, draws, seed, min_windows, power edge, control
+tolerance) and per-candidate per-window `WindowEvidence`, then applies power,
+both constructed controls and Holm over ALL candidates. It returns a selection
+only when every gate passes; otherwise `None` with named blockers. It cannot
+return a ranked shortlist — two survivors are returned together, so a second
+selection is not smuggled in after the correction.
+
+Known-answer tests pin: no edge selects nothing; a dirty RANDOM or SHUFFLED
+control blocks a positive candidate; an underpowered reference blocks everyone;
+Holm over two candidates blocks both; two clean survivors are returned together;
+empty input and a changed frozen config behave as recorded.
+
+`tools/strategy_lab.py` wires real evidence via `timing_skill_verdict._run`.
+The candidate is the AGGREGATE — R-58's power was demonstrated at aggregate
+level, not per pair. First live run:
+
+```
+BTCUSDT earlier : selected ['composite_aggregate'], blockers []
+ETHUSDT earlier : selected null, blocker shuffled_control_dirty
+BTCUSDT later   : selected null, blocker shuffled_control_dirty
+```
+
+The product tool can say yes on one arm and refuses on others under the same
+frozen thresholds. Refusals are not tuned away. Nothing is wired to live
+execution.
