@@ -2311,3 +2311,64 @@ registration, not a reinterpretation of this one.
 Verification: three arms added to the live loop; offline 158 passed + 3
 self-tests, full suite 1088 passed with the documented load-dependent quik
 flake passing in isolation on the same commit.
+
+---
+
+## S31 · Market-neutral timing statistic — REGISTRATION (before the run)
+
+Registered as R-58 before running. R-57 showed the aggregate net is reproducible
+by random timing on most arms: it measures drift during held bars, not timing
+skill. This statistic removes drift BY CONSTRUCTION.
+
+Statistic (fixed): for each pair and window, let `r_i` be bar log returns and
+`mu` their mean over that window. The pair's TIMING SKILL is
+
+    skill = sum_{held} (r_i - mu) * NOTIONAL - flips * 7bps * NOTIONAL
+
+i.e. every held bar is scored against the window's own average, so a strategy
+that is merely long during a rising market scores zero. Costs are unchanged.
+The six pair skills are averaged into one aggregate. Null draws use random
+held bars at each pair's activity rate with the SAME demeaned returns, so the
+null is centered on zero under no skill. p = (1 + #{null >= observed}) / 501.
+
+Arms (fixed): BTC earlier disjoint block, ETH earlier, SOL earlier, BTC later.
+Same six pairs, 2%/10 stop, four nested holdouts 60/120/240/360, train 600 /
+val 100. Controls as in R-56: RANDOM (random decisions, same activity) and
+SHUFFLED (returns shuffled within window before scoring AND nulling).
+
+Power (fixed): inject 2 bps per held bar into the EVALUATED skill only; the
+statistic is ADEQUATE iff that injection is detected in at least three of four
+windows on the BTC earlier arm.
+
+Criterion (fixed): R-58 HOLDS iff the statistic is ADEQUATE and, on EACH of the
+four arms, REAL skill > 0 with p < 0.05 in at least three of four windows while
+both controls pass at most one window each. FAILS otherwise. No threshold,
+pair, control or arm is changed after seeing the numbers. A pass would be a
+timing-skill result independent of market direction; it still would not be a
+single executable strategy or a live decision.
+
+## S31-2 · R-58 — RESULT
+
+Instrument defect caught first: the SHUFFLED control initially produced values
+IDENTICAL to REAL because `random.shuffle(slice)` shuffles a discarded copy.
+Fixed to shuffle the list in place; pinned by `tests/test_timing_skill.py`
+(shuffled returns must change the score; pure drift must score ≤ 0).
+
+```
+BTC earlier : REAL 4/4, RANDOM 0/4, SHUFFLED 1/4, POWER 4/4  HOLDS
+BTC later   : REAL 4/4, RANDOM 0/4, SHUFFLED 1/4, POWER 4/4  HOLDS
+ETH earlier : REAL 4/4, RANDOM 0/4, SHUFFLED 3/4, POWER 4/4  FAILS
+SOL earlier : REAL 1/4, RANDOM 0/4, SHUFFLED 1/4, POWER 1/4  FAILS
+R-58 FAILS: criterion requires all four arms.
+```
+
+The new statistic behaves as intended on BTC: drift is removed by demeaning,
+RANDOM never passes, a 2 bps injection is detected 4/4, and the real timing
+skill clears both disjoint BTC blocks with only one SHUFFLED window each.
+On ETH, shuffled returns reproduce the skill in three windows, so timing adds
+nothing there; on SOL the statistic has no power at all and no real reading.
+
+This is a strictly better instrument than the raw aggregate (R-56/57): it
+separates timing from market direction on BTC, but the effect is NOT universal
+across the tested arms. No promotion, no retuning. A statistic/procedure that
+works on ETH and SOL is a NEW registration, not a reinterpretation.

@@ -446,6 +446,20 @@ R-56 is therefore a single-block result, not a general one. The shape matches
 R-22/R-23: a positive aggregate that fails the control asking whether timing
 contributed anything. No promotion.
 
+### Market-neutral timing skill (R-58)
+
+Registered S31; result S31-2. Held bars are scored against their own window's
+mean return, removing drift by construction; RANDOM/SHUFFLED controls and a
+2 bps power injection included. A shuffle-in-place defect was caught and
+pinned before accepting results.
+
+| id | hypothesis | criterion, fixed in advance | denominator | data | verdict |
+|---|---|---|---|---|---|
+| R-58 | timing skill transfers on all four arms | all arms: REAL ≥3/4, controls ≤1/4, BTC power ≥3/4 | 4 arms × 4 windows × 4 measures | BTC early/late, ETH/SOL early | `FAILS` — BTC both HOLDS; ETH SHUFFLED 3/4; SOL no power |
+
+Better instrument than the raw aggregate: drift removed, RANDOM clean, power
+proven on BTC. Effect is not universal across arms; no promotion or retuning.
+
 With R-50 (ETH/SOL), this bounds R-49: the first positive strategy reading is
 specific to the discovery market and windows, and is NOT promoted to live.
 
@@ -471,8 +485,8 @@ is comparable; this is stated in S17-2 so nobody quotes the large 1d numbers.
 ## Status
 
 ```
-registered hypotheses            57
-closed with evidence             50   (FAILS, HOLDS, ANSWER, CLOSED)
+registered hypotheses            58
+closed with evidence             51   (FAILS, HOLDS, ANSWER, CLOSED)
 not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
                                       portfolio never flat, q=1.0000), R-43
                                       (3387 < 4000 registered daily bars) —
@@ -480,14 +494,14 @@ not evaluable                     3   R-19 (null degenerate), R-36 (null gated:
 open                              1
 ```
 
-50 + 3 + 1 = 54, not 57: the resolved `neuroevolution counting check` item
+51 + 3 + 1 = 55, not 58: the resolved `neuroevolution counting check` item
 became THREE rows (R-33/34/35), the resolved portfolio-null item took TWO
 (R-36/37), the two remaining gaps took THREE (R-42/43/44). R-45 (existential
 claim), R-46 (long-horizon ML), R-47 (horizon ladder) and R-48/49/50 (composite,
 R-51 (chaos features), R-52 (disjoint check), R-53 (stop grid), R-54 (power
-check), R-55/56 (aggregate and control) and R-57 (confirmation) were added
-later as separate registrations. Counted this way on purpose rather than
-silently.
+check), R-55/56 (aggregate and control), R-57 (confirmation) and R-58
+(timing skill) were added later as separate registrations. Counted this way on
+purpose rather than silently.
 
 The last open item:
 

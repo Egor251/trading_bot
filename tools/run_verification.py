@@ -37,6 +37,7 @@ PYTEST_MODULES = (
     "tests/test_existential_gate.py",
     "tests/test_chaos_features.py",
     "tests/test_stop_grid_criterion.py",
+    "tests/test_timing_skill.py",
     "tests/test_risk_semantics_fixes.py",
     "tests/test_batch_verdict.py",
     "tests/test_research_gate_enforced.py",
@@ -65,6 +66,10 @@ LIVE_STEPS: tuple[tuple[str, ...], ...] = (
     ("tools/composite_portfolio_control.py", "--symbol", "ETHUSDT"),
     ("tools/composite_portfolio_control.py", "--symbol", "SOLUSDT"),
     ("tools/composite_portfolio_control.py", "--block", "later"),
+    ("tools/timing_skill_verdict.py",),
+    ("tools/timing_skill_verdict.py", "--symbol", "ETHUSDT"),
+    ("tools/timing_skill_verdict.py", "--symbol", "SOLUSDT"),
+    ("tools/timing_skill_verdict.py", "--block", "later"),
     (
         "tools/neuroevolution_count.py",
         "--stage",
