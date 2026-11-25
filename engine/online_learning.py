@@ -81,17 +81,16 @@ class OnlineLearner:
         row: list[float] = []
         for s in self.cfg.symbols:
             c = self._closes[s]
-            row.extend(
-                c[i] / c[i - 1] - 1.0
-                for i in range(len(c) - self.cfg.lags, len(c))
-            )
+            row.extend(c[i] / c[i - 1] - 1.0 for i in range(len(c) - self.cfg.lags, len(c)))
         spread = bar.book_spread_bps if bar.symbol == self.cfg.symbols[0] else None
         imbalance = bar.book_imbalance if bar.symbol == self.cfg.symbols[0] else None
-        row.extend([
-            float(spread) if spread is not None else 0.0,
-            float(imbalance) if imbalance is not None else 0.0,
-            1.0 if spread is not None and imbalance is not None else 0.0,
-        ])
+        row.extend(
+            [
+                float(spread) if spread is not None else 0.0,
+                float(imbalance) if imbalance is not None else 0.0,
+                1.0 if spread is not None and imbalance is not None else 0.0,
+            ]
+        )
         if bar.symbol == self.cfg.symbols[0]:
             self._pending["row"] = row
 
@@ -132,6 +131,10 @@ class OnlineLearner:
         }
         self.decisions.append(decision)
         return decision
+
+    def last_ts(self, symbol: str) -> float:
+        """Last accepted timestamp for a symbol; -inf before the first bar."""
+        return self._latest.get(symbol, float("-inf"))
 
     def snapshot(self) -> Mapping[str, Any]:
         return {

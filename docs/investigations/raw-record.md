@@ -2552,3 +2552,38 @@ lineup, and writes only `research/online_decisions.jsonl`. Reproducibility is
 the point of R-61, not profit. Promotion to live needs a NEW registration with
 its own out-of-sample criterion. Live polling mode (`--mode live`) is included
 for observe-only collection and does not alter the live path.
+
+---
+
+## S37 · Background daemon, checkpoints and autostart
+
+Engineering increment. `tools/online_daemon.py` runs observe-only cycles with a
+persistent `OnlineLearner`, saves atomic versioned checkpoints to
+`research/online_weights.json` after every cycle (weights, observations, last
+decision, config hash), and survives a bad fetch. `engine/online_checkpoint.py`
+is pure JSON I/O: `os.replace` atomicity, version 1, corrupt/missing returns
+None. Four pinned tests cover flattening the numpy params to JSON lists, full
+round-trip, corrupt input and config hash.
+
+Live polling now accepts an existing learner and skips a bar whose timestamp is
+not newer — so a daemon accumulates observations across restarts instead of
+restarting from zero. `ops/systemd/trading-bot-online-learning.service` and
+`ops/windows/register_online_learning.ps1` provide reboot autostart; the Windows
+task was registered for the current user (`trading-bot-online-learning`,
+Ready). Both start `--mode live --interval 300`, which is observe-only.
+
+Daemon launched in the background on 2026-11-25 with `--mode live --interval
+300`. First launch failed on a missing `sys.path` bootstrap and was fixed before
+restart; the second process is running. No execution path, no live lineup change.
+
+This is infrastructure for a long-running experiment, NOT an edge claim. The
+user's joke about a civilization notwithstanding, `tradable` inside a checkpoint
+is a logging state; promotion requires a new registration with its own
+out-of-sample criterion.
+
+Path correction after the first full-suite run: the daemon's first process wrote
+`data/research/online_weights.json`, which tripped the suite's production-data
+guard on an unrelated test. Checkpoints and decisions now default to
+`~/.trading_bot/online/` via `TRADING_ONLINE_DIR`, outside `data/`; the systemd
+unit sets it explicitly. The first process was stopped and the daemon restarted
+with the corrected path. This is an isolation fix, not a research result.

@@ -1,0 +1,18 @@
+[Unit]
+Description=trading_bot observe-only online learning daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/trading_bot
+Environment=TRADING_DATA_DIR=/var/lib/trading_bot/data
+Environment=TRADING_ONLINE_DIR=/var/lib/trading_bot/online
+ExecStart=/opt/trading_bot/.venv/bin/python tools/online_daemon.py --mode live --interval 300
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+# Observe-only: no execution path, no live-lineup mutation.
+
+[Install]
+WantedBy=multi-user.target
